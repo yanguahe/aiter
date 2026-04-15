@@ -8,7 +8,9 @@ import logging
 import multiprocessing
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -610,9 +612,13 @@ def build_module(
             if blob_gen_cmd:
                 blob_dir = f"{op_dir}/blob/"
                 os.makedirs(blob_dir, exist_ok=True)
+                cmd = blob_gen_cmd.format(blob_dir)
                 if AITER_LOG_MORE:
-                    logger.info(f"exec_blob ---> {PY} {blob_gen_cmd.format(blob_dir)}")
-                os.system(f"{PY} {blob_gen_cmd.format(blob_dir)}")
+                    logger.info(f"exec_blob ---> {PY} {cmd}")
+                subprocess.run(
+                    [PY] + shlex.split(cmd),
+                    check=True,
+                )
                 sources += rename_cpp_to_cu([blob_dir], src_dir, hipify, recursive=True)
             return sources
 
