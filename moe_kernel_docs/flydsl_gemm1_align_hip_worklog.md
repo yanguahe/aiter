@@ -531,3 +531,136 @@ rocprofv3 -i ./fmha_opt_tools/tt_fly_direct_gemm1_m4096.yaml -- \
 # 对比 HIP 基线 trace：thread_trace/hip_gemm1_m4096/stats_ui_output_agent_*.csv
 ```
 
+---
+
+# 附录 C：B(权重)global load 去掉 non-temporal(`nt`)—— 主循环 +14.7% → −2.0% vs HIP
+
+> 接附录 B 之后，用 `trace_segment_cycles.py` 对 FlyDSL/HIP 两版 gemm1（M=4096）做**分阶段
+> (prologue / main loop / epilogue) cycle 对账**，定位到主循环 +14.7% 的真正元凶是一个
+> **指令 pattern 差异**：FlyDSL 的 B global load 带 `nt`（non-temporal）而 HIP 不带。
+> commit `43b3915f`。
+
+## C.1 分析方法（trace_segment_cycles 三阶段对账）
+
+1. 用 `tt_fly_gemm1_m4096.yaml`（`tt_fly_gemm1_m8.yaml` 派生，含 ATT perfcounter）重 dump
+   FlyDSL gemm1（当前提交版）→ `thread_trace/fly_gemm1_m4096`；HIP 复用
+   `thread_trace/hip_gemm1_m4096`（HIP 代码不变）。
+2. 构造锚点 JSON `fmha_opt_tools/seg_asm/g1_fly_vs_hip.json`：3 个 interval（prologue / main
+   loop / epilogue）、每版 4 个 sample point，**锚点指令全部取自 trace 的
+   `stats_ui_output_agent_*.csv` 原文**（FlyDSL/C++ dump 的汇编可能与 trace 有出入，一切以
+   trace 为准）。点位（程序序=执行序，main loop `range_constexpr` 全展开）：
+
+   | point | FLY（取自 trace） | HIP（取自 trace） |
+   |---|---|---|
+   | p1 prologue 始 | `s_load_dwordx2 s[34:35]...` | `s_load_dwordx2 s[2:3]...` |
+   | p2 main 始(1st barrier) | `s_barrier / s_waitcnt vmcnt(20) / ds_read2st64_b32 v[150:151]...` | `s_barrier / ds_read_b128 v[70:73],v97 / ...offset:2048` |
+   | p3 epilogue 始 | `s_barrier / ds_write_b32 v1,a64 / ...a65 offset:1024` | `ds_write_b32 v8,a7 / s_nop 2 / ds_write_b32 v3,a8 offset:64` |
+   | p4 end | `...buffer_store_short v0,v1...offen` | `...global_store_short v[0:1],v2,off` |
+
+3. compare 模式（无 flag）拿各阶段 cycle 对比；`--specific-part-representative-trace`
+   + `long_lat_thr=600` 钻取 main loop 代表波的 >600cyc 长延迟指令。
+
+## C.2 发现 1：分阶段 cycle —— 唯一大头是 main loop +14.7%
+
+| 阶段 | HIP avg cyc | FLY avg cyc | Δcyc | Δ% | HIP inst | FLY inst | Δinst |
+|---|---|---|---|---|---|---|---|
+| **Main loop** | 76033 | 87196 | **+11163** | **+14.7%** | 3359 | 3507 | +148(+4.4%) |
+| Epilogue | 8642 | 8728 | +86 | +1.0% | 811 | 1070 | +259(+31.9%) |
+| Prologue | (ATT 未抓到入口) | 3712 | — | — | — | 223 | — |
+
+- **main loop cycle 涨 14.7% ≫ 指令涨 4.4% → stall-bound**（不是指令数问题）。
+- epilogue cycle 仅 +1.0%（多 259 条指令但 ds_read_b128/VALU 重叠掉了，印证附录 B 的
+  ds_read_b128 vs ds_read2 无害结论）。
+- 指令数 +148 中 127 条是一次性 accm-init（`v_accvgpr_mov`，附录 A/B），不是稳态成本。
+
+## C.3 发现 2：main loop 长延迟指令 —— BARRIER + VMEM，且 FLY 有 224 个 `nt` load
+
+representative-trace（`long_lat_thr=600`）的 >600cyc 指令分类：
+
+| 类别 | FLY | HIP |
+|---|---|---|
+| **BARRIER**（`s_barrier`） | **14**（700–3200cyc） | 5（688–1408） |
+| VMEM（`buffer_load`） | 12（608–1792） | 10（612–1472） |
+| WAITCNT（**fused** vmcnt+lgkmcnt） | 0 | 2（1460/1908） |
+
+FLY 主循环 stall 集中在 **s_barrier(14 vs 5)**。进一步统计全 kernel 的 `buffer_load`：
+
+```text
+FLY: buffer_load=414  with_nt=224   <-- B 权重 load 全带 non-temporal
+HIP: buffer_load=408  with_nt=0     <-- 全 cached
+```
+
+`nt`（non-temporal / streaming）让 cache 绕过/驱逐。**MoE 里同一个专家的 B 权重 tile 会被该
+专家的每个 m-block(workgroup) 重复读**，`nt` 把可复用的 B 逐出 L2 → 额外 HBM 流量 →
+per-tile 的 A-DMA `vmcnt` + `s_barrier` stall 膨胀 → 就是 main loop +14.7% 的来源。
+
+## C.4 根因：`b_nt=2` 硬编码无视 `use_nt`，与 HIP `kUseNT=false` 矛盾
+
+- HIP gemm1 有 NT / CACHED 两个变体，按 `use_nt(token,topk,e) = (token*topk//e) < 64` 动态选
+  （`aiter/fused_moe.py:716-720`）：**m/expert ≥ 64 用 cached**。M=4096 的 dispatch 实例是
+  `kernel<...,128,false,false,0>` 即 **kUseNT=false（cached）**，trace 里 0 个 nt load。
+- FlyDSL `mxfp4_a4w4_gemm.py:944` **硬编码 `b_nt = 2`**（line 1612 B-load `cache_modifier=b_nt`
+  → ISA 出 `nt`），完全无视形参 `use_nt`；调用方 `mx_sort_fly_gemm.py` 还传
+  `use_nt=not inline_quant`=True。→ M=4096 时 FlyDSL 错误地对 B 用 nt（与 HIP 相反）。
+  （`cache_modifier=0` 的 a_scale/b_scale 在 trace 里无 nt，证实 0=cached、2=nt。）
+
+## C.5 修复（纯前端）
+
+```python
+# aiter/ops/flydsl/kernels/mxfp4_a4w4_gemm.py:944
+- b_nt = 2                       # 硬编码 nt，无视 use_nt
++ b_nt = 2 if use_nt else 0      # 尊重 use_nt（cache_modifier: 2=nt / 0=cached）
+
+# mx_sort_fly_gemm.py（gemm1 调用）
+- use_nt=not inline_quant,       # BM>=32 -> True -> nt
++ use_nt=False,                  # cached B（== HIP kUseNT=false；MoE B 跨 m-block 复用）
+```
+
+实测 cached 在所有测过的 M 都 ≥ nt（M=2048 甚至 1.27x→1.16x），故 gemm1 直接默认 cached，
+不再复刻 HIP 的 m/expert 阈值启发式（在本工作负载下 cached 始终更优）。
+
+## C.6 验证（commit `43b3915f`，clean flydsl cache，gfx950）
+
+- **gemm1 main-loop（trace，trace_segment_cycles）：+14.7%(87196) → −2.0%(74517) vs HIP**
+  —— FlyDSL 主循环现在比 HIP 还快；省 ~12700 cyc/wave，barrier/VMEM stall 几乎消平。
+- buffer_load `nt`：224 → **0**（== HIP）。
+- bench `msfg/mx` 时间比（越低越接近 HIP）：
+
+  | M | 修前(nt) | 修后(cached) |
+  |---|---|---|
+  | 1024 | 1.14x | 1.13x |
+  | 2048 | 1.27x | **1.16x** |
+  | 4096 | 1.32x | **1.26x** |
+  | 8192 | 1.37x | **1.32x** |
+
+- cos：M=4096/8192 **0.9999**；M=1024/2048 0.99（mxfp4 量化噪声）；BM=16 路径
+  M=4/8/16 **1.0000**（同一 `b_nt` 硬编码 bug 也曾让 BM=16 被迫 nt，本修复一并纠正）。
+- 端到端 bench 仍 1.26x(M=4096) 的**剩余差距已不在 gemm1 主循环**（主循环 −2%），而在
+  gemm2 + prologue/epilogue。
+
+## C.7 复现命令
+
+```bash
+# 1) dump 两版 trace（FLY 当前提交版 + HIP）
+docker exec hyg_fyd2 bash -c '
+  cd /shared/amdgpu/home/zhiming_ding_qle/yanguahe/code/wk_perf_test/aiter &&
+  rm -rf thread_trace/fly_gemm1_m4096 ~/.flydsl/cache/* &&
+  export HIP_VISIBLE_DEVICES=1 MXFP4_G1_A_LOAD_VARIANT=direct_hip_2slot_kmajor &&
+  MLIR_LIBS_DIR=/shared/amdgpu/home/zhiming_ding_qle/yanguahe/code/wk_perf_test/FlyDSL/build-fly/python_packages/flydsl/_mlir/_mlir_libs &&
+  export LD_LIBRARY_PATH=$MLIR_LIBS_DIR:${LD_LIBRARY_PATH:-} &&
+  rocprofv3 -i fmha_opt_tools/tt_fly_gemm1_m4096.yaml -- \
+    python3 bench_up_moe_v1.py -M 4096 --iters 100 --hash --benchmarks mx msfg
+'
+# HIP 基线 trace: thread_trace/hip_gemm1_m4096/（kernel regex 命中 aiter::mxfp4_moe::gemm1::kernel）
+
+# 2) 分阶段 cycle 对账（compare 模式）
+python3 fmha_opt_tools/trace_segment_cycles.py fmha_opt_tools/seg_asm/g1_fly_vs_hip.json
+
+# 3) 钻取 main loop 长延迟指令（代表波）
+python3 fmha_opt_tools/trace_segment_cycles.py \
+  fmha_opt_tools/seg_asm/g1_fly_vs_hip.json --specific-part-representative-trace
+
+# 4) 核对 nt load 数（应为 0）
+python3 -c "import csv,glob; R=list(csv.reader(open(glob.glob('thread_trace/fly_gemm1_m4096/stats_ui_output_agent_*.csv')[0])))[1:]; print('nt loads:', sum(1 for r in R if r[2].strip().startswith('buffer_load') and r[2].split()[-1:]==['nt']))"
+```
+
