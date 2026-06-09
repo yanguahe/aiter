@@ -2167,8 +2167,14 @@ def compile_mxfp4_gemm1_a4w4(
                 rocdl.s_barrier()                           # __syncthreads() (472)
                 if const_expr(BM == 128 and _pre_read_wait):
                     rocdl.s_waitcnt(0)                       # diagnostic: drain direct-LDS before ds_read
-                a_all = read_a_tile_all(a_slot=read_slot)   # issue_a_ds_read(read_slot)
+                # Issue the A-scale ds_read BEFORE the 16 A ds_read so the FIRST
+                # MFMA's scale operand (asc) is ready early. Previously the scales
+                # were read AFTER all 16 A reads, so the first MFMA had to wait for
+                # the 17th/18th lgkm op -> SIInsertWaitcnts emitted lgkmcnt(1)
+                # (drain ~all) before the cluster. HIP interleaves the scale read
+                # among the A reads (early) -> incremental lgkmcnt(14->..->0).
                 asc_cur = issue_a_scale_lds_read(off)       # issue_a_scale_ds_read(OFFSET)
+                a_all = read_a_tile_all(a_slot=read_slot)   # issue_a_ds_read(read_slot)
                 issue_a_load_nt(write_slot, K_C)             # issue_a_load_lds(write_slot)
                 b_cur = b_slot[slot_b]
                 bsc_cur = bsc_slot[slot_b]
@@ -2188,8 +2194,8 @@ def compile_mxfp4_gemm1_a4w4(
                 rocdl.s_barrier()                           # __syncthreads() (559)
                 if const_expr(BM == 128 and _pre_read_wait):
                     rocdl.s_waitcnt(0)                       # diagnostic: drain direct-LDS before ds_read
-                a_all = read_a_tile_all(a_slot=read_slot)   # issue_a_ds_read(kt%3)
                 asc_cur = issue_a_scale_lds_read(kt)        # issue_a_scale_ds_read(kt)
+                a_all = read_a_tile_all(a_slot=read_slot)   # issue_a_ds_read(kt%3)
                 b_cur = b_slot[slot_b]
                 bsc_cur = bsc_slot[slot_b]
                 for J in range_constexpr(4):                # 4x issue_mfma_cluster<J>
