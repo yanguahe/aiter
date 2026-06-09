@@ -941,7 +941,16 @@ def compile_mxfp4_gemm1_a4w4(
     cbsz = 4
     blgp = 4
     _scale_pack_m = 2
-    b_nt = 2
+    # B (expert-weight) global-load cache policy. cache_modifier=2 -> "nt"
+    # (non-temporal, streaming, bypass/evict L2); 0 -> normal cached. In MoE the
+    # same B tile is re-read by every m-block of the same expert, so non-temporal
+    # evicts reusable weights from L2 -> extra HBM traffic -> the per-tile A-DMA
+    # vmcnt + barrier stall inflates (main loop +14.7% vs HIP). HIP picks
+    # kUseNT=false (cached) once estimated m/expert >= 64 (gemm1 dispatch); the
+    # thread trace confirms HIP issues 0 nt loads while FlyDSL issued 224.
+    # Respect the use_nt arg (was hardcoded to 2, ignoring it) so cached is the
+    # default for the gemm1 BM>=32 path; cached is >= nt at every measured M.
+    b_nt = 2 if use_nt else 0
 
     # B-scale (gate/up a16w4) — kBS_* over N_OUT=2*D_INTER.
     _bsc = make_preshuffle_scale_bases(n_out=N_OUT, k=K, experts=experts)

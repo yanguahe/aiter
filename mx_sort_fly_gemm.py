@@ -17,6 +17,8 @@ Per request: the large-M nonatomic path reuses mx_fn's HIP scatter_reduce
 ported to FlyDSL.
 """
 
+import os
+
 import torch
 
 import aiter
@@ -95,8 +97,16 @@ def _fly_gemm1(*, cumsum_tensor, a_quant, a_scale_sorted_shuffled, w1, w1_scale,
     inline_quant = "INLINEQUANT" in kernelName1
     max_sorted = inter_sorted_quant.shape[0]
     launcher = compile_mxfp4_gemm1_a4w4(
+        # use_nt=False -> cached B global loads (cache_modifier=0). The B expert
+        # weights are re-read by every m-block of the same expert, so a cached
+        # L2 residency (== HIP kUseNT=false at m/expert>=64) beats non-temporal
+        # streaming: nt evicts the reused weights -> extra HBM -> +14.7% main-loop
+        # stall. Measured cached >= nt at every M (M=2048 1.27x->1.16x vs HIP).
         experts=NE, model_dim=D_HIDDEN, inter_dim=D_INTER, topk=9, BM=BM,
-        use_nt=not inline_quant, inline_quant=inline_quant,
+        use_nt=False, inline_quant=inline_quant,
+        a_load_variant=os.environ.get(
+            "MXFP4_G1_A_LOAD_VARIANT", "direct_hip_2slot_kmajor"
+        ),
     )
     # device-side grid: launch the fixed max grid (max_sorted/BM, host-known) and
     # let the kernel read cumsum on-device, early-returning padding blocks whose
@@ -110,6 +120,43 @@ def _fly_gemm1(*, cumsum_tensor, a_quant, a_scale_sorted_shuffled, w1, w1_scale,
         _fly_ptr(inter_sorted_shuffled_scale), _fly_ptr(hidden_states),
         int(M), int(max_sorted), int(total_m_blocks),
     )
+
+
+def _maybe_dump_gemm1_inputs(
+    *,
+    cumsum_tensor,
+    a_quant,
+    a_scale_sorted_shuffled,
+    w1,
+    w1_scale,
+    sorted_expert_ids,
+    m_indices,
+    hidden_states,
+    kernelName1,
+    M,
+    max_sorted,
+):
+    dump_path = os.environ.get("MXFP4_GEMM1_DUMP_PATH", "")
+    if not dump_path:
+        return
+    if os.path.exists(dump_path) and os.environ.get("MXFP4_GEMM1_DUMP_OVERWRITE", "0") != "1":
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(dump_path)), exist_ok=True)
+    torch.cuda.synchronize()
+    payload = {
+        "kernelName1": kernelName1,
+        "M": int(M),
+        "max_sorted": int(max_sorted),
+        "cumsum_tensor": cumsum_tensor.detach().cpu(),
+        "a_quant": a_quant.detach().cpu(),
+        "a_scale_sorted_shuffled": a_scale_sorted_shuffled.detach().cpu(),
+        "w1": w1.detach().cpu(),
+        "w1_scale": w1_scale.detach().cpu(),
+        "sorted_expert_ids": sorted_expert_ids.detach().cpu(),
+        "m_indices": m_indices.detach().cpu(),
+        "hidden_states": hidden_states.detach().cpu(),
+    }
+    torch.save(payload, dump_path)
 
 
 def _fly_gemm2(*, cumsum_tensor, inter_sorted_quant, inter_sorted_shuffled_scale,
@@ -351,6 +398,20 @@ def mx_sort_fly_gemm1_gemm2(
     inter_scale_rows = (inter_scale_rows + 31) // 32 * 32
     inter_sorted_shuffled_scale = torch.empty(
         (inter_scale_rows, inter_scale_cols), device=device, dtype=torch.uint8)
+
+    _maybe_dump_gemm1_inputs(
+        cumsum_tensor=cumsum_tensor,
+        a_quant=a_quant,
+        a_scale_sorted_shuffled=a_scale_sorted_shuffled,
+        w1=w1,
+        w1_scale=w1_scale,
+        sorted_expert_ids=sorted_expert_ids,
+        m_indices=m_indices,
+        hidden_states=hidden_states,
+        kernelName1=kernelName1,
+        M=M,
+        max_sorted=max_sorted,
+    )
 
     gemm1_backend(
         cumsum_tensor=cumsum_tensor,
