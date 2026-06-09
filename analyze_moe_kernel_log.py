@@ -178,6 +178,15 @@ def summarize_category(
     return SummaryRow(pair, M, op, name, kernel_names, cnt, device_time_sum, avg_time)
 
 
+def classify_kernel_category(kernel_name: str) -> str:
+    name = kernel_name.lower()
+    if "gemm1" in name or "moe1" in name:
+        return "gemm1"
+    if "gemm2" in name or "moe2" in name:
+        return "gemm2"
+    return "sort"
+
+
 def summarize_blocks(
     blocks: list[KernelBlock],
     bench_m_by_pair: dict[int, int],
@@ -199,9 +208,15 @@ def summarize_blocks(
             )
             continue
 
-        sort_rows = valid_rows[:-2]
-        gemm2_rows = [valid_rows[-2]]
-        gemm1_rows = [valid_rows[-1]]
+        sort_rows = [
+            row for row in valid_rows if classify_kernel_category(row.name) == "sort"
+        ]
+        gemm2_rows = [
+            row for row in valid_rows if classify_kernel_category(row.name) == "gemm2"
+        ]
+        gemm1_rows = [
+            row for row in valid_rows if classify_kernel_category(row.name) == "gemm1"
+        ]
 
         summaries.append(summarize_category(pair, M, op, "sort", sort_rows))
         summaries.append(summarize_category(pair, M, op, "gemm2", gemm2_rows))

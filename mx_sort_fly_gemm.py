@@ -95,15 +95,24 @@ def _fly_gemm1(*, cumsum_tensor, a_quant, a_scale_sorted_shuffled, w1, w1_scale,
     M = hidden_states.shape[0]
     BM = int(kernelName1.split("_BM")[1].split("_")[0])
     inline_quant = "INLINEQUANT" in kernelName1
+    if inline_quant:
+        # HIP naming: bare INLINEQUANT is NT; INLINEQUANT_CACHED is cached.
+        use_nt = "CACHED" not in kernelName1
+
+    # if M <= 8:
+    #     use_nt = False
+
+    elif BM == 128:
+        # HIP codegen has only BM128 (no _NT/_CACHED suffix) and instantiates it
+        # with kUseNT=false.
+        use_nt = False
+    else:
+        # HIP BM32 naming: _NT vs _CACHED.
+        use_nt = "_NT" in kernelName1
     max_sorted = inter_sorted_quant.shape[0]
     launcher = compile_mxfp4_gemm1_a4w4(
-        # use_nt=False -> cached B global loads (cache_modifier=0). The B expert
-        # weights are re-read by every m-block of the same expert, so a cached
-        # L2 residency (== HIP kUseNT=false at m/expert>=64) beats non-temporal
-        # streaming: nt evicts the reused weights -> extra HBM -> +14.7% main-loop
-        # stall. Measured cached >= nt at every M (M=2048 1.27x->1.16x vs HIP).
         experts=NE, model_dim=D_HIDDEN, inter_dim=D_INTER, topk=9, BM=BM,
-        use_nt=False, inline_quant=inline_quant,
+        use_nt=use_nt, inline_quant=inline_quant,
         a_load_variant=os.environ.get(
             "MXFP4_G1_A_LOAD_VARIANT", "direct_hip_2slot_kmajor"
         ),
