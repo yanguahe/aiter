@@ -158,7 +158,12 @@ def compile_mxfp4_gemm2_a4w4(
     _a_lds_stride = (BK // 2) if _g2_a_directlds else lds_stride
     _a_slot_stride = BM * _a_lds_stride     # fp4-bytes for one A K-tile slot
     _a_lds_bytes = _g2_a_slots * _a_slot_stride
-    _acc_lds_elems = BM * BN                # f32 cshuffle buffer
+    # mxfp4out cshuffles ONE N-half (128 cols) at a time through lds_acc[BM*128]
+    # (64KB) instead of the full BM*BN (128KB), so BM=128 mxfp4out fits 2
+    # blocks/CU on gfx950 (160KB LDS) -> hides w2-load latency (measured pure
+    # 2-block gain ~0.06x). atomic uses the full BN cshuffle.
+    _acc_cols = (BN // 2) if mxfp4out else BN
+    _acc_lds_elems = BM * _acc_cols         # f32 cshuffle buffer
     _lds_a_offset = 0
     # Union the cshuffle accumulator (lds_acc) onto the A-load LDS (lds_a) at
     # offset 0 (== HIP's LDSLayout union). lds_a is GEMM-loop-only and lds_acc is
@@ -166,7 +171,17 @@ def compile_mxfp4_gemm2_a4w4(
     # time. Without the union FlyDSL stacked them (BM=16 atomic: 20480 vs HIP
     # 16384), which capped occupancy at 3 blocks/CU instead of 4 (launch_bounds).
     _lds_acc_offset = 0
-    allocator.ptr = max(_a_lds_bytes, _lds_acc_offset + _acc_lds_elems * 4)
+    # bf16flat writes flat_out directly (no cshuffle) -> never touches lds_acc, so
+    # allocate ONLY the A-staging LDS. On gfx950 (160KB LDS/CU) this drops BM=128
+    # bf16flat from 128KB to 32KB, letting the HW co-schedule 2-3 blocks/CU
+    # (the kernel is memory-latency-bound at 1 block/CU; a 2nd resident wave hides
+    # the w2-load latency). HIP nonatomic is pinned to 1 block/CU by
+    # __launch_bounds__(256,1); FlyDSL has no such cap, so the win is FlyDSL-only.
+    # atomic + mxfp4out DO use lds_acc (cshuffle), so they keep the union size.
+    if bf16flat:
+        allocator.ptr = _a_lds_bytes
+    else:
+        allocator.ptr = max(_a_lds_bytes, _lds_acc_offset + _acc_lds_elems * 4)
 
     # A-load tiling (a_elem_bytes==1 fp4 convention, 16B dwordx4 loads).
     x_load_bytes = 16
@@ -590,36 +605,39 @@ def compile_mxfp4_gemm2_a4w4(
 
         def mfma_ktile(b_tile, a_scs, b_scs, a_slot=0):
             if const_expr(BM == 128):
-                # HIP run_one nonatomic: pre-read ALL A (a_all[mi][k]) into regs
-                # first, then pure AGPR MFMA per n-output J, k-outer/mi-inner so
-                # consecutive MFMA hit distinct accm (accm[mi*4+J], mi=0..7) -> no
-                # hazard s_nop and the A ds_read no longer interleaves the MFMA
-                # chain (was +362 instr in the MFMA span vs HIP). Mirrors gemm1.
-                a_all = []
-                for mi_idx in range_constexpr(pack_M):       # 8 m-chunks
-                    curr_row = row_a_lds + arith.constant(mi_idx * 16, index=True)
+                # AGPR (== HIP kUseAGPR) + **per-K-tile** A pre-read: read all 8
+                # m-chunks' A for THIS k up-front (a_k, ~32 VGPR), then pure AGPR
+                # MFMA (J-outer, mi-inner) so the chain is back-to-back (clean,
+                # no interleaved ds_read stalls) AND held A is only one k's worth.
+                # Why per-K (not all-K like fix4): all-K pre-read held 64 VGPR ->
+                # total 276 > 256 -> 1 block/CU; per-K holds 32 -> total ~224 ->
+                # 2 blocks/CU on gfx950 (160KB LDS). MEASURED: at 1 block/CU clean
+                # MFMA is 1.33x and interleaved is 1.48x; 2 blocks/CU recovers the
+                # latency -> per-K pre-read keeps BOTH wins. accm[mi*4+J] for the
+                # 8 consecutive mi (fixed J,k) are distinct -> hazard-free.
+                for k_idx in range_constexpr(2):
+                    col_base = col_offset_base + arith.constant(
+                        (k_idx * 128) // a_elem_vec_pack, index=True)
                     a_k = []
-                    for k_idx in range_constexpr(2):
-                        col_base = col_offset_base + arith.constant(
-                            (k_idx * 128) // a_elem_vec_pack, index=True)
+                    for mi_idx in range_constexpr(pack_M):   # 8 m-chunks, this k
+                        curr_row = row_a_lds + arith.constant(
+                            mi_idx * 16, index=True)
                         a_k.append(
                             lds_load_packs_k64(curr_row, col_base, slot=a_slot))
-                    a_all.append(a_k)
-                for J in range_constexpr(num_acc_n):          # 4 n-outputs
-                    ni = J // pack_N
-                    inxdl = J % pack_N
-                    b_scale_val = b_scs[ni]
-                    for k_idx in range_constexpr(2):          # k-outer
-                        b0, b1 = b_tile[J][k_idx]
-                        for mi_idx in range_constexpr(pack_M):  # mi-inner (distinct accm)
-                            a0, a1 = a_all[mi_idx][k_idx]
-                            a_scale_val = a_scs[mi_idx // 2]
-                            op_sel_a = k_idx * _scale_pack_m + (mi_idx % 2)
+                    for ni in range_constexpr(num_acc_n_packed):
+                        b_scale_val = b_scs[ni]
+                        for inxdl in range_constexpr(pack_N):
+                            J = ni * pack_N + inxdl
+                            b0, b1 = b_tile[J][k_idx]
                             op_sel_b = k_idx * pack_N + inxdl
-                            acc_idx = mi_idx * num_acc_n + J
-                            accm[acc_idx] = _mfma_agpr(
-                                accm[acc_idx], a0, a1, b0, b1,
-                                a_scale_val, b_scale_val, op_sel_a, op_sel_b)
+                            for mi_idx in range_constexpr(pack_M):
+                                a0, a1 = a_k[mi_idx]
+                                a_scale_val = a_scs[mi_idx // 2]
+                                op_sel_a = k_idx * _scale_pack_m + (mi_idx % 2)
+                                acc_idx = mi_idx * num_acc_n + J
+                                accm[acc_idx] = _mfma_agpr(
+                                    accm[acc_idx], a0, a1, b0, b1,
+                                    a_scale_val, b_scale_val, op_sel_a, op_sel_b)
                 return
             for k_idx in range_constexpr(2):       # 2 MFMA-K (128) per K-tile
                 ikxdl = k_idx
@@ -730,64 +748,65 @@ def compile_mxfp4_gemm2_a4w4(
             rocdl.s_barrier()
             return
 
-        # ---- cshuffle + atomic epilogue (build/test increment 6) ----
-        # accm[mi*4+J][v]  ->  lds_acc[(mi*16 + lane/16*4 + v)*BN + col],
-        #   col = wave_n*64 + J*16 + lane%16
-        rocdl.s_barrier()
-        c_BN = arith.constant(BN, index=True)
-        for i in range_constexpr(m_repeat):
-            for J in range_constexpr(num_acc_n):
-                col = (
-                    wave_n * _c64
-                    + arith.constant(J * 16, index=True)
-                    + lane_mod_16
-                )
-                row_base = arith.constant(i * 16, index=True) + lane_div_16 * arith.constant(
-                    4, index=True
-                )
-                acc_v = accm[i * num_acc_n + J]
-                for v in range_constexpr(4):
-                    lds_idx = (
-                        (row_base + arith.constant(v, index=True)) * c_BN + col
-                    )
-                    val = vector.extract(
-                        acc_v, static_position=[v], dynamic_position=[]
-                    )
-                    v1 = vector.from_elements(T.vec(1, f32), [val])
-                    vector.store(v1, lds_acc, [lds_idx], alignment=4)
-        rocdl.s_barrier()
-
-        # ---- nonatomic mxfp4out epilogue (== apply_mxfp4_flat_epilog_bm128) ----
-        # per (sorted row, 32-col group): per-32 fp4 requant -> flat_out_q
-        # [max_sorted, N_OUT/2] (row-major) + e8m0 -> flat_out_scale
-        # [max_sorted, N_OUT/32]. No reduce here; scatter_reduce_q does topk.
+        # ---- nonatomic mxfp4out epilogue (== apply_mxfp4_flat_epilog_bm128),
+        # 2-N-half: cshuffle + per-32 fp4 requant of cols [0,128) then [128,256)
+        # through lds_acc[BM*128] (64KB, not full BM*BN=128KB) so BM=128 mxfp4out
+        # runs 2 blocks/CU on gfx950 (160KB LDS) -> hides w2-load latency (measured
+        # pure 2-block gain ~0.06x). accm (AGPR) is held across both halves; each
+        # half's cols are written by the 2 waves that own them (wave_n//2==half),
+        # then ALL 256 threads quant that half (4 of the 8 per-32 groups). ----
         if const_expr(mxfp4out):
             _flat_q_base = arith.index_cast(
                 ir.IndexType.get(), fx.ptrtoint(arg_flat_q))
             _flat_sc_base = arith.index_cast(
                 ir.IndexType.get(), fx.ptrtoint(arg_flat_scale))
             _c32idx = arith.constant(32, index=True)
+            _accs = arith.constant(_acc_cols, index=True)   # 128 (half-N lds stride)
             _mlane = tx / _c16
             _nlane = tx % _c16
-            _wgrp = _nlane / arith.index(4)
+            _wgrp = _nlane / arith.index(4)                 # 0..3 (group in this half)
             _kk = _nlane % arith.index(4)
             _c7fff = arith.constant(0x7FFFFFFF, type=i32)
             _c64i = arith.constant(64, type=i32)
-            _hi16 = arith.constant(-0x10000, type=i32)   # 0xFFFF0000
-            NBLK = BN // 32                              # 8
+            _hi16 = arith.constant(-0x10000, type=i32)      # 0xFFFF0000
+            NBLK = BN // 32                                 # 8
             N_HALF = N_OUT // 2
             N_SC = N_OUT // 32
-            for mr in range_constexpr(m_repeat):         # BM/16 (=8)
-                row_local = arith.constant(mr * 16, index=True) + _mlane
-                out_row = m_row + row_local
-                for half in range_constexpr(NBLK // 4):  # 2
-                    group = _wgrp + arith.constant(half * 4, index=True)
-                    col0 = group * _c32idx + _kk * arith.index(8)
+            _wave_half_i32 = arith.index_cast(i32, wave_n / arith.index(2))  # 0|1
+            _wn_lo = wave_n % arith.index(2)                # 0|1 within the half
+            for half in range_constexpr(2):                 # cols [0,128), [128,256)
+                rocdl.s_barrier()
+                # cshuffle THIS half: only the 2 waves owning these cols write.
+                _do = arith.cmpi(CmpIPredicate.eq, _wave_half_i32,
+                                 arith.constant(half, type=i32))
+                _ifc = scf.IfOp(_do)
+                with ir.InsertionPoint(_ifc.then_block):
+                    for i in range_constexpr(m_repeat):
+                        for J in range_constexpr(num_acc_n):
+                            lcol = (_wn_lo * _c64
+                                    + arith.constant(J * 16, index=True)
+                                    + lane_mod_16)
+                            row_base = (arith.constant(i * 16, index=True)
+                                        + lane_div_16 * arith.constant(4, index=True))
+                            acc_v = accm[i * num_acc_n + J]
+                            for v in range_constexpr(4):
+                                lds_idx = ((row_base + arith.constant(v, index=True))
+                                           * _accs + lcol)
+                                val = vector.extract(
+                                    acc_v, static_position=[v], dynamic_position=[])
+                                v1 = vector.from_elements(T.vec(1, f32), [val])
+                                vector.store(v1, lds_acc, [lds_idx], alignment=4)
+                    scf.YieldOp([])
+                rocdl.s_barrier()
+                for mr in range_constexpr(m_repeat):        # BM/16 (=8)
+                    row_local = arith.constant(mr * 16, index=True) + _mlane
+                    out_row = m_row + row_local
+                    col0 = _wgrp * _c32idx + _kk * arith.index(8)   # within 128-half
                     r = []
                     for e in range_constexpr(8):
                         rv = vector.load_op(
                             T.vec(1, f32), lds_acc,
-                            [row_local * c_BN + col0 + arith.constant(e, index=True)],
+                            [row_local * _accs + col0 + arith.constant(e, index=True)],
                         )
                         r.append(vector.extract(
                             rv, static_position=[0], dynamic_position=[]))
@@ -820,7 +839,8 @@ def compile_mxfp4_gemm2_a4w4(
                             i32, "llvm.amdgcn.cvt.scalef32.pk.fp4.f32",
                             [packed, r[2 * k], r[2 * k + 1], qs,
                              arith.constant(k, type=i32)], [], [])
-                    global_col = n_block * _c256 + col0
+                    global_col = (n_block * _c256
+                                  + arith.constant(half * 128, index=True) + col0)
                     q_off = (out_row * arith.constant(N_HALF, index=True)
                              + global_col / arith.index(2))
                     _q_ptr = llvm.inttoptr(
@@ -834,7 +854,8 @@ def compile_mxfp4_gemm2_a4w4(
                         CmpIPredicate.eq, _kk_i32, arith.constant(0, type=i32))
                     _ifsc = scf.IfOp(_is0)
                     with ir.InsertionPoint(_ifsc.then_block):
-                        blk = n_block * arith.constant(NBLK, index=True) + group
+                        blk = (n_block * arith.constant(NBLK, index=True)
+                               + arith.constant(half * 4, index=True) + _wgrp)
                         sc_off = out_row * arith.constant(N_SC, index=True) + blk
                         _sc_ptr = llvm.inttoptr(
                             ir.Type.parse("!llvm.ptr<1>"),
@@ -845,6 +866,33 @@ def compile_mxfp4_gemm2_a4w4(
                             _sc_ptr, alignment=1)
                         scf.YieldOp([])
             return
+
+        # ---- atomic cshuffle + epilogue (BM=16/32): accm -> lds_acc[BM*BN] full ----
+        # accm[mi*4+J][v]  ->  lds_acc[(mi*16 + lane/16*4 + v)*BN + col],
+        #   col = wave_n*64 + J*16 + lane%16
+        rocdl.s_barrier()
+        c_BN = arith.constant(BN, index=True)
+        for i in range_constexpr(m_repeat):
+            for J in range_constexpr(num_acc_n):
+                col = (
+                    wave_n * _c64
+                    + arith.constant(J * 16, index=True)
+                    + lane_mod_16
+                )
+                row_base = arith.constant(i * 16, index=True) + lane_div_16 * arith.constant(
+                    4, index=True
+                )
+                acc_v = accm[i * num_acc_n + J]
+                for v in range_constexpr(4):
+                    lds_idx = (
+                        (row_base + arith.constant(v, index=True)) * c_BN + col
+                    )
+                    val = vector.extract(
+                        acc_v, static_position=[v], dynamic_position=[]
+                    )
+                    v1 = vector.from_elements(T.vec(1, f32), [val])
+                    vector.store(v1, lds_acc, [lds_idx], alignment=4)
+        rocdl.s_barrier()
 
         # read by (m_lane=tid/32, n_lane=tid%32), atomic acc*weight -> out[token]
         _c32 = arith.constant(32, index=True)

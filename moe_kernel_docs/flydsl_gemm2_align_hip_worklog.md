@@ -28,6 +28,12 @@
 | 2 | **B-load nt→cached**（BM=128 nonatomic == HIP） | 1.13x | 1.35x | 1.38x | 1.36x | 1.000 | ATT + PMC |
 | 3 | **1-D grid m-major 解码**（== HIP wu 解码） | 1.22x* | 1.32x | 1.35x | 1.31x | 1.000 | PMC L2 hit 28→57% |
 | 4 | **AGPR 累加器 + 预读 A**（BM=128 == HIP kUseAGPR） | 1.22x | 1.33x | 1.35x | 1.32x | 1.000 | **性能中性**;VGPR 257→148 |
+| 5 | **per-K 预读 A + 2 blocks/CU**（gfx950 160KB LDS，见 §2.5） | 1.22x | **1.31x** | **0.94x** | **0.91x** | 1.000 | mxfp4out **反超 HIP**;占用率 1→2 |
+
+> **里程碑（fix5）**：gfx950 LDS = **160KB**（非此前误判的 ~128KB 上限）。把 BM=128 的 LDS 砍到
+> ≤80KB → 2 blocks/CU，藏住访存/epilogue 延迟。mxfp4out（M=8192/16384，最大差距）**反超 HIP**
+> （0.91–0.94x，HIP 被 `__launch_bounds__(256,1)` 钉死在 1 block/CU）。e2e total M=8192 0.98x、
+> M=16384 0.96x。
 
 \* BM=32（M=256）run-to-run 抖动较大（atomic 累加 + 小 grid 受 epilogue 限制），三步累计
 1.27x→1.22x。BM=128（大头）：**1.62/1.71/1.70x → 1.32/1.35/1.31x**。BM=16（M≤128）路径
@@ -122,9 +128,48 @@ kernel 是 1 block/CU（128KB LDS 限）的**访存延迟瓶颈**，纯计算调
 
 故保留（中性、非回退；补强 VGPR 鲁棒性 + ISA 对齐），而非回退。
 
+### 2.5 per-K 预读 A + 2 blocks/CU（fix4 → fix5，BM=128）—— 反超 HIP
+
+**关键硬件信息**：gfx950 LDS = **160KB/CU**（rocminfo `Max Waves Per CU=32`、agent_info
+`Lds_Size_In_Kb=160`）。此前误判 occupancy 被 ~128KB 锁死；实测两版（fix4 / HIP）都是
+**1 block/CU**（`occupancy_balance.py`：max slots/SIMD=1，"no latency hiding within a SIMD"）。
+HIP 被 `__launch_bounds__(256,1)` 钉死 1 block；FlyDSL 无此限，只要 LDS ≤ 80KB 即可 2 blocks/CU。
+
+**A/B 隔离实测（M=4096，per-K 结构）**：1 block/CU = **1.36x**，2 blocks/CU = **1.30x** —— 纯
+occupancy 收益 **~0.06x**（非边际）。2 blocks 让第 2 个 wave 在本 wave 等 w2 加载 / 写 epilogue
+时顶上，藏住延迟（本 kernel 的瓶颈）。
+
+**改动（三步协同）**：
+1. **per-K 预读 A**（替换 fix4 的 all-K 预读）：每个 K-tile 只预读 8 个 m-chunk 的 A（~32 VGPR，
+   而非 all-K 的 64），MFMA 仍背靠背 + 无 hazard（8 个连续 mi 落在不同 accm）。arch VGPR
+   **148→96**、总 **276→224**（≤256，2 blocks/CU 的前提）。
+2. **bf16flat LDS 128KB→32KB**：bf16flat 不用 lds_acc（直写 flat_out），allocator 只分 A 暂存
+   LDS → M=4096 2 blocks/CU。
+3. **mxfp4out 2-N-half cshuffle**：把 cshuffle+quant 拆成两个 N-half（cols [0,128)/[128,256)），
+   过 `lds_acc[BM*128]`（**64KB**，非 full BM*BN 128KB）。每 half 由拥有该列的 2 个 wave 写、全
+   256 线程 quant 其 4 个 per-32 组。accm（AGPR）跨两 half 常驻 → M=8192/16384 2 blocks/CU。
+
+**效果（实测）**：
+- M=8192 mxfp4out **1.35x → 0.94x**（反超 HIP），M=16384 **1.32x → 0.91x**（反超）。
+- M=4096 bf16flat 1.33x → **1.31x**（轻 epilogue，2-block 收益小）。
+- 占用率 `occupancy_balance.py` 确认：M=8192 mxfp4out = **2 blocks/CU**。
+- cos 0.9998–1.0000；BM=16/32 atomic 路径未改、未回退。
+
+> 为何 mxfp4out 反超而 bf16flat 仅小幅：mxfp4out 有重 quant epilogue（cvt+store+per-32 amax），
+> 2-block 把这段延迟藏在另一 wave 后，收益巨大；bf16flat 直写 bf16（轻），可藏的少。HIP 两种模式
+> 都钉死 1 block/CU，故 FlyDSL 在重 epilogue 的 mxfp4out 上反超。
+
 ---
 
-## 3. 残余差距分析（所有杠杆对齐后 BM=128 仍 ~1.31–1.35x）
+## 3. 残余差距分析（fix5 后）
+
+- **M=8192/16384（mxfp4out，最大差距）：已反超 HIP**（0.91–0.94x）。目标达成。
+- **M=4096（bf16flat）：1.31x**。已 2 blocks/CU，但 epilogue 轻、可藏延迟少；regime 跟随 mx_fn
+  用 bf16flat（pm≤4096），未改。
+- **小 M（BM=16/32 atomic，M≤256）：1.05–1.47x**，本轮 BM=128-gated 改动未触及；瓶颈是小 grid 下
+  atomic epilogue / launch，非 occupancy（BM=16 LDS 已小）。属另一路径，后续可单独优化。
+
+历史残余分析（fix1–4，已被 fix5 的 occupancy 推翻其"1 block/CU 固有"结论）：
 
 **已与 HIP 对齐的全部杠杆**：load 结构（direct-LDS 2-slot）、B cache（cached）、L2/grid 局部性
 （m-major 解码 57%>52%）、MFMA 调度（AGPR 背靠背）。残余仍 ~1.3x，根因是**本 kernel 形态固有的
