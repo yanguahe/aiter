@@ -664,3 +664,95 @@ python3 fmha_opt_tools/trace_segment_cycles.py \
 python3 -c "import csv,glob; R=list(csv.reader(open(glob.glob('thread_trace/fly_gemm1_m4096/stats_ui_output_agent_*.csv')[0])))[1:]; print('nt loads:', sum(1 for r in R if r[2].strip().startswith('buffer_load') and r[2].split()[-1:]==['nt']))"
 ```
 
+---
+
+# 附录 D：为什么 M=4 时 use_nt=False(cached) 比 use_nt=True(nt) 快 ~27% —— 硬件依据 + 实测
+
+> 接附录 C（gemm1 默认 cached）。caller 进一步对 **M≤8 强制 `use_nt=False`**（`mx_sort_fly_gemm.py`：`if M <= 8: use_nt = False`）。本附录回答"为什么"——
+> 关键反直觉点：**M=4 时每个 block 的 A/B 都不同、无复用，每条 load 都从 HBM 取，那经不经过 L2(cached vs nt) 为何还有 27% 差？**
+> 结论:**不是流量(HBM 字节相同)，是每请求延迟——nt 的非分配 STREAM 读路径每请求 L2 延迟实测高 32%**。
+
+## D.1 实测:kernel 耗时(rocprofv3 --kernel-trace,gemm1_kernel_0 单 dispatch 平均)
+
+| M | nt (use_nt=True) | cached (use_nt=False) | nt 惩罚 |
+|---|---|---|---|
+| **4** | 27.71 / 28.06 us(复跑） | 20.13 / 19.89 us | **+37%**（≈ +27% 视为 cached 更快） |
+| 4096 | 424.82 us | 380.36 us | +11.7% |
+| 8192 | 520.67 us | 469.41 us | +10.9% |
+
+M=4 复跑稳定(非噪声)。**关键趋势:nt 惩罚在小 M 最大(+37%)、大 M 缩到 ~11%**——若是"复用/带宽"收益应随 M 增大而放大,实测相反,**指向延迟受限**。
+
+## D.2 实测:L2(TCC)流量 —— nt 与 cached **完全相同**(证实"无复用")
+
+PMC `TCC_HIT` / `TCC_MISS`（M=4，单 dispatch 平均）:
+
+| | TCC_HIT | TCC_MISS(=L2→HBM 事务) | L2 命中率 |
+|---|---|---|---|
+| nt | 44,420 | 1,010,015 | 4.2% |
+| cached | 41,646 | 1,012,176 | 4.0% |
+
+**HBM 读事务几乎一致(差 0.2%),命中率都 ~4%(基本全 miss 到 HBM)。** → cached 在 M=4 **没有减少任何 HBM 流量**,"L2 复用"不成立。
+
+## D.3 实测:L2 读延迟 —— nt 每请求高 **32%**(决定性证据)
+
+PMC `TCP_TCC_READ_REQ_LATENCY` / `TCP_TCC_READ_REQ`（gfx950 可用；M=4，单 dispatch 平均）:
+
+| M=4 | L2 读请求数 | TCC MISS | **平均 L2 读延迟** |
+|---|---|---|---|
+| **nt**(MISS_EVICT + L2 STREAM) | 1,021,860 | 1,010,078 | **938.7 cyc/req** |
+| **cached**(HIT_LRU + L2 LRU) | 1,021,860 | 1,012,240 | **712.1 cyc/req** |
+
+**请求数 / miss 数完全相同,但 nt 每个 L2 读延迟高 226 cyc(+32%)。** 同样的 HBM 流量,nt 每请求更慢——这是 27% 差距的直接、定量来源。
+
+## D.4 硬件依据(gfx950 文档,路径见下)
+
+资料目录:`wk_sp1/mi400_hw_wiki/raw/papers/mi300_mi350_hd_txt/doc/`
+
+1. **CDNA4 ISA §9.1.10 Table 49「Load Controls」**(`amd-instinct-cdna4-instruction-set-architecture.txt` 行 6553+):
+   - `NT  Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse`
+   - Wave scope **NT=0**:CU(L1) `Hit LRU` / L2 `Hit LRU` / LLC `Hit LRU`
+   - Wave scope **NT=1**:CU(L1) **`Miss Evict`** / L2 **`Hit Stream`** / LLC `Hit Evict`
+2. **TCP(L1)块规范** `design/blocks/tc/tcp#4.txt`:
+   - §3.1.5 读策略(行 838):`if glc then (if slc MISS_EVICT else MISS_LRU) else HIT_LRU` → NT=1(slc=1)=**MISS_EVICT**(不分配/不保留),NT=0=**HIT_LRU**(分配/保留)
+   - §3.1.6(行 861-862):`If SLC=1 … then STREAM is selected, else LRU`(L2 策略)
+   - 行 1396:**"Now that TCP hides TCC latency …"**;行 1414:**"TCP latency fifos for TCC requests are sized to hide 448 quads of latency (minimum of 448 clocks)"** —— **L1 分配路径靠 latency-hiding FIFO 藏 L2 延迟**
+3. `design/blocks/tc/tci_tcr#1.txt`:L2 mtype 字段 `0: LRU / 1: STREAM`(印证 NT→STREAM 映射)
+4. `design/blocks/tc/TC_Perf_Counters#1.txt` 行 136:存在 `TCP_PERF_SEL_TCC_READ_REQ_LATENCY` 计数器(D.3 即用它)
+5. CDNA4 白皮书 `amd-cdna-4-architecture-whitepaper.txt` 行 722-728:per-CU **L1 32KB / 128B 行 / 64-way** → XCD 共享 **4MB L2(16-way,16 通道,128B 行/cycle)** → 256MB Infinity Cache
+
+## D.5 机制(文档可支撑的因果)
+
+- **NT=0(HIT_LRU + L2 LRU,分配路径)**:请求在 L1(TCP)分配 line 并进入 **448-clock latency-hiding FIFO**(tcp#4 明文:TCP 分配路径专门用来藏 TCC 延迟),请求被流水/重叠 → 每请求 L2 延迟低(实测 712 cyc)。
+- **NT=1(MISS_EVICT + L2 STREAM,非分配路径)**:不分配 line、不走这条藏延迟的分配路径 → 每请求 L2 延迟高(实测 939 cyc,+32%)。这正是 `NT=1`("do not expect temporal reuse")的设计取舍:**用更高延迟换"不污染 cache"**,只在 L2 容量受压时才划算。
+- **为何 M=4 放大成 27%**:M=4 延迟受限 + 低 MLP(有效 block ≪ CU 数,padding block 秒退,几乎没有并行在飞的 load 来掩盖延迟)→ 这 +32% 的每请求延迟**直接暴露**为 ~27% 的 kernel 耗时。大 M 高 MLP 能并行掩盖延迟,差距缩到 ~11%(那 11% 才是 D/附录C 说的**复用**收益)。
+
+> 勘误:早期把原因含糊归为"请求重叠度/优先级",无文档依据,已撤回。正确表述是**非分配 STREAM 读路径每请求延迟更高(硬件计数器实测 +32%)**,文档(Table 49 + tcp#4)给出 policy(MISS_EVICT/STREAM vs HIT_LRU/LRU),计数器 `TCP_TCC_READ_REQ_LATENCY` 给出延迟事实。
+
+## D.6 结论与动作
+
+- **两端都用 cached(NT=0)更好,但原因不同**:大 M = 复用(L2 驻留,附录 C);小 M = 每请求延迟更低(本附录,D.3 实测 712 vs 939 cyc)。`nt` 只在"用一次 + L2 容量受压 + 非延迟受限"的窄区间才划算,gemm1 不满足。
+- 这也解释了为什么 **HIP 的启发式 `(M*topk//e)<64 → nt` 对 FlyDSL 不适用**(那是给 HIP kernel 调的);FlyDSL 实测 cached 在所有 M 都 ≥ nt。
+- 动作:`mx_sort_fly_gemm.py` 对 **`M<=8` 强制 `use_nt=False`**(cached);gemm1 `b_nt = 2 if use_nt else 0`(附录 C)。M=4/8/16 cos=1.0000,M=4 e2e 0.93x(快于 HIP)。
+
+## D.7 复现命令(L2 读延迟计数器)
+
+```bash
+# 临时开关:mx_sort_fly_gemm.py 在 use_nt 推导后加
+#   _f=os.environ.get("MXFP4_G1_FORCE_NT");  use_nt = (_f=="1") if _f is not None else use_nt
+# pmc yaml: pmc: [TCP_TCC_READ_REQ_LATENCY, TCP_TCC_READ_REQ, TCC_HIT, TCC_MISS]
+#           kernel_include_regex: (gemm1_kernel_0); output_format:[csv]
+docker exec hyg_fyd2 bash -c '
+  cd /shared/amdgpu/home/zhiming_ding_qle/yanguahe/code/wk_perf_test/aiter &&
+  export HIP_VISIBLE_DEVICES=1 MXFP4_G1_A_LOAD_VARIANT=direct_hip_2slot_kmajor &&
+  MLIR_LIBS_DIR=.../FlyDSL/build-fly/python_packages/flydsl/_mlir/_mlir_libs &&
+  export LD_LIBRARY_PATH=$MLIR_LIBS_DIR:${LD_LIBRARY_PATH:-} &&
+  for NT in 1 0; do
+    rm -rf /tmp/lat_$NT ~/.flydsl/cache/* &&
+    MXFP4_G1_FORCE_NT=$NT rocprofv3 -i fmha_opt_tools/pmc_g1_lat.yaml -- \
+      python3 bench_up_moe_v1.py -M 4 --iters 30 --warmup 5 --benchmarks mx msfg &&
+    cp -r thread_trace/g1_pmc_lat /tmp/lat_$NT; done
+'
+# avg L2 read latency = sum(TCP_TCC_READ_REQ_LATENCY)/sum(TCP_TCC_READ_REQ)，
+# 从 /tmp/lat_{1,0}/pass_1/out_counter_collection.csv 里筛 gemm1_kernel_0 行聚合。
+```
+
