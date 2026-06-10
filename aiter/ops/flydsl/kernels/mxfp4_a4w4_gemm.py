@@ -562,7 +562,65 @@ def compile_mxfp4_gemm2_a4w4(
         acc_init = arith.constant_vector(0.0, vec4_f32)
         accm = [acc_init] * (m_repeat * num_acc_n)   # mi_idx*num_acc_n + ni_idx
 
+        # AGPR MFMA (== HIP mfma_f4f4_agpr, mfma_f4f4.hpp:45-61), BM=128 nonatomic.
+        # Forces the accumulator into AGPR via inline asm ("+a") and uses v4i32
+        # (fp4-width) A/B operands. This (a) moves the 32 f32x4 accm out of VGPR
+        # into AGPR and (b) halves A/B VGPR (the rocdl op pads A/B to v8i32) ->
+        # drops the 257-VGPR ceiling and lets the 64 MFMA/K-tile run back-to-back
+        # (== HIP kUseAGPR). Same helper/structure as gemm1 BM=128.
+        _vec4_i32 = T.vec(4, i32)
+
+        def _mfma_agpr(acc, a0, a1, b0, b1, sa, sb, op_sel_a, op_sel_b):
+            a4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [a0, a1]))
+            b4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [b0, b1]))
+            alo = op_sel_a & 1
+            ahi = (op_sel_a >> 1) & 1
+            blo = op_sel_b & 1
+            bhi = (op_sel_b >> 1) & 1
+            osel = f"op_sel:[{alo},{blo},0] op_sel_hi:[{ahi},{bhi},0] cbsz:4 blgp:4"
+            # "+a" accumulate (C-src = output, tied input 0). accm is pre-zeroed
+            # acc_init so the first MFMA accumulates onto 0 (== gemm1's working
+            # path; the output-only "=a,v,v,v,v" init form left a dead MFMA +
+            # accm corruption).
+            asm = "v_mfma_scale_f32_16x16x128_f8f6f4 $0, $2, $3, $0, $4, $5 " + osel
+            return llvm.inline_asm(
+                vec4_f32, [acc, a4, b4, sa, sb], asm, "=a,0,v,v,v,v",
+                has_side_effects=True,
+            )
+
         def mfma_ktile(b_tile, a_scs, b_scs, a_slot=0):
+            if const_expr(BM == 128):
+                # HIP run_one nonatomic: pre-read ALL A (a_all[mi][k]) into regs
+                # first, then pure AGPR MFMA per n-output J, k-outer/mi-inner so
+                # consecutive MFMA hit distinct accm (accm[mi*4+J], mi=0..7) -> no
+                # hazard s_nop and the A ds_read no longer interleaves the MFMA
+                # chain (was +362 instr in the MFMA span vs HIP). Mirrors gemm1.
+                a_all = []
+                for mi_idx in range_constexpr(pack_M):       # 8 m-chunks
+                    curr_row = row_a_lds + arith.constant(mi_idx * 16, index=True)
+                    a_k = []
+                    for k_idx in range_constexpr(2):
+                        col_base = col_offset_base + arith.constant(
+                            (k_idx * 128) // a_elem_vec_pack, index=True)
+                        a_k.append(
+                            lds_load_packs_k64(curr_row, col_base, slot=a_slot))
+                    a_all.append(a_k)
+                for J in range_constexpr(num_acc_n):          # 4 n-outputs
+                    ni = J // pack_N
+                    inxdl = J % pack_N
+                    b_scale_val = b_scs[ni]
+                    for k_idx in range_constexpr(2):          # k-outer
+                        b0, b1 = b_tile[J][k_idx]
+                        for mi_idx in range_constexpr(pack_M):  # mi-inner (distinct accm)
+                            a0, a1 = a_all[mi_idx][k_idx]
+                            a_scale_val = a_scs[mi_idx // 2]
+                            op_sel_a = k_idx * _scale_pack_m + (mi_idx % 2)
+                            op_sel_b = k_idx * pack_N + inxdl
+                            acc_idx = mi_idx * num_acc_n + J
+                            accm[acc_idx] = _mfma_agpr(
+                                accm[acc_idx], a0, a1, b0, b1,
+                                a_scale_val, b_scale_val, op_sel_a, op_sel_b)
+                return
             for k_idx in range_constexpr(2):       # 2 MFMA-K (128) per K-tile
                 ikxdl = k_idx
                 col_base = col_offset_base + arith.constant(

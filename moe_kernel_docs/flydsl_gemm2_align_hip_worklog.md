@@ -27,6 +27,7 @@
 | 1 | **direct-LDS 2-slot A + B 全部前置**（BM32/128） | 1.13x | 1.38x | 1.44x | 1.47x | 0.999 | ATT |
 | 2 | **B-load nt→cached**（BM=128 nonatomic == HIP） | 1.13x | 1.35x | 1.38x | 1.36x | 1.000 | ATT + PMC |
 | 3 | **1-D grid m-major 解码**（== HIP wu 解码） | 1.22x* | 1.32x | 1.35x | 1.31x | 1.000 | PMC L2 hit 28→57% |
+| 4 | **AGPR 累加器 + 预读 A**（BM=128 == HIP kUseAGPR） | 1.22x | 1.33x | 1.35x | 1.32x | 1.000 | **性能中性**;VGPR 257→148 |
 
 \* BM=32（M=256）run-to-run 抖动较大（atomic 累加 + 小 grid 受 epilogue 限制），三步累计
 1.27x→1.22x。BM=128（大头）：**1.62/1.71/1.70x → 1.32/1.35/1.31x**。BM=16（M≤128）路径
@@ -102,19 +103,50 @@ XCD 只停在少数 expert → w2 常驻 L2。
 **效果**：L2 命中率 28.4% → **56.8%**（已超 HIP 52.5%）。gemm2 BM=128 1.35–1.38x → 1.31–1.35x；
 BM=32(M=256) 1.27x→1.22x。
 
+### 2.4 AGPR 累加器 + 预读 A（fix3 → fix4，仅 BM=128）—— 性能中性，保留作 ISA 对齐 + VGPR 鲁棒性
+
+**问题（trace_segment_cycles.py 实测，M=4096）**：MFMA-span 对比 HIP 191 指令/4240 周期（纯 AGPR
+背靠背 MFMA、A 预读入寄存器、epilogue 独立）；FLY 553 指令/6326 周期 —— FLY 把 16 个 A 的
+`ds_read`（带 lgkmcnt 级联）+ 128 个 epilogue cvt/store **全交织进 MFMA 区**（+362 指令）。根因：
+FLY 用 VGPR 累加器（arch VGPR 257，顶到上限），HIP nonatomic 用 **AGPR 累加器**（`kUseAGPR`）。
+
+**改动**：照搬 gemm1 BM=128 已有的 `_mfma_agpr`（`llvm.inline_asm` `"+a"` 把累加器钉进 AGPR，
+A/B 用 v4i32 而非 rocdl 的 v8i32 → A/B VGPR 减半）。`mfma_ktile` BM=128 改为：先一次性预读全部 A
+（`a_all[mi][k]`），再按 n-output J、k-outer/mi-inner 发 64 个 AGPR MFMA（连续 MFMA 落在不同
+accm → 无 hazard s_nop）。BM=16/32 保持 VGPR 路径。
+
+**效果（实测）**：**性能中性**（BM=128 1.31–1.35x，与 fix3 无差别）。原因（规则 Stage 3.4）：本
+kernel 是 1 block/CU（128KB LDS 限）的**访存延迟瓶颈**，纯计算调度优化对它中性。但：
+- arch VGPR **257→148**（accm 128 入 AGPR，A/B v4i32 减半），脱离 257 spill 边缘。
+- ISA 与 HIP `kUseAGPR` 对齐（128 `v_accvgpr_read`、MFMA 背靠背），完成规则第 2 层「编译产物等价」。
+
+故保留（中性、非回退；补强 VGPR 鲁棒性 + ISA 对齐），而非回退。
+
 ---
 
-## 3. 残余差距分析（fix3 之后 BM=128 仍 ~1.31–1.35x）
+## 3. 残余差距分析（所有杠杆对齐后 BM=128 仍 ~1.31–1.35x）
 
-- L2 命中率已 ≥ HIP（56.8% vs 52.5%），L2 miss/HBM 流量基本对齐 → **残余不再是 L2 traffic**。
-- 最可能的剩余项：**persistent grid**。HIP nonatomic 用 `grid=min(total_work, NUM_CU=256)`
-  的常驻网格，256 个 block 各串 ~105 个 tile，HBM 持续打满、无重启间隙；FlyDSL 是
-  non-persistent（`total_m_blocks*28` ≈ 2.7 万个 1-tile block），block 频繁启停可能让 HBM
-  欠饱和。这是更大改动（kernel body 包进 `scf.for` 常驻循环 + 设备端 `cumsum/BM*28` 上界），
-  收益未定，**待评估/确认后再做**。
-- ATT（att_target_cu=1）对本 memory-bound kernel 的 L2 复用**不具代表性**（单 CU L2 偏冷），
-  fix2/fix3 的真实收益体现在整网 kernel 时间与 PMC，不体现在单 CU ATT 总 cycle —— 故本阶段
-  以 **kernel 时间 + PMC** 为准，ATT 仅用于定位指令级 stall pattern（fix1）。
+**已与 HIP 对齐的全部杠杆**：load 结构（direct-LDS 2-slot）、B cache（cached）、L2/grid 局部性
+（m-major 解码 57%>52%）、MFMA 调度（AGPR 背靠背）。残余仍 ~1.3x，根因是**本 kernel 形态固有的
+访存延迟瓶颈，HIP 自己也撞同一堵墙**：
+
+- **不是 HBM 带宽**：FLY ~25% / HIP ~31% 的 8TB/s 峰值，都远未打满。
+- **不是 L2 traffic**：FLY L2 命中 56.8% ≥ HIP 52.5%。
+- **不是 occupancy**：两版都 1 block/CU（128KB LDS union 限），4 waves。
+- **不是计算调度**：AGPR 对齐后（fix4）性能中性，证实残余非 MFMA/hazard。
+- **是 1 block/CU 下的访存延迟隐藏**：最大单点 stall 是 MFMA 前等 w2 的 `s_waitcnt vmcnt`
+  （cold-L2 ATT ~1386–2628 cyc/tile）；K=512 仅 2 个 K-tile、计算量小，4 waves 不足以藏住 w2
+  加载延迟。HIP 靠手工调度把这段藏得略好，是其剩余 ~1.3x 的来源。
+
+**已评估否决 / 未做**：
+- **persistent grid**：实测否决 —— HBM 未打满，persistent 的主要收益（打满 HBM + 摊薄 launch）
+  不成立，预计中性。
+- **降 LDS 提 occupancy**：bf16flat（M=4096）不需要 lds_acc，把 LDS 128KB→32KB 可上 2–3
+  block/CU 改善延迟隐藏 —— 但仅惠及 M=4096 且偏离 HIP（HIP 也用 128KB union），未做。
+
+**ATT 代表性注记**：`att_target_cu=1` 对本 memory-bound kernel 的 L2 复用不具代表性（单 CU L2
+偏冷），fix2/fix3 的真实收益体现在整网 kernel 时间 + PMC，不体现在单 CU ATT 总 cycle。故以
+**kernel 时间 + PMC** 为准，ATT 仅用于定位指令级 stall pattern（fix1/fix4）。
 
 ---
 
