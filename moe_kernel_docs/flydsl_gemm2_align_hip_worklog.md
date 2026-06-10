@@ -164,10 +164,29 @@ occupancy 收益 **~0.06x**（非边际）。2 blocks 让第 2 个 wave 在本 w
 ## 3. 残余差距分析（fix5 后）
 
 - **M=8192/16384（mxfp4out，最大差距）：已反超 HIP**（0.91–0.94x）。目标达成。
-- **M=4096（bf16flat）：1.31x**。已 2 blocks/CU，但 epilogue 轻、可藏延迟少；regime 跟随 mx_fn
-  用 bf16flat（pm≤4096），未改。
-- **小 M（BM=16/32 atomic，M≤256）：1.05–1.47x**，本轮 BM=128-gated 改动未触及；瓶颈是小 grid 下
-  atomic epilogue / launch，非 occupancy（BM=16 LDS 已小）。属另一路径，后续可单独优化。
+- **M=4096（bf16flat）：1.31x —— 已到本模式实际上限**（见 §3.1）。
+- **小 M（BM=16/32 atomic，M≤256）：1.05–1.47x —— 受 FLY VGPR 比 HIP 略高所限**（见 §3.2）。
+
+### 3.1 M=4096 bf16flat 已到上限（attack #1，无改动）
+
+ATT 实测（M=4096，2 blocks/CU，load balance imbalance 0.02 良好）：cycle 预算被 **VMEM_ST
+25.8%（stall 29.5%）+ VMEM_LD 24.7%（stall 30.2%）= 50%** 主导 —— 是 **memory-bound**。
+VMEM_ST = 128 个 `global_store_short`（bf16 直写 flat_out，2 字节/个）。这些输出是 MFMA lane
+布局散落的（行 stride=N_OUT、列 stride=16），**无法向量化**（v 跨行、j 跨 16 列均不连续）。
+HIP `apply_bf16_flat_epilog_bm128` 是**同样**的 128 个散落 short store。若改成 cshuffle→行连续
+再向量化，需 lds_acc（128KB）→ 退回 1 block/CU，得不偿失。故 M=4096 bf16flat 1.31x 已是该
+（直写、2-block）设计的实际上限。
+
+### 3.2 小 M（BM=16/32 atomic）受 VGPR 所限（attack #2，AGPR 尝试中性已回退）
+
+occupancy 实测（M=64）：**FLY 4 blocks/CU，HIP 5 blocks/CU**。FLY BM=16 VGPR=100、HIP=85；
+FLY 多 ~15 VGPR → 少 1 个并发 block → 慢（M=64 1.48x）。
+- **尝试：给 BM=16/32 也上 AGPR 累加器**（同 BM=128）。结果：BM=16 accm 仅 16 VGPR，AGPR/v4i32
+  省得极少（102→100），occupancy 仍 4 blocks/CU；full-bench 性能**中性**（M=256 1.22x 不变，
+  M=16/32/64/128 在噪声内）。**已回退**（不留无收益改动）。
+- 根因是 FLY 的总 VGPR（100）比 HIP 手调的 85 高 ~15，需削减 A/B/scale/地址寄存器才能上第 5 个
+  block —— 收益小、风险高，未做。小 M 的 gemm2 绝对耗时小（M=64 ≈95µs，差 ~30µs），且 e2e 被
+  sort/quant/gemm1 主导。
 
 历史残余分析（fix1–4，已被 fix5 的 occupancy 推翻其"1 block/CU 固有"结论）：
 
