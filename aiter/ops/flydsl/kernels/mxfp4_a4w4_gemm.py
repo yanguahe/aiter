@@ -127,6 +127,14 @@ def compile_mxfp4_gemm2_a4w4(
     num_n_blocks = N_OUT // BN   # 28
     num_waves = 4
     total_threads = num_waves * 64
+    # Persistent grid size for the BM=128 nonatomic paths (== HIP kPersistent).
+    # HIP launches min(total_work, NUM_CU=256), 1 block/CU. FlyDSL has no
+    # __launch_bounds__(256,1) cap and uses small LDS (bf16flat 32KB), so it can
+    # keep 2 blocks/CU -> launch 2*NUM_CU to stack the persistent prologue
+    # amortization on top of FlyDSL's occ=2 latency-hiding win. Blocks whose
+    # block_id >= total_work simply run 0 loop iterations (cheap).
+    NUM_CU = 256
+    GRID_PERSISTENT = 2 * NUM_CU
     pack_M = BM // 16            # 2 (BM=32) or 1 (BM=16)
     pack_K = 2
     a_elem_vec_pack = 2          # fp4: 2 per byte
@@ -234,27 +242,9 @@ def compile_mxfp4_gemm2_a4w4(
         f32 = T.f32
         layout_lds = fx.make_layout((BM, lds_stride), (lds_stride, 1))
 
-        tx = gpu.thread_id("x")
-        # 1-D grid with HIP's m-block-major decode (== gemm2_a4w4.cuh:432/446
-        # m_block=pid/num_n_blocks, n_block=pid%num_n_blocks). The previous 2-D
-        # grid put m_block on the fast (x) dim, so each XCD's round-robin block
-        # stream hit ALL experts for a given n -> w2 thrashed L2 (PMC: 28% hit).
-        # m-major decode keeps each XCD on a few experts -> w2 stays L2-hot
-        # (== HIP 52% hit). Pair (m,n) coverage is identical; only the schedule
-        # order (hence L2 reuse) changes, so it is correctness-neutral.
-        _pid = gpu.block_id("x")
-        _cnnb = arith.constant(num_n_blocks, index=True)
-        m_block = _pid / _cnnb
-        n_block = _pid % _cnnb
-
-        # wave / lane decomposition (4 waves x 64 lanes).
-        coord_wl = idx2crd(tx, fx.make_layout((num_waves, 64), (64, 1)))
-        wave = layout_get(coord_wl, 0)
-        lane = layout_get(coord_wl, 1)
-        coord_l16 = idx2crd(lane, fx.make_layout((4, 16), (16, 1)))
-        lane_div_16 = layout_get(coord_l16, 0)
-        lane_mod_16 = layout_get(coord_l16, 1)
-        wave_n = wave
+        # wave/lane decomposition is computed inside run_one (per tile) so the
+        # VGPR-resident lane indices are NOT loop-carried across the persistent
+        # grid-stride loop (keeps occupancy at 2 blocks/CU).
 
         c_tokens = arith.index_cast(ir.IndexType.get(), i32_tokens.ir_value())
         c_max_sorted = arith.index_cast(
@@ -295,674 +285,727 @@ def compile_mxfp4_gemm2_a4w4(
         num_valid = buffer_ops.buffer_load(
             numids_rsrc, arith.constant(0, index=True), vec_width=1, dtype=T.i32
         )
-        m_row = m_block * arith.constant(BM, index=True)
-        m_row_i32 = arith.index_cast(T.i32, m_row)
-        blk_valid = arith.cmpi(CmpIPredicate.ult, m_row_i32, num_valid)
-        expert_i32 = buffer_ops.buffer_load(
-            eid_rsrc, m_block, vec_width=1, dtype=T.i32
-        )
+        # ---- per-tile body (== HIP run_one). Persistent/grid-stride: a fixed
+        # grid of blocks loops over work-units (tiles); each call does ONE
+        # (m_block, n_block) tile. One-time setup (rsrc, num_valid, lane decomp)
+        # is hoisted above; only per-tile state is (re)computed here. ----
+        def run_one(m_block, n_block):
+            # wave / lane decomposition (4 waves x 64 lanes), per tile so the
+            # lane VGPRs are not loop-carried across the persistent loop.
+            tx = gpu.thread_id("x")
+            coord_wl = idx2crd(tx, fx.make_layout((num_waves, 64), (64, 1)))
+            wave = layout_get(coord_wl, 0)
+            lane = layout_get(coord_wl, 1)
+            coord_l16 = idx2crd(lane, fx.make_layout((4, 16), (16, 1)))
+            lane_div_16 = layout_get(coord_l16, 0)
+            lane_mod_16 = layout_get(coord_l16, 1)
+            wave_n = wave
 
-        # LDS: A tile (fp4 bytes) + cshuffle acc (f32).
-        lds_base = allocator.get_base()
-        lds_a = SmemPtr(lds_base, _lds_a_offset, T.i8, shape=(_a_lds_bytes,)).get()
-        lds_acc = SmemPtr(
-            lds_base, _lds_acc_offset, T.f32, shape=(_acc_lds_elems,)
-        ).get()
-
-        # ---- A-load (build/test increment 2): A_q is sorted inter, read
-        # directly by sorted_pos = m_row + row_local (NO token gather). One
-        # K-tile (BK fp4) at a time into lds_a with xor16 swizzle. ----
-        tx_i32_base = tx * arith.constant(chunk_i32, index=True)
-        layout_x_tile = fx.make_layout((BM, tile_k_dwords), (tile_k_dwords, 1))
-        x_row_local = []
-        x_col_local = []
-        x_row_base_div4 = []
-        for i in range_constexpr(num_x_loads):
-            _rl, _cl = tile_chunk_coord_i32(
-                arith,
-                tx_i32_base=tx_i32_base,
-                i=i,
-                total_threads=total_threads,
-                layout_tile_div4=layout_x_tile,
-                chunk_i32=chunk_i32,
+            m_row = m_block * arith.constant(BM, index=True)
+            m_row_i32 = arith.index_cast(T.i32, m_row)
+            blk_valid = arith.cmpi(CmpIPredicate.ult, m_row_i32, num_valid)
+            expert_i32 = buffer_ops.buffer_load(
+                eid_rsrc, m_block, vec_width=1, dtype=T.i32
             )
-            x_row_local.append(_rl)
-            x_col_local.append(_cl)
-            _row = m_row + _rl
-            x_row_base_div4.append(_row * arith.constant(c_k_div4, index=True))
 
-        def load_a_tile(base_k):
-            base_k_div4 = (
-                (base_k / arith.constant(a_elem_vec_pack, index=True))
-                * arith.constant(elem_bytes, index=True)
-            ) / arith.index(4)
-            parts = []
-            for i in range_constexpr(num_x_loads):
-                idx = x_row_base_div4[i] + base_k_div4 + x_col_local[i]
-                v = buffer_copy_gmem16_dwordx4(
-                    buffer_ops,
-                    vector,
-                    elem_type=T.i8,
-                    idx_i32=idx,
-                    rsrc=a_rsrc,
-                    vec_elems=16,
-                )
-                parts.append(vector.bitcast(T.vec(4, i32), v))
-            return parts
+            # LDS: A tile (fp4 bytes) + cshuffle acc (f32).
+            lds_base = allocator.get_base()
+            lds_a = SmemPtr(lds_base, _lds_a_offset, T.i8, shape=(_a_lds_bytes,)).get()
+            lds_acc = SmemPtr(
+                lds_base, _lds_acc_offset, T.f32, shape=(_acc_lds_elems,)
+            ).get()
 
-        def store_a_tile(parts, slot=0):
-            _slot_base = arith.constant(slot * _a_slot_stride, index=True)
+            # ---- A-load (build/test increment 2): A_q is sorted inter, read
+            # directly by sorted_pos = m_row + row_local (NO token gather). One
+            # K-tile (BK fp4) at a time into lds_a with xor16 swizzle. ----
+            tx_i32_base = tx * arith.constant(chunk_i32, index=True)
+            layout_x_tile = fx.make_layout((BM, tile_k_dwords), (tile_k_dwords, 1))
+            x_row_local = []
+            x_col_local = []
+            x_row_base_div4 = []
             for i in range_constexpr(num_x_loads):
-                lds_store_16b_xor16(
+                _rl, _cl = tile_chunk_coord_i32(
                     arith,
-                    vector,
-                    lds_memref=lds_a,
-                    vec16_ty=vec16_x,
-                    layout_lds=layout_lds,
-                    row_local=x_row_local[i],
-                    col_local_i32=x_col_local[i],
-                    tx_c4=arith.index(4),
-                    k_blocks16=k_blocks16,
-                    lds_base=_slot_base,
-                    vec_part_i32x4=parts[i],
-                    elem_bytes=elem_bytes,
+                    tx_i32_base=tx_i32_base,
+                    i=i,
+                    total_threads=total_threads,
+                    layout_tile_div4=layout_x_tile,
+                    chunk_i32=chunk_i32,
                 )
+                x_row_local.append(_rl)
+                x_col_local.append(_cl)
+                _row = m_row + _rl
+                x_row_base_div4.append(_row * arith.constant(c_k_div4, index=True))
 
-        _c8idx = arith.constant(8, index=True)
-        _c16idx = arith.constant(16, index=True)
-        _c2idx = arith.constant(2, index=True)
-        _ptr3 = ir.Type.parse("!llvm.ptr<3>")
-
-        # rows per wave for direct-LDS A staging: BM=16 uses only waves 0,1 (16
-        # rows = 2 waves x 8); BM>=32 uses all 4 waves (BM/4 rows each, split into
-        # kSubBlocks chunks of 8).
-        _a_rows_per_wave = (BM // 2) if BM == 16 else (BM // 4)
-
-        def _emit_a_directlds_chunk(slot, kt, sub):
-            # one 8-row DMA chunk: lane L DMAs 16B from global to m0 + L*16
-            # (contiguous), m0 = LDS row-group base. The bank-conflict swizzle
-            # mask = lds_swizzle_mask<BK/2=128>(row) = (row & 14)<<3 goes into the
-            # per-lane global read; lds_load_packs_k64 applies the same mask on
-            # read so it cancels (data lands un-swizzled into the MFMA operand).
-            row_off = lane / _c8idx                  # 0..7
-            lib = lane % _c8idx                       # 0..7
-            col_byte = lib * _c16idx                  # 0,16,...,112
-            lds_row_base = (
-                wave * arith.constant(_a_rows_per_wave, index=True)
-                + arith.constant(sub * 8, index=True)
-            )
-            actual_row = lds_row_base + row_off       # 0..BM-1
-            # (actual_row & 14)<<3 == ((actual_row%16)>>1)<<4; % keeps it < 128
-            # for BM>=32 (HIP uses & 14, which only depends on bits 1-3).
-            mask = ((actual_row % _c16idx) / _c2idx) * _c16idx
-            car_row = m_row + actual_row
-            voff = arith.index_cast(
-                T.i32,
-                car_row * arith.constant(K // 2, index=True)
-                + (col_byte ^ mask))
-            m0_idx = (
-                memref.extract_aligned_pointer_as_index(lds_a)
-                + arith.constant(slot * _a_slot_stride, index=True)
-                + lds_row_base * arith.constant(_a_lds_stride, index=True))
-            m0_i64 = rocdl.readfirstlane(T.i64, arith.index_cast(T.i64, m0_idx))
-            lds_ptr = llvm.inttoptr(_ptr3, m0_i64)
-            rocdl.raw_ptr_buffer_load_lds(
-                a_rsrc, lds_ptr,
-                arith.constant(16, type=T.i32),
-                voff,
-                arith.constant(kt * (BK // 2), type=T.i32),  # soffset = kt*128
-                arith.constant(0, type=T.i32),
-                arith.constant(0, type=T.i32),
-            )
-
-        def load_a_directlds(slot, kt):
-            # HIP issue_a_load_lds: each active wave DMAs its rows straight to LDS,
-            # no reg round-trip / ds_write. BM=16 -> waves 0,1 only; BM>=32 -> all
-            # 4 waves, kSubBlocks (=BM/32) chunks of 8 rows.
-            if const_expr(BM == 16):
-                _w_lt2 = arith.cmpi(
-                    CmpIPredicate.ult, arith.index_cast(T.i32, wave),
-                    arith.constant(2, type=T.i32))
-                _if = scf.IfOp(_w_lt2)
-                with ir.InsertionPoint(_if.then_block):
-                    _emit_a_directlds_chunk(slot, kt, 0)
-                    scf.YieldOp([])
-            else:
-                for sub in range_constexpr(kSubBlocks):
-                    _emit_a_directlds_chunk(slot, kt, sub)
-
-        # (A/B/scale loads + MFMA are issued by the unified K-loop below, after
-        #  all tile helpers are defined.)
-
-        # ---- a16w4 B-load (build/test increment 3): exact HIP issue_b_load_j.
-        #   base = (e*N_OUT + n_block*256 + wave_n*64 + j*16) * K_HALF   [bytes]
-        #   v_voff = (lane/16)*256 + (lane%16)*16 + k_c*2048             [bytes]
-        #   two b128 (16B) loads per j at +0 and +1024 bytes (= +0/+256 dwords)
-        # -> b_tile[j] = [(b0,b1)_mfmaK0, (b0,b1)_mfmaK1]; each (b0,b1) is the
-        #    lane's 32 fp4 for one MFMA-K=128.
-        e_idx = arith.index_cast(ir.IndexType.get(), expert_i32)
-        _c256 = arith.constant(256, index=True)
-        _c64 = arith.constant(64, index=True)
-        _c16 = arith.constant(16, index=True)
-        _c2048 = arith.constant(2048, index=True)
-        _cKH = arith.constant(K_HALF, index=True)
-        _cN = arith.constant(N_OUT, index=True)
-
-        def load_b_tile(k_c):
-            b_tile = []
-            for j in range_constexpr(4):
-                n_off = (
-                    n_block * _c256
-                    + wave_n * _c64
-                    + arith.constant(j * 16, index=True)
-                )
-                base_bytes = (e_idx * _cN + n_off) * _cKH
-                v_voff = (
-                    lane_div_16 * _c256 + lane_mod_16 * _c16 + k_c * _c2048
-                )
-                base_dw = (base_bytes + v_voff) / arith.index(4)
-                b_j = []
-                for sub in range_constexpr(2):
-                    off = base_dw + arith.constant(sub * 256, index=True)
-                    v16 = buffer_ops.buffer_load(
-                        b_rsrc, off, vec_width=4, dtype=i32, cache_modifier=_b_cache
+            def load_a_tile(base_k):
+                base_k_div4 = (
+                    (base_k / arith.constant(a_elem_vec_pack, index=True))
+                    * arith.constant(elem_bytes, index=True)
+                ) / arith.index(4)
+                parts = []
+                for i in range_constexpr(num_x_loads):
+                    idx = x_row_base_div4[i] + base_k_div4 + x_col_local[i]
+                    v = buffer_copy_gmem16_dwordx4(
+                        buffer_ops,
+                        vector,
+                        elem_type=T.i8,
+                        idx_i32=idx,
+                        rsrc=a_rsrc,
+                        vec_elems=16,
                     )
-                    i64x2 = vector.bitcast(vec2_i64, v16)
-                    b0 = vector.extract(
-                        i64x2, static_position=[0], dynamic_position=[]
+                    parts.append(vector.bitcast(T.vec(4, i32), v))
+                return parts
+
+            def store_a_tile(parts, slot=0):
+                _slot_base = arith.constant(slot * _a_slot_stride, index=True)
+                for i in range_constexpr(num_x_loads):
+                    lds_store_16b_xor16(
+                        arith,
+                        vector,
+                        lds_memref=lds_a,
+                        vec16_ty=vec16_x,
+                        layout_lds=layout_lds,
+                        row_local=x_row_local[i],
+                        col_local_i32=x_col_local[i],
+                        tx_c4=arith.index(4),
+                        k_blocks16=k_blocks16,
+                        lds_base=_slot_base,
+                        vec_part_i32x4=parts[i],
+                        elem_bytes=elem_bytes,
                     )
-                    b1 = vector.extract(
-                        i64x2, static_position=[1], dynamic_position=[]
-                    )
-                    b_j.append((b0, b1))
-                b_tile.append(b_j)
-            return b_tile
 
-        # ---- scale load (build/test increment 4): make_preshuffle A/B scale.
-        #   a_scale dword off = (m_row/_as_chunk_div + sub)*kAS_per_chunk_dw
-        #                     + (lane/16*16 + lane%16) + ku*64
-        #   b_scale dword off = e*kBS_per_expert_dw
-        #                     + (mni_base+mw)*kBS_stride_n0_dw
-        #                     + (lane/16*16 + lane%16) + ku*64
-        a_scale_nbytes = arith.index_cast(
-            T.i32,
-            (c_max_sorted / arith.constant(_as_chunk_div, index=True)
-             + arith.constant(2, index=True))
-            * arith.constant(kAS_per_chunk_dw * 4, index=True),
-        )
-        a_scale_rsrc = _ptr_buffer_resource(arg_a_scale, a_scale_nbytes)
-        b_scale_rsrc = _ptr_buffer_resource(
-            arg_b_scale,
-            arith.constant(experts * kBS_per_expert_dw * 4, type=T.i32),
-        )
-        _scale_lane_dw = lane_div_16 * _c16 + lane_mod_16   # (lane/16*16+lane%16)
-        _chunk_base = m_row / arith.constant(_as_chunk_div, index=True)
-        _mni_base = (
-            n_block * arith.constant(_mni_n0, index=True)
-            + wave_n * arith.constant(_mni_wn, index=True)
-        )
+            _c8idx = arith.constant(8, index=True)
+            _c16idx = arith.constant(16, index=True)
+            _c2idx = arith.constant(2, index=True)
+            _ptr3 = ir.Type.parse("!llvm.ptr<3>")
 
-        def load_scales(ku):
-            # returns ([a_scale_dword per 32-row sub], [b_scale_dword_mw0, mw1])
-            ku_off = ku * arith.constant(64, index=True)
-            a_scs = []
-            for sub in range_constexpr(kSubBlocks):
-                a_base = (
-                    (_chunk_base + arith.constant(sub, index=True))
-                    * arith.constant(kAS_per_chunk_dw, index=True)
-                    + _scale_lane_dw + ku_off
+            # rows per wave for direct-LDS A staging: BM=16 uses only waves 0,1 (16
+            # rows = 2 waves x 8); BM>=32 uses all 4 waves (BM/4 rows each, split into
+            # kSubBlocks chunks of 8).
+            _a_rows_per_wave = (BM // 2) if BM == 16 else (BM // 4)
+
+            def _emit_a_directlds_chunk(slot, kt, sub):
+                # one 8-row DMA chunk: lane L DMAs 16B from global to m0 + L*16
+                # (contiguous), m0 = LDS row-group base. The bank-conflict swizzle
+                # mask = lds_swizzle_mask<BK/2=128>(row) = (row & 14)<<3 goes into the
+                # per-lane global read; lds_load_packs_k64 applies the same mask on
+                # read so it cancels (data lands un-swizzled into the MFMA operand).
+                row_off = lane / _c8idx                  # 0..7
+                lib = lane % _c8idx                       # 0..7
+                col_byte = lib * _c16idx                  # 0,16,...,112
+                lds_row_base = (
+                    wave * arith.constant(_a_rows_per_wave, index=True)
+                    + arith.constant(sub * 8, index=True)
                 )
-                a_scs.append(buffer_ops.buffer_load(
-                    a_scale_rsrc, a_base, vec_width=1, dtype=T.i32, cache_modifier=0
-                ))
-            b_scs = []
-            for mw in range_constexpr(2):
-                b_base = (
-                    e_idx * arith.constant(kBS_per_expert_dw, index=True)
-                    + (_mni_base + arith.constant(mw, index=True))
-                    * arith.constant(kBS_stride_n0_dw, index=True)
-                    + _scale_lane_dw + ku_off
-                )
-                b_scs.append(
-                    buffer_ops.buffer_load(
-                        b_scale_rsrc, b_base, vec_width=1, dtype=T.i32,
-                        cache_modifier=0,
-                    )
-                )
-            return a_scs, b_scs
-
-        # ---- fp4 scaled-MFMA (build/test increment 5) ----
-        # MFMA 16x16x128 f8f6f4: a128/b128 = pack_i64x4_to_i32x8(b0,b1,0,0);
-        # op_sel selects the e8m0 byte in the make_preshuffle scale dword.
-        # (op_sel numeric correctness to be validated vs HIP cos.)
-        row_a_lds = lane_mod_16
-        col_offset_base = lane_div_16 * _c16
-        m_repeat = BM // 16                  # 2 (BM=32)
-        m_repeat_packed = m_repeat // pack_M  # 1
-        num_acc_n = BN // num_waves // 16     # 4
-        num_acc_n_packed = num_acc_n // 2     # 2 (pack_N=2)
-        pack_N = 2
-
-        def _pack_i64x4(x0, x1):
-            c0 = arith.constant(0, type=T.i64)
-            v4 = vector.from_elements(vec4_i64, [x0, x1, c0, c0])
-            return vector.bitcast(vec8_i32, v4)
-
-        def lds_load_packs_k64(curr_row, col_base, slot=0):
-            if const_expr(_g2_a_directlds):
-                # HIP issue_a_ds_read: 128-byte rows, mask =
-                # lds_swizzle_mask<BK/2=128>(lane_row) = (lane_row & 14)<<3, which
-                # depends ONLY on lane%16 (NOT curr_row's mi_idx*16 part), so it is
-                # the same mask the direct-LDS write applied at this lane's row ->
-                # the swizzle cancels and the lane's K-data lands at col_base.
-                mask = (lane_mod_16 / arith.index(2)) * _c16
-                col_swz = col_base ^ mask
-                byte_idx = (
-                    curr_row * arith.constant(_a_lds_stride, index=True)
-                    + col_swz
+                actual_row = lds_row_base + row_off       # 0..BM-1
+                # (actual_row & 14)<<3 == ((actual_row%16)>>1)<<4; % keeps it < 128
+                # for BM>=32 (HIP uses & 14, which only depends on bits 1-3).
+                mask = ((actual_row % _c16idx) / _c2idx) * _c16idx
+                car_row = m_row + actual_row
+                voff = arith.index_cast(
+                    T.i32,
+                    car_row * arith.constant(K // 2, index=True)
+                    + (col_byte ^ mask))
+                m0_idx = (
+                    memref.extract_aligned_pointer_as_index(lds_a)
                     + arith.constant(slot * _a_slot_stride, index=True)
+                    + lds_row_base * arith.constant(_a_lds_stride, index=True))
+                m0_i64 = rocdl.readfirstlane(T.i64, arith.index_cast(T.i64, m0_idx))
+                lds_ptr = llvm.inttoptr(_ptr3, m0_i64)
+                rocdl.raw_ptr_buffer_load_lds(
+                    a_rsrc, lds_ptr,
+                    arith.constant(16, type=T.i32),
+                    voff,
+                    arith.constant(kt * (BK // 2), type=T.i32),  # soffset = kt*128
+                    arith.constant(0, type=T.i32),
+                    arith.constant(0, type=T.i32),
                 )
-                loaded = vector.load_op(vec16_x, lds_a, [byte_idx])
-            else:
-                col_swz = swizzle_xor16(curr_row, col_base, k_blocks16)
-                idx_a = crd2idx([curr_row, col_swz], layout_lds)
-                if const_expr(slot != 0):
-                    idx_a = idx_a + arith.constant(slot * _a_slot_stride, index=True)
-                loaded = vector.load_op(vec16_x, lds_a, [idx_a])
-            a_i64x2 = vector.bitcast(vec2_i64, loaded)
-            a0 = vector.extract(a_i64x2, static_position=[0], dynamic_position=[])
-            a1 = vector.extract(a_i64x2, static_position=[1], dynamic_position=[])
-            return a0, a1
 
-        acc_init = arith.constant_vector(0.0, vec4_f32)
-        accm = [acc_init] * (m_repeat * num_acc_n)   # mi_idx*num_acc_n + ni_idx
-
-        # AGPR MFMA (== HIP mfma_f4f4_agpr, mfma_f4f4.hpp:45-61), BM=128 nonatomic.
-        # Forces the accumulator into AGPR via inline asm ("+a") and uses v4i32
-        # (fp4-width) A/B operands. This (a) moves the 32 f32x4 accm out of VGPR
-        # into AGPR and (b) halves A/B VGPR (the rocdl op pads A/B to v8i32) ->
-        # drops the 257-VGPR ceiling and lets the 64 MFMA/K-tile run back-to-back
-        # (== HIP kUseAGPR). Same helper/structure as gemm1 BM=128.
-        _vec4_i32 = T.vec(4, i32)
-
-        def _mfma_agpr(acc, a0, a1, b0, b1, sa, sb, op_sel_a, op_sel_b):
-            a4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [a0, a1]))
-            b4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [b0, b1]))
-            alo = op_sel_a & 1
-            ahi = (op_sel_a >> 1) & 1
-            blo = op_sel_b & 1
-            bhi = (op_sel_b >> 1) & 1
-            osel = f"op_sel:[{alo},{blo},0] op_sel_hi:[{ahi},{bhi},0] cbsz:4 blgp:4"
-            # "+a" accumulate (C-src = output, tied input 0). accm is pre-zeroed
-            # acc_init so the first MFMA accumulates onto 0 (== gemm1's working
-            # path; the output-only "=a,v,v,v,v" init form left a dead MFMA +
-            # accm corruption).
-            asm = "v_mfma_scale_f32_16x16x128_f8f6f4 $0, $2, $3, $0, $4, $5 " + osel
-            return llvm.inline_asm(
-                vec4_f32, [acc, a4, b4, sa, sb], asm, "=a,0,v,v,v,v",
-                has_side_effects=True,
-            )
-
-        def mfma_ktile(b_tile, a_scs, b_scs, a_slot=0):
-            if const_expr(BM == 128):
-                # AGPR (== HIP kUseAGPR) + **per-K-tile** A pre-read: read all 8
-                # m-chunks' A for THIS k up-front (a_k, ~32 VGPR), then pure AGPR
-                # MFMA (J-outer, mi-inner) so the chain is back-to-back (clean,
-                # no interleaved ds_read stalls) AND held A is only one k's worth.
-                # Why per-K (not all-K like fix4): all-K pre-read held 64 VGPR ->
-                # total 276 > 256 -> 1 block/CU; per-K holds 32 -> total ~224 ->
-                # 2 blocks/CU on gfx950 (160KB LDS). MEASURED: at 1 block/CU clean
-                # MFMA is 1.33x and interleaved is 1.48x; 2 blocks/CU recovers the
-                # latency -> per-K pre-read keeps BOTH wins. accm[mi*4+J] for the
-                # 8 consecutive mi (fixed J,k) are distinct -> hazard-free.
-                for k_idx in range_constexpr(2):
-                    col_base = col_offset_base + arith.constant(
-                        (k_idx * 128) // a_elem_vec_pack, index=True)
-                    a_k = []
-                    for mi_idx in range_constexpr(pack_M):   # 8 m-chunks, this k
-                        curr_row = row_a_lds + arith.constant(
-                            mi_idx * 16, index=True)
-                        a_k.append(
-                            lds_load_packs_k64(curr_row, col_base, slot=a_slot))
-                    for ni in range_constexpr(num_acc_n_packed):
-                        b_scale_val = b_scs[ni]
-                        for inxdl in range_constexpr(pack_N):
-                            J = ni * pack_N + inxdl
-                            b0, b1 = b_tile[J][k_idx]
-                            op_sel_b = k_idx * pack_N + inxdl
-                            for mi_idx in range_constexpr(pack_M):
-                                a0, a1 = a_k[mi_idx]
-                                a_scale_val = a_scs[mi_idx // 2]
-                                op_sel_a = k_idx * _scale_pack_m + (mi_idx % 2)
-                                acc_idx = mi_idx * num_acc_n + J
-                                accm[acc_idx] = _mfma_agpr(
-                                    accm[acc_idx], a0, a1, b0, b1,
-                                    a_scale_val, b_scale_val, op_sel_a, op_sel_b)
-                return
-            for k_idx in range_constexpr(2):       # 2 MFMA-K (128) per K-tile
-                ikxdl = k_idx
-                col_base = col_offset_base + arith.constant(
-                    (k_idx * 128) // a_elem_vec_pack, index=True
-                )
-                for imxdl in range_constexpr(pack_M):
-                    mi_idx = imxdl                  # m_repeat_packed=1
-                    curr_row = row_a_lds + arith.constant(mi_idx * 16, index=True)
-                    a0, a1 = lds_load_packs_k64(curr_row, col_base, slot=a_slot)
-                    a128 = _pack_i64x4(a0, a1)
-                    # A-scale: one make_preshuffle dword per 32-row sub-chunk
-                    # (a_scs[mi//2]); byte = ikxdl*2 + (mi%2). _scale_pack_m=2 is
-                    # the fixed m-half stride in the dword.
-                    a_scale_val = a_scs[mi_idx // 2]
-                    op_sel_a = ikxdl * _scale_pack_m + (mi_idx % 2)
-                    for ni in range_constexpr(num_acc_n_packed):
-                        b_scale_val = b_scs[ni]
-                        for inxdl in range_constexpr(pack_N):
-                            ni_idx = ni * pack_N + inxdl
-                            b0, b1 = b_tile[ni_idx][k_idx]
-                            b128 = _pack_i64x4(b0, b1)
-                            op_sel_b = ikxdl * pack_N + inxdl
-                            acc_idx = mi_idx * num_acc_n + ni_idx
-                            accm[acc_idx] = rocdl.mfma_scale_f32_16x16x128_f8f6f4(
-                                vec4_f32,
-                                [
-                                    a128, b128, accm[acc_idx],
-                                    cbsz, blgp,
-                                    op_sel_a, a_scale_val,
-                                    op_sel_b, b_scale_val,
-                                ],
-                            )
-
-        # ---- K-loop (K=512 -> 2 K-tiles) ----
-        if const_expr(_g2_a_directlds):
-            # HIP run_one structure: stage BOTH K-tiles' A into the 2-slot LDS
-            # double-buffer up-front via direct-to-LDS DMA (== HIP issue_a_load_lds,
-            # no buffer_load->reg->ds_write round-trip), one barrier, then prefetch
-            # both B/scale and drain the 2 MFMA stages. This replaced the serial
-            # single-slot path that left BM=128 WAITCNT-stall-bound (ATT: 53% of
-            # issue cycles in s_waitcnt vmcnt/lgkmcnt vs HIP 8%); now B VMEM
-            # overlaps the A DMA and there is no mid-loop store/barrier.
-            load_a_directlds(0, 0)
-            load_a_directlds(1, 1)
-            # sched fence (== HIP gemm2 issue path: sched_barrier(0) right after
-            # the A direct-LDS DMA): pin the A loads ahead of the B/scale loads so
-            # the scheduler cannot sink B (or MFMA) above the A DMA. mask 0 = no
-            # instruction may cross. Keeps the load cluster -> MFMA cluster split.
-            rocdl.sched_barrier(0)
-            # issue B (down weights, the bulk of VMEM) + scales BEFORE the barrier
-            # so their latency overlaps the A direct-LDS DMA (== HIP: all loads
-            # issued, then the drain barrier only waits for the A DMA while B stays
-            # in flight, gated per-MFMA by vmcnt).
-            _b0 = load_b_tile(arith.index(0))
-            _asc0, _bsc0 = load_scales(arith.index(0))
-            _b1 = load_b_tile(arith.index(1))
-            _asc1, _bsc1 = load_scales(arith.index(1))
-            # One workgroup barrier: ds_read of every K-stage reads all BM rows
-            # (cross-wave), and the backend flushes both A DMA slots (vmcnt) before
-            # the barrier, so a single barrier makes both slots visible workgroup-
-            # wide for both MFMA stages (same as the proven BM=16 path).
-            rocdl.s_barrier()
-            mfma_ktile(_b0, _asc0, _bsc0, a_slot=0)
-            mfma_ktile(_b1, _asc1, _bsc1, a_slot=1)
-        else:
-            store_a_tile(load_a_tile(arith.index(0)))
-            rocdl.s_barrier()
-            _b_tile0 = load_b_tile(arith.index(0))
-            _a_sc0, _b_scs0 = load_scales(arith.index(0))
-            mfma_ktile(_b_tile0, _a_sc0, _b_scs0)
-            rocdl.s_barrier()
-            store_a_tile(load_a_tile(arith.constant(BK, index=True)))
-            rocdl.s_barrier()
-            _b_tile1 = load_b_tile(arith.index(1))
-            _a_sc1, _b_scs1 = load_scales(arith.index(1))
-            mfma_ktile(_b_tile1, _a_sc1, _b_scs1)
-
-        # ---- BM=128 nonatomic bf16 flat epilogue (== apply_bf16_flat_epilog_bm128)
-        # write accm straight to bf16 flat_out[max_sorted, N_OUT] per sorted row
-        # (no LDS, no quant, no weight); mxfp4_moe_scatter_reduce does the topk
-        # reduce. Done before the cshuffle so it isn't paid for this mode. ----
-        if const_expr(bf16flat):
-            _flat_base = arith.index_cast(ir.IndexType.get(), fx.ptrtoint(arg_out))
-            _cN_out = arith.constant(N_OUT, index=True)
-            for i in range_constexpr(m_repeat):
-                for j in range_constexpr(num_acc_n):
-                    gn = (n_block * _c256 + wave_n * _c64
-                          + arith.constant(j * 16, index=True) + lane_mod_16)
-                    acc_v = accm[i * num_acc_n + j]
-                    for v in range_constexpr(4):
-                        row = (m_row + arith.constant(i * 16, index=True)
-                               + lane_div_16 * arith.index(4)
-                               + arith.constant(v, index=True))
-                        val = vector.extract(
-                            acc_v, static_position=[v], dynamic_position=[])
-                        bf = arith.trunc_f(T.bf16, val)
-                        off = (row * _cN_out + gn) * arith.index(2)
-                        _ptr = llvm.inttoptr(
-                            ir.Type.parse("!llvm.ptr<1>"),
-                            arith.index_cast(T.i64, _flat_base + off))
-                        llvm.StoreOp(
-                            bf._value if hasattr(bf, "_value") else bf,
-                            _ptr, alignment=2)
-            # match atomic/mxfp4out epilogues: a workgroup barrier before exit so
-            # the GEMM's LDS (lds_a) reads are all retired before the workgroup
-            # frees its 128KB LDS for the next (FlyDSL) kernel on the CU.
-            rocdl.s_barrier()
-            return
-
-        # ---- nonatomic mxfp4out epilogue (== apply_mxfp4_flat_epilog_bm128),
-        # 2-N-half: cshuffle + per-32 fp4 requant of cols [0,128) then [128,256)
-        # through lds_acc[BM*128] (64KB, not full BM*BN=128KB) so BM=128 mxfp4out
-        # runs 2 blocks/CU on gfx950 (160KB LDS) -> hides w2-load latency (measured
-        # pure 2-block gain ~0.06x). accm (AGPR) is held across both halves; each
-        # half's cols are written by the 2 waves that own them (wave_n//2==half),
-        # then ALL 256 threads quant that half (4 of the 8 per-32 groups). ----
-        if const_expr(mxfp4out):
-            _flat_q_base = arith.index_cast(
-                ir.IndexType.get(), fx.ptrtoint(arg_flat_q))
-            _flat_sc_base = arith.index_cast(
-                ir.IndexType.get(), fx.ptrtoint(arg_flat_scale))
-            _c32idx = arith.constant(32, index=True)
-            _accs = arith.constant(_acc_cols, index=True)   # 128 (half-N lds stride)
-            _mlane = tx / _c16
-            _nlane = tx % _c16
-            _wgrp = _nlane / arith.index(4)                 # 0..3 (group in this half)
-            _kk = _nlane % arith.index(4)
-            _c7fff = arith.constant(0x7FFFFFFF, type=i32)
-            _c64i = arith.constant(64, type=i32)
-            _hi16 = arith.constant(-0x10000, type=i32)      # 0xFFFF0000
-            NBLK = BN // 32                                 # 8
-            N_HALF = N_OUT // 2
-            N_SC = N_OUT // 32
-            _wave_half_i32 = arith.index_cast(i32, wave_n / arith.index(2))  # 0|1
-            _wn_lo = wave_n % arith.index(2)                # 0|1 within the half
-            for half in range_constexpr(2):                 # cols [0,128), [128,256)
-                rocdl.s_barrier()
-                # cshuffle THIS half: only the 2 waves owning these cols write.
-                _do = arith.cmpi(CmpIPredicate.eq, _wave_half_i32,
-                                 arith.constant(half, type=i32))
-                _ifc = scf.IfOp(_do)
-                with ir.InsertionPoint(_ifc.then_block):
-                    for i in range_constexpr(m_repeat):
-                        for J in range_constexpr(num_acc_n):
-                            lcol = (_wn_lo * _c64
-                                    + arith.constant(J * 16, index=True)
-                                    + lane_mod_16)
-                            row_base = (arith.constant(i * 16, index=True)
-                                        + lane_div_16 * arith.constant(4, index=True))
-                            acc_v = accm[i * num_acc_n + J]
-                            for v in range_constexpr(4):
-                                lds_idx = ((row_base + arith.constant(v, index=True))
-                                           * _accs + lcol)
-                                val = vector.extract(
-                                    acc_v, static_position=[v], dynamic_position=[])
-                                v1 = vector.from_elements(T.vec(1, f32), [val])
-                                vector.store(v1, lds_acc, [lds_idx], alignment=4)
-                    scf.YieldOp([])
-                rocdl.s_barrier()
-                for mr in range_constexpr(m_repeat):        # BM/16 (=8)
-                    row_local = arith.constant(mr * 16, index=True) + _mlane
-                    out_row = m_row + row_local
-                    col0 = _wgrp * _c32idx + _kk * arith.index(8)   # within 128-half
-                    r = []
-                    for e in range_constexpr(8):
-                        rv = vector.load_op(
-                            T.vec(1, f32), lds_acc,
-                            [row_local * _accs + col0 + arith.constant(e, index=True)],
-                        )
-                        r.append(vector.extract(
-                            rv, static_position=[0], dynamic_position=[]))
-                    local_max = (r[0].bitcast(i32) & _c7fff).bitcast(f32)
-                    for e in range_constexpr(1, 8):
-                        local_max = arith.maximumf(
-                            local_max, (r[e].bitcast(i32) & _c7fff).bitcast(f32))
-                    # quad amax over the 4 kk lanes (== HIP dpp 0xB1 + 0x4E).
-                    local_max = arith.maximumf(
-                        local_max, local_max.shuffle_xor(
-                            arith.constant(1, type=i32), _c64i))
-                    local_max = arith.maximumf(
-                        local_max, local_max.shuffle_xor(
-                            arith.constant(2, type=i32), _c64i))
-                    # encode_e8m0(bf16(amax)): bexp=((amax&0xFFFF0000)+0x200000)>>23,
-                    # e8m0=clamp(bexp-2,0,254); quant_scale=2^(e8m0-127).
-                    amax_bf = local_max.bitcast(i32) & _hi16
-                    bexp = (
-                        (amax_bf + arith.constant(0x200000, type=i32))
-                        >> arith.constant(23, type=i32)
-                    ) & arith.constant(0xFF, type=i32)
-                    e8m0 = arith.minsi(
-                        arith.maxsi(bexp - arith.constant(2, type=i32),
-                                    arith.constant(0, type=i32)),
-                        arith.constant(254, type=i32))
-                    qs = (e8m0 << arith.constant(23, type=i32)).bitcast(f32)
-                    packed = arith.constant(0, type=i32)
-                    for k in range_constexpr(4):
-                        packed = llvm.call_intrinsic(
-                            i32, "llvm.amdgcn.cvt.scalef32.pk.fp4.f32",
-                            [packed, r[2 * k], r[2 * k + 1], qs,
-                             arith.constant(k, type=i32)], [], [])
-                    global_col = (n_block * _c256
-                                  + arith.constant(half * 128, index=True) + col0)
-                    q_off = (out_row * arith.constant(N_HALF, index=True)
-                             + global_col / arith.index(2))
-                    _q_ptr = llvm.inttoptr(
-                        ir.Type.parse("!llvm.ptr<1>"),
-                        arith.index_cast(T.i64, _flat_q_base + q_off))
-                    llvm.StoreOp(
-                        packed._value if hasattr(packed, "_value") else packed,
-                        _q_ptr, alignment=4)
-                    _kk_i32 = arith.index_cast(i32, _kk)
-                    _is0 = arith.cmpi(
-                        CmpIPredicate.eq, _kk_i32, arith.constant(0, type=i32))
-                    _ifsc = scf.IfOp(_is0)
-                    with ir.InsertionPoint(_ifsc.then_block):
-                        blk = (n_block * arith.constant(NBLK, index=True)
-                               + arith.constant(half * 4, index=True) + _wgrp)
-                        sc_off = out_row * arith.constant(N_SC, index=True) + blk
-                        _sc_ptr = llvm.inttoptr(
-                            ir.Type.parse("!llvm.ptr<1>"),
-                            arith.index_cast(T.i64, _flat_sc_base + sc_off))
-                        _e8i8 = arith.TruncIOp(T.i8, e8m0)
-                        llvm.StoreOp(
-                            _e8i8._value if hasattr(_e8i8, "_value") else _e8i8,
-                            _sc_ptr, alignment=1)
+            def load_a_directlds(slot, kt):
+                # HIP issue_a_load_lds: each active wave DMAs its rows straight to LDS,
+                # no reg round-trip / ds_write. BM=16 -> waves 0,1 only; BM>=32 -> all
+                # 4 waves, kSubBlocks (=BM/32) chunks of 8 rows.
+                if const_expr(BM == 16):
+                    _w_lt2 = arith.cmpi(
+                        CmpIPredicate.ult, arith.index_cast(T.i32, wave),
+                        arith.constant(2, type=T.i32))
+                    _if = scf.IfOp(_w_lt2)
+                    with ir.InsertionPoint(_if.then_block):
+                        _emit_a_directlds_chunk(slot, kt, 0)
                         scf.YieldOp([])
-            return
+                else:
+                    for sub in range_constexpr(kSubBlocks):
+                        _emit_a_directlds_chunk(slot, kt, sub)
 
-        # ---- atomic cshuffle + epilogue (BM=16/32): accm -> lds_acc[BM*BN] full ----
-        # accm[mi*4+J][v]  ->  lds_acc[(mi*16 + lane/16*4 + v)*BN + col],
-        #   col = wave_n*64 + J*16 + lane%16
-        rocdl.s_barrier()
-        c_BN = arith.constant(BN, index=True)
-        for i in range_constexpr(m_repeat):
-            for J in range_constexpr(num_acc_n):
-                col = (
-                    wave_n * _c64
-                    + arith.constant(J * 16, index=True)
-                    + lane_mod_16
-                )
-                row_base = arith.constant(i * 16, index=True) + lane_div_16 * arith.constant(
-                    4, index=True
-                )
-                acc_v = accm[i * num_acc_n + J]
-                for v in range_constexpr(4):
-                    lds_idx = (
-                        (row_base + arith.constant(v, index=True)) * c_BN + col
-                    )
-                    val = vector.extract(
-                        acc_v, static_position=[v], dynamic_position=[]
-                    )
-                    v1 = vector.from_elements(T.vec(1, f32), [val])
-                    vector.store(v1, lds_acc, [lds_idx], alignment=4)
-        rocdl.s_barrier()
+            # (A/B/scale loads + MFMA are issued by the unified K-loop below, after
+            #  all tile helpers are defined.)
 
-        # read by (m_lane=tid/32, n_lane=tid%32), atomic acc*weight -> out[token]
-        _c32 = arith.constant(32, index=True)
-        m_lane = tx / _c32
-        n_lane = tx % _c32
-        col_start = n_lane * arith.constant(2, index=True)
-        out_base_idx = arith.index_cast(ir.IndexType.get(), fx.ptrtoint(arg_out))
-        c_tokens_i32 = arith.index_cast(T.i32, c_tokens)
-        _mask24 = arith.constant(0xFFFFFF, type=T.i32)
-        M_REPS = BM // 8
-        bf16x2 = T.vec(2, T.bf16)
-        for mr in range_constexpr(M_REPS):
-            row_in_block = arith.constant(mr * 8, index=True) + m_lane
-            sorted_pos = m_row + row_in_block
-            packed = buffer_ops.buffer_load(
-                sti_rsrc, sorted_pos, vec_width=1, dtype=T.i32
+            # ---- a16w4 B-load (build/test increment 3): exact HIP issue_b_load_j.
+            #   base = (e*N_OUT + n_block*256 + wave_n*64 + j*16) * K_HALF   [bytes]
+            #   v_voff = (lane/16)*256 + (lane%16)*16 + k_c*2048             [bytes]
+            #   two b128 (16B) loads per j at +0 and +1024 bytes (= +0/+256 dwords)
+            # -> b_tile[j] = [(b0,b1)_mfmaK0, (b0,b1)_mfmaK1]; each (b0,b1) is the
+            #    lane's 32 fp4 for one MFMA-K=128.
+            e_idx = arith.index_cast(ir.IndexType.get(), expert_i32)
+            _c256 = arith.constant(256, index=True)
+            _c64 = arith.constant(64, index=True)
+            _c16 = arith.constant(16, index=True)
+            _c2048 = arith.constant(2048, index=True)
+            _cKH = arith.constant(K_HALF, index=True)
+            _cN = arith.constant(N_OUT, index=True)
+
+            def load_b_tile(k_c):
+                b_tile = []
+                for j in range_constexpr(4):
+                    n_off = (
+                        n_block * _c256
+                        + wave_n * _c64
+                        + arith.constant(j * 16, index=True)
+                    )
+                    base_bytes = (e_idx * _cN + n_off) * _cKH
+                    v_voff = (
+                        lane_div_16 * _c256 + lane_mod_16 * _c16 + k_c * _c2048
+                    )
+                    base_dw = (base_bytes + v_voff) / arith.index(4)
+                    b_j = []
+                    for sub in range_constexpr(2):
+                        off = base_dw + arith.constant(sub * 256, index=True)
+                        v16 = buffer_ops.buffer_load(
+                            b_rsrc, off, vec_width=4, dtype=i32, cache_modifier=_b_cache
+                        )
+                        i64x2 = vector.bitcast(vec2_i64, v16)
+                        b0 = vector.extract(
+                            i64x2, static_position=[0], dynamic_position=[]
+                        )
+                        b1 = vector.extract(
+                            i64x2, static_position=[1], dynamic_position=[]
+                        )
+                        b_j.append((b0, b1))
+                    b_tile.append(b_j)
+                return b_tile
+
+            # ---- scale load (build/test increment 4): make_preshuffle A/B scale.
+            #   a_scale dword off = (m_row/_as_chunk_div + sub)*kAS_per_chunk_dw
+            #                     + (lane/16*16 + lane%16) + ku*64
+            #   b_scale dword off = e*kBS_per_expert_dw
+            #                     + (mni_base+mw)*kBS_stride_n0_dw
+            #                     + (lane/16*16 + lane%16) + ku*64
+            a_scale_nbytes = arith.index_cast(
+                T.i32,
+                (c_max_sorted / arith.constant(_as_chunk_div, index=True)
+                 + arith.constant(2, index=True))
+                * arith.constant(kAS_per_chunk_dw * 4, index=True),
             )
-            token = arith.andi(packed, _mask24)
-            # guard padding rows: sorted_pos < cumsum (HIP per-row bound) AND
-            # token < M.  Launching max_sorted/BM blocks means trailing rows are
-            # padding (uninitialized A_q); skipping them avoids garbage atomics.
-            sorted_pos_i32 = arith.index_cast(T.i32, sorted_pos)
-            pos_ok = arith.cmpi(CmpIPredicate.ult, sorted_pos_i32, num_valid)
-            tok_lt_m = arith.cmpi(CmpIPredicate.ult, token, c_tokens_i32)
-            tok_ok = arith.andi(pos_ok, tok_lt_m)
-            _if_tok = scf.IfOp(tok_ok)
-            with ir.InsertionPoint(_if_tok.then_block):
-                token_idx = arith.index_cast(ir.IndexType.get(), token)
-                weight = buffer_ops.buffer_load(
-                    sw_rsrc, sorted_pos, vec_width=1, dtype=f32
+            a_scale_rsrc = _ptr_buffer_resource(arg_a_scale, a_scale_nbytes)
+            b_scale_rsrc = _ptr_buffer_resource(
+                arg_b_scale,
+                arith.constant(experts * kBS_per_expert_dw * 4, type=T.i32),
+            )
+            _scale_lane_dw = lane_div_16 * _c16 + lane_mod_16   # (lane/16*16+lane%16)
+            _chunk_base = m_row / arith.constant(_as_chunk_div, index=True)
+            _mni_base = (
+                n_block * arith.constant(_mni_n0, index=True)
+                + wave_n * arith.constant(_mni_wn, index=True)
+            )
+
+            def load_scales(ku):
+                # returns ([a_scale_dword per 32-row sub], [b_scale_dword_mw0, mw1])
+                ku_off = ku * arith.constant(64, index=True)
+                a_scs = []
+                for sub in range_constexpr(kSubBlocks):
+                    a_base = (
+                        (_chunk_base + arith.constant(sub, index=True))
+                        * arith.constant(kAS_per_chunk_dw, index=True)
+                        + _scale_lane_dw + ku_off
+                    )
+                    a_scs.append(buffer_ops.buffer_load(
+                        a_scale_rsrc, a_base, vec_width=1, dtype=T.i32, cache_modifier=0
+                    ))
+                b_scs = []
+                for mw in range_constexpr(2):
+                    b_base = (
+                        e_idx * arith.constant(kBS_per_expert_dw, index=True)
+                        + (_mni_base + arith.constant(mw, index=True))
+                        * arith.constant(kBS_stride_n0_dw, index=True)
+                        + _scale_lane_dw + ku_off
+                    )
+                    b_scs.append(
+                        buffer_ops.buffer_load(
+                            b_scale_rsrc, b_base, vec_width=1, dtype=T.i32,
+                            cache_modifier=0,
+                        )
+                    )
+                return a_scs, b_scs
+
+            # ---- fp4 scaled-MFMA (build/test increment 5) ----
+            # MFMA 16x16x128 f8f6f4: a128/b128 = pack_i64x4_to_i32x8(b0,b1,0,0);
+            # op_sel selects the e8m0 byte in the make_preshuffle scale dword.
+            # (op_sel numeric correctness to be validated vs HIP cos.)
+            row_a_lds = lane_mod_16
+            col_offset_base = lane_div_16 * _c16
+            m_repeat = BM // 16                  # 2 (BM=32)
+            m_repeat_packed = m_repeat // pack_M  # 1
+            num_acc_n = BN // num_waves // 16     # 4
+            num_acc_n_packed = num_acc_n // 2     # 2 (pack_N=2)
+            pack_N = 2
+
+            def _pack_i64x4(x0, x1):
+                c0 = arith.constant(0, type=T.i64)
+                v4 = vector.from_elements(vec4_i64, [x0, x1, c0, c0])
+                return vector.bitcast(vec8_i32, v4)
+
+            def lds_load_packs_k64(curr_row, col_base, slot=0):
+                if const_expr(_g2_a_directlds):
+                    # HIP issue_a_ds_read: 128-byte rows, mask =
+                    # lds_swizzle_mask<BK/2=128>(lane_row) = (lane_row & 14)<<3, which
+                    # depends ONLY on lane%16 (NOT curr_row's mi_idx*16 part), so it is
+                    # the same mask the direct-LDS write applied at this lane's row ->
+                    # the swizzle cancels and the lane's K-data lands at col_base.
+                    mask = (lane_mod_16 / arith.index(2)) * _c16
+                    col_swz = col_base ^ mask
+                    byte_idx = (
+                        curr_row * arith.constant(_a_lds_stride, index=True)
+                        + col_swz
+                        + arith.constant(slot * _a_slot_stride, index=True)
+                    )
+                    loaded = vector.load_op(vec16_x, lds_a, [byte_idx])
+                else:
+                    col_swz = swizzle_xor16(curr_row, col_base, k_blocks16)
+                    idx_a = crd2idx([curr_row, col_swz], layout_lds)
+                    if const_expr(slot != 0):
+                        idx_a = idx_a + arith.constant(slot * _a_slot_stride, index=True)
+                    loaded = vector.load_op(vec16_x, lds_a, [idx_a])
+                a_i64x2 = vector.bitcast(vec2_i64, loaded)
+                a0 = vector.extract(a_i64x2, static_position=[0], dynamic_position=[])
+                a1 = vector.extract(a_i64x2, static_position=[1], dynamic_position=[])
+                return a0, a1
+
+            acc_init = arith.constant_vector(0.0, vec4_f32)
+            accm = [acc_init] * (m_repeat * num_acc_n)   # mi_idx*num_acc_n + ni_idx
+
+            # AGPR MFMA (== HIP mfma_f4f4_agpr, mfma_f4f4.hpp:45-61), BM=128 nonatomic.
+            # Forces the accumulator into AGPR via inline asm ("+a") and uses v4i32
+            # (fp4-width) A/B operands. This (a) moves the 32 f32x4 accm out of VGPR
+            # into AGPR and (b) halves A/B VGPR (the rocdl op pads A/B to v8i32) ->
+            # drops the 257-VGPR ceiling and lets the 64 MFMA/K-tile run back-to-back
+            # (== HIP kUseAGPR). Same helper/structure as gemm1 BM=128.
+            _vec4_i32 = T.vec(4, i32)
+
+            def _mfma_agpr(acc, a0, a1, b0, b1, sa, sb, op_sel_a, op_sel_b):
+                a4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [a0, a1]))
+                b4 = vector.bitcast(_vec4_i32, vector.from_elements(vec2_i64, [b0, b1]))
+                alo = op_sel_a & 1
+                ahi = (op_sel_a >> 1) & 1
+                blo = op_sel_b & 1
+                bhi = (op_sel_b >> 1) & 1
+                osel = f"op_sel:[{alo},{blo},0] op_sel_hi:[{ahi},{bhi},0] cbsz:4 blgp:4"
+                # "+a" accumulate (C-src = output, tied input 0). accm is pre-zeroed
+                # acc_init so the first MFMA accumulates onto 0 (== gemm1's working
+                # path; the output-only "=a,v,v,v,v" init form left a dead MFMA +
+                # accm corruption).
+                asm = "v_mfma_scale_f32_16x16x128_f8f6f4 $0, $2, $3, $0, $4, $5 " + osel
+                return llvm.inline_asm(
+                    vec4_f32, [acc, a4, b4, sa, sb], asm, "=a,0,v,v,v,v",
+                    has_side_effects=True,
                 )
-                row_out_base = (
-                    token_idx * arith.constant(N_OUT, index=True)
-                    + n_block * _c256
-                    + col_start
+
+            def mfma_ktile(b_tile, a_scs, b_scs, a_slot=0):
+                if const_expr(BM == 128):
+                    # AGPR (== HIP kUseAGPR) + **per-K-tile** A pre-read: read all 8
+                    # m-chunks' A for THIS k up-front (a_k, ~32 VGPR), then pure AGPR
+                    # MFMA (J-outer, mi-inner) so the chain is back-to-back (clean,
+                    # no interleaved ds_read stalls) AND held A is only one k's worth.
+                    # Why per-K (not all-K like fix4): all-K pre-read held 64 VGPR ->
+                    # total 276 > 256 -> 1 block/CU; per-K holds 32 -> total ~224 ->
+                    # 2 blocks/CU on gfx950 (160KB LDS). MEASURED: at 1 block/CU clean
+                    # MFMA is 1.33x and interleaved is 1.48x; 2 blocks/CU recovers the
+                    # latency -> per-K pre-read keeps BOTH wins. accm[mi*4+J] for the
+                    # 8 consecutive mi (fixed J,k) are distinct -> hazard-free.
+                    for k_idx in range_constexpr(2):
+                        col_base = col_offset_base + arith.constant(
+                            (k_idx * 128) // a_elem_vec_pack, index=True)
+                        a_k = []
+                        for mi_idx in range_constexpr(pack_M):   # 8 m-chunks, this k
+                            curr_row = row_a_lds + arith.constant(
+                                mi_idx * 16, index=True)
+                            a_k.append(
+                                lds_load_packs_k64(curr_row, col_base, slot=a_slot))
+                        for ni in range_constexpr(num_acc_n_packed):
+                            b_scale_val = b_scs[ni]
+                            for inxdl in range_constexpr(pack_N):
+                                J = ni * pack_N + inxdl
+                                b0, b1 = b_tile[J][k_idx]
+                                op_sel_b = k_idx * pack_N + inxdl
+                                for mi_idx in range_constexpr(pack_M):
+                                    a0, a1 = a_k[mi_idx]
+                                    a_scale_val = a_scs[mi_idx // 2]
+                                    op_sel_a = k_idx * _scale_pack_m + (mi_idx % 2)
+                                    acc_idx = mi_idx * num_acc_n + J
+                                    accm[acc_idx] = _mfma_agpr(
+                                        accm[acc_idx], a0, a1, b0, b1,
+                                        a_scale_val, b_scale_val, op_sel_a, op_sel_b)
+                    return
+                for k_idx in range_constexpr(2):       # 2 MFMA-K (128) per K-tile
+                    ikxdl = k_idx
+                    col_base = col_offset_base + arith.constant(
+                        (k_idx * 128) // a_elem_vec_pack, index=True
+                    )
+                    for imxdl in range_constexpr(pack_M):
+                        mi_idx = imxdl                  # m_repeat_packed=1
+                        curr_row = row_a_lds + arith.constant(mi_idx * 16, index=True)
+                        a0, a1 = lds_load_packs_k64(curr_row, col_base, slot=a_slot)
+                        a128 = _pack_i64x4(a0, a1)
+                        # A-scale: one make_preshuffle dword per 32-row sub-chunk
+                        # (a_scs[mi//2]); byte = ikxdl*2 + (mi%2). _scale_pack_m=2 is
+                        # the fixed m-half stride in the dword.
+                        a_scale_val = a_scs[mi_idx // 2]
+                        op_sel_a = ikxdl * _scale_pack_m + (mi_idx % 2)
+                        for ni in range_constexpr(num_acc_n_packed):
+                            b_scale_val = b_scs[ni]
+                            for inxdl in range_constexpr(pack_N):
+                                ni_idx = ni * pack_N + inxdl
+                                b0, b1 = b_tile[ni_idx][k_idx]
+                                b128 = _pack_i64x4(b0, b1)
+                                op_sel_b = ikxdl * pack_N + inxdl
+                                acc_idx = mi_idx * num_acc_n + ni_idx
+                                accm[acc_idx] = rocdl.mfma_scale_f32_16x16x128_f8f6f4(
+                                    vec4_f32,
+                                    [
+                                        a128, b128, accm[acc_idx],
+                                        cbsz, blgp,
+                                        op_sel_a, a_scale_val,
+                                        op_sel_b, b_scale_val,
+                                    ],
+                                )
+
+            # ---- K-loop (K=512 -> 2 K-tiles) ----
+            if const_expr(_g2_a_directlds):
+                # HIP run_one structure: stage BOTH K-tiles' A into the 2-slot LDS
+                # double-buffer up-front via direct-to-LDS DMA (== HIP issue_a_load_lds,
+                # no buffer_load->reg->ds_write round-trip), one barrier, then prefetch
+                # both B/scale and drain the 2 MFMA stages. This replaced the serial
+                # single-slot path that left BM=128 WAITCNT-stall-bound (ATT: 53% of
+                # issue cycles in s_waitcnt vmcnt/lgkmcnt vs HIP 8%); now B VMEM
+                # overlaps the A DMA and there is no mid-loop store/barrier.
+                load_a_directlds(0, 0)
+                load_a_directlds(1, 1)
+                # sched fence (== HIP gemm2 issue path: sched_barrier(0) right after
+                # the A direct-LDS DMA): pin the A loads ahead of the B/scale loads so
+                # the scheduler cannot sink B (or MFMA) above the A DMA. mask 0 = no
+                # instruction may cross. Keeps the load cluster -> MFMA cluster split.
+                rocdl.sched_barrier(0)
+                # issue B (down weights, the bulk of VMEM) + scales BEFORE the barrier
+                # so their latency overlaps the A direct-LDS DMA (== HIP: all loads
+                # issued, then the drain barrier only waits for the A DMA while B stays
+                # in flight, gated per-MFMA by vmcnt).
+                _b0 = load_b_tile(arith.index(0))
+                _asc0, _bsc0 = load_scales(arith.index(0))
+                _b1 = load_b_tile(arith.index(1))
+                _asc1, _bsc1 = load_scales(arith.index(1))
+                # One workgroup barrier: ds_read of every K-stage reads all BM rows
+                # (cross-wave), and the backend flushes both A DMA slots (vmcnt) before
+                # the barrier, so a single barrier makes both slots visible workgroup-
+                # wide for both MFMA stages (same as the proven BM=16 path).
+                rocdl.s_barrier()
+                mfma_ktile(_b0, _asc0, _bsc0, a_slot=0)
+                mfma_ktile(_b1, _asc1, _bsc1, a_slot=1)
+            else:
+                store_a_tile(load_a_tile(arith.index(0)))
+                rocdl.s_barrier()
+                _b_tile0 = load_b_tile(arith.index(0))
+                _a_sc0, _b_scs0 = load_scales(arith.index(0))
+                mfma_ktile(_b_tile0, _a_sc0, _b_scs0)
+                rocdl.s_barrier()
+                store_a_tile(load_a_tile(arith.constant(BK, index=True)))
+                rocdl.s_barrier()
+                _b_tile1 = load_b_tile(arith.index(1))
+                _a_sc1, _b_scs1 = load_scales(arith.index(1))
+                mfma_ktile(_b_tile1, _a_sc1, _b_scs1)
+
+            # ---- BM=128 nonatomic bf16 flat epilogue (== apply_bf16_flat_epilog_bm128)
+            # write accm straight to bf16 flat_out[max_sorted, N_OUT] per sorted row
+            # (no LDS, no quant, no weight); mxfp4_moe_scatter_reduce does the topk
+            # reduce. Done before the cshuffle so it isn't paid for this mode. ----
+            if const_expr(bf16flat):
+                _flat_base = arith.index_cast(ir.IndexType.get(), fx.ptrtoint(arg_out))
+                _cN_out = arith.constant(N_OUT, index=True)
+                for i in range_constexpr(m_repeat):
+                    for j in range_constexpr(num_acc_n):
+                        gn = (n_block * _c256 + wave_n * _c64
+                              + arith.constant(j * 16, index=True) + lane_mod_16)
+                        acc_v = accm[i * num_acc_n + j]
+                        for v in range_constexpr(4):
+                            row = (m_row + arith.constant(i * 16, index=True)
+                                   + lane_div_16 * arith.index(4)
+                                   + arith.constant(v, index=True))
+                            val = vector.extract(
+                                acc_v, static_position=[v], dynamic_position=[])
+                            bf = arith.trunc_f(T.bf16, val)
+                            off = (row * _cN_out + gn) * arith.index(2)
+                            _ptr = llvm.inttoptr(
+                                ir.Type.parse("!llvm.ptr<1>"),
+                                arith.index_cast(T.i64, _flat_base + off))
+                            llvm.StoreOp(
+                                bf._value if hasattr(bf, "_value") else bf,
+                                _ptr, alignment=2)
+                # match atomic/mxfp4out epilogues: a workgroup barrier before exit so
+                # the GEMM's LDS (lds_a) reads are all retired before the workgroup
+                # frees its 128KB LDS for the next (FlyDSL) kernel on the CU.
+                rocdl.s_barrier()
+                return
+
+            # ---- nonatomic mxfp4out epilogue (== apply_mxfp4_flat_epilog_bm128),
+            # 2-N-half: cshuffle + per-32 fp4 requant of cols [0,128) then [128,256)
+            # through lds_acc[BM*128] (64KB, not full BM*BN=128KB) so BM=128 mxfp4out
+            # runs 2 blocks/CU on gfx950 (160KB LDS) -> hides w2-load latency (measured
+            # pure 2-block gain ~0.06x). accm (AGPR) is held across both halves; each
+            # half's cols are written by the 2 waves that own them (wave_n//2==half),
+            # then ALL 256 threads quant that half (4 of the 8 per-32 groups). ----
+            if const_expr(mxfp4out):
+                _flat_q_base = arith.index_cast(
+                    ir.IndexType.get(), fx.ptrtoint(arg_flat_q))
+                _flat_sc_base = arith.index_cast(
+                    ir.IndexType.get(), fx.ptrtoint(arg_flat_scale))
+                _c32idx = arith.constant(32, index=True)
+                _accs = arith.constant(_acc_cols, index=True)   # 128 (half-N lds stride)
+                _mlane = tx / _c16
+                _nlane = tx % _c16
+                _wgrp = _nlane / arith.index(4)                 # 0..3 (group in this half)
+                _kk = _nlane % arith.index(4)
+                _c7fff = arith.constant(0x7FFFFFFF, type=i32)
+                _c64i = arith.constant(64, type=i32)
+                _hi16 = arith.constant(-0x10000, type=i32)      # 0xFFFF0000
+                NBLK = BN // 32                                 # 8
+                N_HALF = N_OUT // 2
+                N_SC = N_OUT // 32
+                _wave_half_i32 = arith.index_cast(i32, wave_n / arith.index(2))  # 0|1
+                _wn_lo = wave_n % arith.index(2)                # 0|1 within the half
+                for half in range_constexpr(2):                 # cols [0,128), [128,256)
+                    rocdl.s_barrier()
+                    # cshuffle THIS half: only the 2 waves owning these cols write.
+                    _do = arith.cmpi(CmpIPredicate.eq, _wave_half_i32,
+                                     arith.constant(half, type=i32))
+                    _ifc = scf.IfOp(_do)
+                    with ir.InsertionPoint(_ifc.then_block):
+                        for i in range_constexpr(m_repeat):
+                            for J in range_constexpr(num_acc_n):
+                                lcol = (_wn_lo * _c64
+                                        + arith.constant(J * 16, index=True)
+                                        + lane_mod_16)
+                                row_base = (arith.constant(i * 16, index=True)
+                                            + lane_div_16 * arith.constant(4, index=True))
+                                acc_v = accm[i * num_acc_n + J]
+                                for v in range_constexpr(4):
+                                    lds_idx = ((row_base + arith.constant(v, index=True))
+                                               * _accs + lcol)
+                                    val = vector.extract(
+                                        acc_v, static_position=[v], dynamic_position=[])
+                                    v1 = vector.from_elements(T.vec(1, f32), [val])
+                                    vector.store(v1, lds_acc, [lds_idx], alignment=4)
+                        scf.YieldOp([])
+                    rocdl.s_barrier()
+                    for mr in range_constexpr(m_repeat):        # BM/16 (=8)
+                        row_local = arith.constant(mr * 16, index=True) + _mlane
+                        out_row = m_row + row_local
+                        col0 = _wgrp * _c32idx + _kk * arith.index(8)   # within 128-half
+                        r = []
+                        for e in range_constexpr(8):
+                            rv = vector.load_op(
+                                T.vec(1, f32), lds_acc,
+                                [row_local * _accs + col0 + arith.constant(e, index=True)],
+                            )
+                            r.append(vector.extract(
+                                rv, static_position=[0], dynamic_position=[]))
+                        local_max = (r[0].bitcast(i32) & _c7fff).bitcast(f32)
+                        for e in range_constexpr(1, 8):
+                            local_max = arith.maximumf(
+                                local_max, (r[e].bitcast(i32) & _c7fff).bitcast(f32))
+                        # quad amax over the 4 kk lanes (== HIP dpp 0xB1 + 0x4E).
+                        local_max = arith.maximumf(
+                            local_max, local_max.shuffle_xor(
+                                arith.constant(1, type=i32), _c64i))
+                        local_max = arith.maximumf(
+                            local_max, local_max.shuffle_xor(
+                                arith.constant(2, type=i32), _c64i))
+                        # encode_e8m0(bf16(amax)): bexp=((amax&0xFFFF0000)+0x200000)>>23,
+                        # e8m0=clamp(bexp-2,0,254); quant_scale=2^(e8m0-127).
+                        amax_bf = local_max.bitcast(i32) & _hi16
+                        bexp = (
+                            (amax_bf + arith.constant(0x200000, type=i32))
+                            >> arith.constant(23, type=i32)
+                        ) & arith.constant(0xFF, type=i32)
+                        e8m0 = arith.minsi(
+                            arith.maxsi(bexp - arith.constant(2, type=i32),
+                                        arith.constant(0, type=i32)),
+                            arith.constant(254, type=i32))
+                        qs = (e8m0 << arith.constant(23, type=i32)).bitcast(f32)
+                        packed = arith.constant(0, type=i32)
+                        for k in range_constexpr(4):
+                            packed = llvm.call_intrinsic(
+                                i32, "llvm.amdgcn.cvt.scalef32.pk.fp4.f32",
+                                [packed, r[2 * k], r[2 * k + 1], qs,
+                                 arith.constant(k, type=i32)], [], [])
+                        global_col = (n_block * _c256
+                                      + arith.constant(half * 128, index=True) + col0)
+                        q_off = (out_row * arith.constant(N_HALF, index=True)
+                                 + global_col / arith.index(2))
+                        _q_ptr = llvm.inttoptr(
+                            ir.Type.parse("!llvm.ptr<1>"),
+                            arith.index_cast(T.i64, _flat_q_base + q_off))
+                        llvm.StoreOp(
+                            packed._value if hasattr(packed, "_value") else packed,
+                            _q_ptr, alignment=4)
+                        _kk_i32 = arith.index_cast(i32, _kk)
+                        _is0 = arith.cmpi(
+                            CmpIPredicate.eq, _kk_i32, arith.constant(0, type=i32))
+                        _ifsc = scf.IfOp(_is0)
+                        with ir.InsertionPoint(_ifsc.then_block):
+                            blk = (n_block * arith.constant(NBLK, index=True)
+                                   + arith.constant(half * 4, index=True) + _wgrp)
+                            sc_off = out_row * arith.constant(N_SC, index=True) + blk
+                            _sc_ptr = llvm.inttoptr(
+                                ir.Type.parse("!llvm.ptr<1>"),
+                                arith.index_cast(T.i64, _flat_sc_base + sc_off))
+                            _e8i8 = arith.TruncIOp(T.i8, e8m0)
+                            llvm.StoreOp(
+                                _e8i8._value if hasattr(_e8i8, "_value") else _e8i8,
+                                _sc_ptr, alignment=1)
+                            scf.YieldOp([])
+                return
+
+            # ---- atomic cshuffle + epilogue (BM=16/32): accm -> lds_acc[BM*BN] full ----
+            # accm[mi*4+J][v]  ->  lds_acc[(mi*16 + lane/16*4 + v)*BN + col],
+            #   col = wave_n*64 + J*16 + lane%16
+            rocdl.s_barrier()
+            c_BN = arith.constant(BN, index=True)
+            for i in range_constexpr(m_repeat):
+                for J in range_constexpr(num_acc_n):
+                    col = (
+                        wave_n * _c64
+                        + arith.constant(J * 16, index=True)
+                        + lane_mod_16
+                    )
+                    row_base = arith.constant(i * 16, index=True) + lane_div_16 * arith.constant(
+                        4, index=True
+                    )
+                    acc_v = accm[i * num_acc_n + J]
+                    for v in range_constexpr(4):
+                        lds_idx = (
+                            (row_base + arith.constant(v, index=True)) * c_BN + col
+                        )
+                        val = vector.extract(
+                            acc_v, static_position=[v], dynamic_position=[]
+                        )
+                        v1 = vector.from_elements(T.vec(1, f32), [val])
+                        vector.store(v1, lds_acc, [lds_idx], alignment=4)
+            rocdl.s_barrier()
+
+            # read by (m_lane=tid/32, n_lane=tid%32), atomic acc*weight -> out[token]
+            _c32 = arith.constant(32, index=True)
+            m_lane = tx / _c32
+            n_lane = tx % _c32
+            col_start = n_lane * arith.constant(2, index=True)
+            out_base_idx = arith.index_cast(ir.IndexType.get(), fx.ptrtoint(arg_out))
+            c_tokens_i32 = arith.index_cast(T.i32, c_tokens)
+            _mask24 = arith.constant(0xFFFFFF, type=T.i32)
+            M_REPS = BM // 8
+            bf16x2 = T.vec(2, T.bf16)
+            for mr in range_constexpr(M_REPS):
+                row_in_block = arith.constant(mr * 8, index=True) + m_lane
+                sorted_pos = m_row + row_in_block
+                packed = buffer_ops.buffer_load(
+                    sti_rsrc, sorted_pos, vec_width=1, dtype=T.i32
                 )
-                _wv2 = vector.from_elements(T.vec(2, f32), [weight, weight])
-                for s in range_constexpr(4):
-                    lds_row_off = row_in_block * c_BN + col_start + arith.constant(
-                        s * 64, index=True
+                token = arith.andi(packed, _mask24)
+                # guard padding rows: sorted_pos < cumsum (HIP per-row bound) AND
+                # token < M.  Launching max_sorted/BM blocks means trailing rows are
+                # padding (uninitialized A_q); skipping them avoids garbage atomics.
+                sorted_pos_i32 = arith.index_cast(T.i32, sorted_pos)
+                pos_ok = arith.cmpi(CmpIPredicate.ult, sorted_pos_i32, num_valid)
+                tok_lt_m = arith.cmpi(CmpIPredicate.ult, token, c_tokens_i32)
+                tok_ok = arith.andi(pos_ok, tok_lt_m)
+                _if_tok = scf.IfOp(tok_ok)
+                with ir.InsertionPoint(_if_tok.then_block):
+                    token_idx = arith.index_cast(ir.IndexType.get(), token)
+                    weight = buffer_ops.buffer_load(
+                        sw_rsrc, sorted_pos, vec_width=1, dtype=f32
                     )
-                    # load the lane's 2 consecutive acc cols as a vec2 and scale by
-                    # weight with a single packed v_pk_mul_f32 (== HIP), instead of
-                    # 2 scalar v_mul_f32. Keeps the f32 pair packed end-to-end.
-                    e = vector.load_op(T.vec(2, f32), lds_acc, [lds_row_off])
-                    fw = arith.mulf(e, _wv2)
-                    f0w = vector.extract(fw, static_position=[0], dynamic_position=[])
-                    f1w = vector.extract(fw, static_position=[1], dynamic_position=[])
-                    b0 = arith.trunc_f(T.bf16, f0w)
-                    b1 = arith.trunc_f(T.bf16, f1w)
-                    pk = vector.from_elements(bf16x2, [b0, b1])
-                    out_addr_idx = (
-                        out_base_idx
-                        + (row_out_base + arith.constant(s * 64, index=True))
-                        * arith.constant(2, index=True)
+                    row_out_base = (
+                        token_idx * arith.constant(N_OUT, index=True)
+                        + n_block * _c256
+                        + col_start
                     )
-                    out_addr_i64 = arith.index_cast(T.i64, out_addr_idx)
-                    out_ptr = llvm.inttoptr(
-                        ir.Type.parse("!llvm.ptr<1>"), out_addr_i64
-                    )
-                    pk_raw = pk._value if hasattr(pk, "_value") else pk
-                    llvm.AtomicRMWOp(
-                        llvm.AtomicBinOp.fadd,
-                        out_ptr,
-                        pk_raw,
-                        llvm.AtomicOrdering.monotonic,
-                        syncscope="agent",
-                        alignment=4,
-                    )
+                    _wv2 = vector.from_elements(T.vec(2, f32), [weight, weight])
+                    for s in range_constexpr(4):
+                        lds_row_off = row_in_block * c_BN + col_start + arith.constant(
+                            s * 64, index=True
+                        )
+                        # load the lane's 2 consecutive acc cols as a vec2 and scale by
+                        # weight with a single packed v_pk_mul_f32 (== HIP), instead of
+                        # 2 scalar v_mul_f32. Keeps the f32 pair packed end-to-end.
+                        e = vector.load_op(T.vec(2, f32), lds_acc, [lds_row_off])
+                        fw = arith.mulf(e, _wv2)
+                        f0w = vector.extract(fw, static_position=[0], dynamic_position=[])
+                        f1w = vector.extract(fw, static_position=[1], dynamic_position=[])
+                        b0 = arith.trunc_f(T.bf16, f0w)
+                        b1 = arith.trunc_f(T.bf16, f1w)
+                        pk = vector.from_elements(bf16x2, [b0, b1])
+                        out_addr_idx = (
+                            out_base_idx
+                            + (row_out_base + arith.constant(s * 64, index=True))
+                            * arith.constant(2, index=True)
+                        )
+                        out_addr_i64 = arith.index_cast(T.i64, out_addr_idx)
+                        out_ptr = llvm.inttoptr(
+                            ir.Type.parse("!llvm.ptr<1>"), out_addr_i64
+                        )
+                        pk_raw = pk._value if hasattr(pk, "_value") else pk
+                        llvm.AtomicRMWOp(
+                            llvm.AtomicBinOp.fadd,
+                            out_ptr,
+                            pk_raw,
+                            llvm.AtomicOrdering.monotonic,
+                            syncscope="agent",
+                            alignment=4,
+                        )
+                    scf.YieldOp([])
+
+        # ---- dispatch: persistent grid-stride for bf16flat (BM=128, M=4096).
+        # (== HIP kPersistent, gemm2_a4w4.cuh:422-437). A fixed grid of
+        # GRID_PERSISTENT blocks each loops over work-units wu in
+        # [block_id, total_work) step GRID_PERSISTENT, amortizing the per-tile
+        # prologue (A->LDS DMA + barrier + addr setup, measured ~43% of a tile)
+        # across many tiles instead of paying it once per 1-tile block.
+        # total_work = (num_valid/BM)*nnb is bounded by num_valid (cumsum) ==
+        # HIP total_m_blocks=cumsum/BM, so only valid tiles run.
+        #
+        # mxfp4out is intentionally NOT persistent: FlyDSL's occ=2 (2 blocks/CU
+        # via 64KB lds_acc) non-persistent path BEATS HIP (0.91-0.97x); going
+        # persistent here costs ~20 arch VGPR (loop-carried live ranges, 248->268)
+        # which drops occupancy 2->1 and regresses mxfp4out. bf16flat instead wins
+        # from persistence because its prologue share is larger and the occ=2
+        # epilogue write-port contention (measured +149%/wave) is avoided at occ=1.
+        # Atomic (BM=16/32) stays 1-tile-per-block like HIP. ----
+        _cnnb = arith.constant(num_n_blocks, index=True)
+
+        def _raw_idx(_v):
+            return _v if isinstance(_v, ir.Value) else _v.ir_value()
+
+        if const_expr(bf16flat):
+            _nv_idx = arith.index_cast(ir.IndexType.get(), num_valid)
+            _total_work = (_nv_idx / arith.constant(BM, index=True)) * _cnnb
+            _for = scf.ForOp(
+                _raw_idx(gpu.block_id("x")),
+                _raw_idx(_total_work),
+                _raw_idx(arith.constant(GRID_PERSISTENT, index=True)),
+            )
+            with ir.InsertionPoint(_for.body):
+                _wu = _for.induction_variable
+                run_one(_wu / _cnnb, _wu % _cnnb)
                 scf.YieldOp([])
+        else:
+            _pid = gpu.block_id("x")
+            run_one(_pid / _cnnb, _pid % _cnnb)
 
     @flyc.jit
     def launch_gemm2(
@@ -986,11 +1029,15 @@ def compile_mxfp4_gemm2_a4w4(
         ctx = CompilationContext.get_current()
         with ir.InsertionPoint(ctx.gpu_module_body):
             allocator.finalize()
-        # 1-D grid (total_m_blocks * num_n_blocks); kernel decodes
-        # m_block=pid/num_n_blocks, n_block=pid%num_n_blocks (== HIP wu decode) so
-        # the block schedule is expert-local for L2 reuse of w2.
-        gx = arith.index_cast(ir.IndexType.get(), i32_total_m_blocks.ir_value())
-        gx = gx * arith.constant(num_n_blocks, index=True)
+        # Grid. bf16flat (BM=128, M=4096): launch a FIXED persistent grid of
+        # GRID_PERSISTENT blocks; the kernel loops over work-units (tiles) bounded
+        # by num_valid. mxfp4out + atomic: 1-D grid (total_m_blocks*num_n_blocks),
+        # 1 tile/block, kernel decodes m_block=pid/num_n_blocks, n_block=pid%nnb.
+        if const_expr(bf16flat):
+            gx = arith.constant(GRID_PERSISTENT, index=True)
+        else:
+            gx = arith.index_cast(ir.IndexType.get(), i32_total_m_blocks.ir_value())
+            gx = gx * arith.constant(num_n_blocks, index=True)
         gemm2_kernel(
             arg_out, arg_a, arg_b, arg_a_scale, arg_b_scale,
             arg_sorted_token_ids, arg_sorted_expert_ids, arg_sorted_weights,
