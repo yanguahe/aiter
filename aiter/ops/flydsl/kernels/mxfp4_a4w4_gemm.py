@@ -876,6 +876,24 @@ def compile_mxfp4_gemm2_a4w4(
             # ---- atomic cshuffle + epilogue (BM=16/32): accm -> lds_acc[BM*BN] full ----
             # accm[mi*4+J][v]  ->  lds_acc[(mi*16 + lane/16*4 + v)*BN + col],
             #   col = wave_n*64 + J*16 + lane%16
+            # HIP-ALIGNED token/weight prefetch (== HIP gemm2 atomic epilogue): issue
+            # the sorted_token_ids + sorted_weights buffer_loads HERE -- BEFORE the
+            # cshuffle ds_write + barriers -- so their ~2000cyc global latency overlaps
+            # the cshuffle, and the atomic loop's s_waitcnt finds the data already
+            # landed. FLY previously loaded them INLINE in the atomic loop -> 2*M_REPS
+            # full s_waitcnt vmcnt(0) drains (ATT M=256: ~88% of the FLY-vs-HIP gap;
+            # HIP issues these loads pre-cshuffle, exactly here).
+            _c32 = arith.constant(32, index=True)
+            m_lane = tx / _c32
+            M_REPS = BM // 8
+            _pf_tok = []
+            _pf_wt = []
+            for mr in range_constexpr(M_REPS):
+                _sp_pf = m_row + arith.constant(mr * 8, index=True) + m_lane
+                _pf_tok.append(buffer_ops.buffer_load(
+                    sti_rsrc, _sp_pf, vec_width=1, dtype=T.i32))
+                _pf_wt.append(buffer_ops.buffer_load(
+                    sw_rsrc, _sp_pf, vec_width=1, dtype=f32))
             rocdl.s_barrier()
             c_BN = arith.constant(BN, index=True)
             for i in range_constexpr(m_repeat):
@@ -888,11 +906,14 @@ def compile_mxfp4_gemm2_a4w4(
                     row_base = arith.constant(i * 16, index=True) + lane_div_16 * arith.constant(
                         4, index=True
                     )
+                    # base address computed ONCE; the per-v row stride (v*BN) is a
+                    # compile-time constant -> LLVM folds it into the ds_write offset
+                    # field (== HIP cshuffle ds_write offset:N), instead of building a
+                    # full (row_base+v)*BN+col address per v (extra v_or/v_lshlrev).
+                    _cs_base = row_base * c_BN + col
                     acc_v = accm[i * num_acc_n + J]
                     for v in range_constexpr(4):
-                        lds_idx = (
-                            (row_base + arith.constant(v, index=True)) * c_BN + col
-                        )
+                        lds_idx = _cs_base + arith.constant(v * BN, index=True)
                         val = vector.extract(
                             acc_v, static_position=[v], dynamic_position=[]
                         )
@@ -901,21 +922,19 @@ def compile_mxfp4_gemm2_a4w4(
             rocdl.s_barrier()
 
             # read by (m_lane=tid/32, n_lane=tid%32), atomic acc*weight -> out[token]
-            _c32 = arith.constant(32, index=True)
-            m_lane = tx / _c32
             n_lane = tx % _c32
             col_start = n_lane * arith.constant(2, index=True)
             out_base_idx = arith.index_cast(ir.IndexType.get(), fx.ptrtoint(arg_out))
             c_tokens_i32 = arith.index_cast(T.i32, c_tokens)
             _mask24 = arith.constant(0xFFFFFF, type=T.i32)
-            M_REPS = BM // 8
             bf16x2 = T.vec(2, T.bf16)
             for mr in range_constexpr(M_REPS):
                 row_in_block = arith.constant(mr * 8, index=True) + m_lane
                 sorted_pos = m_row + row_in_block
-                packed = buffer_ops.buffer_load(
-                    sti_rsrc, sorted_pos, vec_width=1, dtype=T.i32
-                )
+                # token + weight were PREFETCHED before the cshuffle (overlap it);
+                # use the held values -> the s_waitcnt finds them landed (no vmcnt(0)
+                # drain). == HIP, which issues these loads pre-cshuffle too.
+                packed = _pf_tok[mr]
                 token = arith.andi(packed, _mask24)
                 # guard padding rows: sorted_pos < cumsum (HIP per-row bound) AND
                 # token < M.  Launching max_sorted/BM blocks means trailing rows are
@@ -927,19 +946,18 @@ def compile_mxfp4_gemm2_a4w4(
                 _if_tok = scf.IfOp(tok_ok)
                 with ir.InsertionPoint(_if_tok.then_block):
                     token_idx = arith.index_cast(ir.IndexType.get(), token)
-                    weight = buffer_ops.buffer_load(
-                        sw_rsrc, sorted_pos, vec_width=1, dtype=f32
-                    )
+                    weight = _pf_wt[mr]
                     row_out_base = (
                         token_idx * arith.constant(N_OUT, index=True)
                         + n_block * _c256
                         + col_start
                     )
                     _wv2 = vector.from_elements(T.vec(2, f32), [weight, weight])
+                    # base computed ONCE; per-s stride (s*64) is a compile-time const ->
+                    # LLVM folds into the ds_read offset field (== HIP ds_read offset:N).
+                    _ld_base = row_in_block * c_BN + col_start
                     for s in range_constexpr(4):
-                        lds_row_off = row_in_block * c_BN + col_start + arith.constant(
-                            s * 64, index=True
-                        )
+                        lds_row_off = _ld_base + arith.constant(s * 64, index=True)
                         # load the lane's 2 consecutive acc cols as a vec2 and scale by
                         # weight with a single packed v_pk_mul_f32 (== HIP), instead of
                         # 2 scalar v_mul_f32. Keeps the f32 pair packed end-to-end.
@@ -1004,8 +1022,23 @@ def compile_mxfp4_gemm2_a4w4(
                 run_one(_wu / _cnnb, _wu % _cnnb)
                 scf.YieldOp([])
         else:
+            # Early-skip padding tiles (== HIP `if (pid >= total_m_blocks*nnb) return`,
+            # total_m_blocks = cumsum/BM). The host launches a PADDED grid
+            # (total_m_blocks = max_sorted/BM, worst-case), but only m_block <
+            # num_valid/BM tiles are real; the rest are padding. Without this guard FLY
+            # ran the full GEMM (A+B load + MFMA) for EVERY padding tile -> ~+10% L2
+            # read traffic vs HIP (PMC M=256: FLY 6.42M vs HIP 5.86M reqs; blk_valid was
+            # computed but unused). blk_valid is block-uniform (one m_block per block) so
+            # the guarded barriers/MFMA do not diverge.
             _pid = gpu.block_id("x")
-            run_one(_pid / _cnnb, _pid % _cnnb)
+            _m_blk = _pid / _cnnb
+            _m_row_i32 = arith.index_cast(
+                T.i32, _m_blk * arith.constant(BM, index=True))
+            _blk_ok = arith.cmpi(CmpIPredicate.ult, _m_row_i32, num_valid)
+            _if_blk = scf.IfOp(_blk_ok)
+            with ir.InsertionPoint(_if_blk.then_block):
+                run_one(_m_blk, _pid % _cnnb)
+                scf.YieldOp([])
 
     @flyc.jit
     def launch_gemm2(
