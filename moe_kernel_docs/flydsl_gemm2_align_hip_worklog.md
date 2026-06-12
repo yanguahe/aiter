@@ -29,6 +29,7 @@
 | 3 | **1-D grid m-major 解码**（== HIP wu 解码） | 1.22x* | 1.32x | 1.35x | 1.31x | 1.000 | PMC L2 hit 28→57% |
 | 4 | **AGPR 累加器 + 预读 A**（BM=128 == HIP kUseAGPR） | 1.22x | 1.33x | 1.35x | 1.32x | 1.000 | **性能中性**;VGPR 257→148 |
 | 5 | **per-K 预读 A + 2 blocks/CU**（gfx950 160KB LDS，见 §2.5） | 1.22x | **1.31x** | **0.94x** | **0.91x** | 1.000 | mxfp4out **反超 HIP**;占用率 1→2 |
+| 6 | **bf16flat persistent / grid-stride**（== HIP kPersistent，仅 bf16flat；见 §2.6） | 1.22x | **1.02x** | 0.94x | 0.91x | 1.000 | commit `8c1dbcd5`;standalone gemm2 432.6→357.8µs（-17%） |
 
 > **里程碑（fix5）**：gfx950 LDS = **160KB**（非此前误判的 ~128KB 上限）。把 BM=128 的 LDS 砍到
 > ≤80KB → 2 blocks/CU，藏住访存/epilogue 延迟。mxfp4out（M=8192/16384，最大差距）**反超 HIP**
@@ -38,6 +39,19 @@
 \* BM=32（M=256）run-to-run 抖动较大（atomic 累加 + 小 grid 受 epilogue 限制），三步累计
 1.27x→1.22x。BM=128（大头）：**1.62/1.71/1.70x → 1.32/1.35/1.31x**。BM=16（M≤128）路径
 未改、数值不变（cos 1.0000）。e2e total（M≥8192）从 1.29–1.31x 降到 1.14–1.15x。
+
+> **里程碑（fix6，commit `8c1dbcd5`）**：把 bf16flat（M=4096）从「每 block 跑 1 tile」改成
+> **persistent / grid-stride**（== HIP `kPersistent`）。固定 grid `2*NUM_CU=512` 个 block，每个
+> block 在 `for wu in [block_id, total_work) step 512` 里循环处理多个 tile，把**每 tile 的
+> prologue（A→LDS DMA + barrier + 地址 setup，§2.5 实测约占一个 tile 的 ~43%）摊到多个 tile** 上，
+> 而非每个 1-tile block 各付一次。**M=4096 bf16flat 1.31x → 1.02x**（standalone gemm2
+> 432.6→357.8µs，-17%）。**这推翻了 §3 早先「persistent 实测否决」的结论**（当时误判收益来自
+> 「打满 HBM」；真实收益是 prologue 摊销，见 §2.6 / §3.1）。mxfp4out（M=8192/16384）**故意不做
+> persistent**（loop-carried live range +~20 arch VGPR → occ 2→1 反而回退），保持 §2.5 的 0.91–0.94x。
+>
+> > 注（本 session 2026-06-11 全量复测）：清缓存 + 全量重建后 `bench_up_moe_v1.py` 重测 M=4096
+> > gemm2 fly/mx ≈ **1.08x**（fly 348.2µs / mx 323.8µs）。与 commit 时的 1.02x 的差异为
+> > run-to-run / 测量口径（standalone vs 全量管线里的 mx 基线）波动；当前继续攻关的目标就是这 ~8%。
 
 > 因果主线（按 `flydsl-align-reference-kernel.mdc`）：性能差 ← ISA 差 ← 前端逻辑差。
 > 三步都是 (a) 前端逻辑差异（A-load 结构 / cache hint / grid 解码），不是后端设置或
@@ -159,23 +173,111 @@ occupancy 收益 **~0.06x**（非边际）。2 blocks 让第 2 个 wave 在本 w
 > 2-block 把这段延迟藏在另一 wave 后，收益巨大；bf16flat 直写 bf16（轻），可藏的少。HIP 两种模式
 > 都钉死 1 block/CU，故 FlyDSL 在重 epilogue 的 mxfp4out 上反超。
 
+### 2.6 bf16flat persistent / grid-stride（fix5 → fix6，仅 bf16flat）—— M=4096 1.31x→1.02x
+
+**问题（推翻 §3 早先结论）**：fix5 后 M=4096 bf16flat 卡在 1.31x，§3.1 曾判定「直写 + 2-block 已到
+上限」、§3 曾「实测否决 persistent」。复查发现早先否决的依据错了：当时以为 persistent 的收益来自
+「打满 HBM + 摊薄 launch」，而本 kernel 的瓶颈不是 HBM 带宽。**persistent 的真实收益是摊销每个
+tile 的 prologue**——FlyDSL 旧 dispatch 是「1 block 跑 1 tile」（`run_one(pid/nnb, pid%nnb)`），
+每个 tile 都要重付一次 A→LDS direct-DMA + drain barrier + 地址 setup（§2.5 实测约占一个 tile 的
+~43%），且无法被前一 tile 的计算隐藏；HIP nonatomic 是 `kPersistent`，每个 block 用 grid-stride
+循环吃多个 tile，prologue 被摊薄。
+
+**改动（== HIP `gemm2_a4w4.cuh:421-437` kPersistent，仅 bf16flat）**：
+- launch：bf16flat 发**固定** grid `GRID_PERSISTENT = 2*NUM_CU = 512`（mxfp4out/atomic 仍用
+  `total_m_blocks*num_n_blocks` 的 1-tile-per-block grid）。
+- kernel：bf16flat 用 `scf.ForOp(block_id, total_work, GRID_PERSISTENT)` 循环，
+  `total_work = (num_valid/BM)*num_n_blocks`（== HIP `total_m_blocks=cumsum/BM` × nnb，只跑有效
+  tile），循环体 `run_one(wu/nnb, wu%nnb)`。
+- **关键 occupancy 保护**：把 wave/lane 分解（`tx`、`wave`、`lane`、`lane_div_16/mod_16`）+ 每个
+  tile 的地址 setup **全部移进 `run_one` 内**（per-tile 重算），使它们**不跨 persistent 循环
+  loop-carried**——否则 loop-carried live range 会涨 ~20 arch VGPR，把 bf16flat 从 2 blocks/CU
+  压回 1，抵消收益。HIP 同样把这些放在 `run_one` lambda 内。
+- HIP grid 是 `min(total_work, NUM_CU=256)`（被 `__launch_bounds__(256,1)` 钉死 1 block/CU）；
+  FlyDSL 无此 cap，bf16flat 仅 32KB LDS、≤256 VGPR → 发 512 个 block 跑 2 blocks/CU，把
+  persistent 的 prologue 摊销叠在 occ=2 的延迟隐藏之上。
+
+**为何 mxfp4out 不做 persistent**：mxfp4out 走 64KB lds_acc 的 occ=2 非 persistent 路径已反超
+HIP（0.91–0.97x）；改 persistent 会引入 loop-carried live range（实测 arch VGPR 248→268）把 occ
+2→1，反而回退。故 persistent 只用于 bf16flat（其 prologue 占比大、epilogue 轻，从摊销获益最多）。
+
+**效果（实测）**：M=4096 bf16flat **1.31x → 1.02x**（commit 时；standalone gemm2 432.6→357.8µs，
+-17%）。mxfp4out / atomic 未改、未回退。cos 1.0000。
+
 ---
 
-## 3. 残余差距分析（fix5 后）
+## 3. 残余差距分析（fix6 后）
 
 - **M=8192/16384（mxfp4out，最大差距）：已反超 HIP**（0.91–0.94x）。目标达成。
-- **M=4096（bf16flat）：1.31x —— 已到本模式实际上限**（见 §3.1）。
+- **M=4096（bf16flat）：fix6 persistent 后 1.31x → 1.02x**（commit 时）；本 session 全量复测
+  **1.08x**（348.2 / 323.8µs）。**§3.1 早先「已到上限」的结论已被 fix6 推翻**——见 §3.1（已标注 superseded）。
+  当前正继续攻关这残余 ~8%。
 - **小 M（BM=16/32 atomic，M≤256）：1.05–1.47x —— 受 FLY VGPR 比 HIP 略高所限**（见 §3.2）。
 
-### 3.1 M=4096 bf16flat 已到上限（attack #1，无改动）
+### 3.1 ~~M=4096 bf16flat 已到上限~~（SUPERSEDED by fix6 §2.6：1.31x→1.02x）
 
-ATT 实测（M=4096，2 blocks/CU，load balance imbalance 0.02 良好）：cycle 预算被 **VMEM_ST
+> **⚠ 本节结论已被 fix6（§2.6 persistent）推翻。** 下面是 fix5 时（非 persistent）的分析，保留作
+> 历史记录。它正确指出了「epilogue 的 128 个散 short store 无法向量化」，但**错误地**把「1.31x」
+> 当成了该模式的整体上限——遗漏了「每 tile prologue 无摊销」这个真正可攻的点。persistent 把
+> prologue 摊到多 tile 后到了 1.02x（commit）/ 1.08x（本 session 复测）。当前残余 ~8% 的瓶颈需用
+> **post-persistent 的新 ATT** 重新定位（fix5 时的下列 cycle 预算已不代表当前 dispatch 形态）。
+
+ATT 实测（fix5，M=4096，2 blocks/CU，load balance imbalance 0.02 良好）：cycle 预算被 **VMEM_ST
 25.8%（stall 29.5%）+ VMEM_LD 24.7%（stall 30.2%）= 50%** 主导 —— 是 **memory-bound**。
 VMEM_ST = 128 个 `global_store_short`（bf16 直写 flat_out，2 字节/个）。这些输出是 MFMA lane
 布局散落的（行 stride=N_OUT、列 stride=16），**无法向量化**（v 跨行、j 跨 16 列均不连续）。
 HIP `apply_bf16_flat_epilog_bm128` 是**同样**的 128 个散落 short store。若改成 cshuffle→行连续
-再向量化，需 lds_acc（128KB）→ 退回 1 block/CU，得不偿失。故 M=4096 bf16flat 1.31x 已是该
-（直写、2-block）设计的实际上限。
+再向量化，需 lds_acc（128KB）→ 退回 1 block/CU，得不偿失。**（注：此「无法向量化」对 epilogue
+本身仍成立；fix6 没动 epilogue，而是去摊 prologue。）**
+
+### 3.1.1 M=4096 bf16flat post-persistent 攻关（2026-06-11，5 个尝试全部记录）
+
+fix6（persistent）后 M=4096 bf16flat ≈ **1.06–1.08x**（fly ~344–348µs / mx ~324µs）。本次按
+playbook 重新 profile（**post-persistent 新 ATT**，非 fix5 旧数据）并系统性试遍杠杆，**结论：occupancy
+与跨 tile 预取都是死路,bf16flat M=4096 已到 FlyDSL 对 HIP 手工调度的实际上限。**
+
+**post-persistent ATT（occ 1，FLY vs HIP，单 CU issue cycle）**：
+| 类别 | FLY | HIP | 说明 |
+|---|---|---|---|
+| WAITCNT | 19.5%（vmcnt(5) 1316cyc/tile） | 8.0% | FLY 等 w2 更久 |
+| VALU | 14.1%(410条) | 7.9%(240条) | 含 128 v_accvgpr_write(FLY 独有,见下) |
+| BARRIER | 9.2%(2个) | 24.6%(3个) | HIP barrier 更重 |
+两版「内存等待+同步」总量相当(FLY 3.26M vs HIP 3.51M),FLY 反而略少。差距是 HIP 单 block
+把 w2 等待藏得更好(WAITCNT 8% vs 19.5%)。
+
+**5 个尝试(全部 ISA+ATT 实测,均未达 ≤1.0x)**：
+1. **AGPR init-zero**(== HIP `mfma_f4f4_agpr_init_zero`,C=字面量0/`=a` only)：去掉 128 个
+   `v_accvgpr_write_b32`(ISA 实测 128→0)。**性能中性**(1.08→1.07,memory-bound 下 issue cycle
+   本就藏在 vmcnt/barrier stall 后)。印证 Stage-3「memory-bound → 计算/调度优化中性」。**已回退**。
+2. **readfirstlane B/scale 基址**(移植 gemm1 的 scalar soffset 模式)：在 gemm2 结构下 VGPR
+   **264→268**(更糟),M=4096 **1.12x**(回退)。gemm1 模式不适配 gemm2(一次性发全 B,共享 voffset
+   live range 反而拉长)。**已回退**。
+3. **强制 `amdgpu-waves-per-eu="2,2"`**：逼到 occ 2,但把 128 AGPR 累加器挤出 AGPR(NumAgprs
+   128→4)+ **spill 20**,**cos=0(算错)**,1.31x。128 AGPR 是硬底线,强制占用率行不通。**已回退**。
+4. **B 逐 stage 加载 → 真实 occ 2**(减半 B live range:264→232 VGPR,spill 0)：cos 0.9999,
+   **1.06x(本次最佳,但仅 1% 且脆弱)**。post-persistent occ-2 ATT 显示 **VMEM_ST 飙到 28%
+   (5.99M,128 散 short store 的 write-port 争用)**——这正是 §2.6 注释说的「occ=2 epilogue
+   write-port contention +149%/wave」。占用率翻倍的延迟隐藏被写争用抵消 → 净 1%。**已回退**。
+5. **跨 tile w2 预取**(persistent loop 用 `scf.ForOp` iter_args 软件流水,prologue 预取首 tile,
+   每轮发下个 tile 的 w2、用预取的当前 B 算、yield)：cos 0.9996,VGPR **328**(arch200+AGPR128,
+   occ 1,spill 0),但 **1.16x(回退)**——携带 B(64 VGPR)+ 载下个的寄存器压力 + 循环边界值搬运
+   开销 > 延迟隐藏收益,流水重叠未真正实现。**已回退**。
+
+6. **逐指令复刻 HIP occ-1 调度 —— mfma cluster interleave(J-outer)**：把 mfma_ktile 从
+   k_idx-outer 改成 HIP `issue_mfma_cluster` 的 **J-outer**(读两个 k-half 的 A 后,per-J cluster、
+   sub-inner、k0-then-k1,同 SrcC 累加 0-nop),使 MFMA 消费 B 的顺序(b[J][0],b[J][1] 连续)= B
+   加载顺序 → 后端能插细粒度 vmcnt。仅 bf16flat。结果:cos 1.0000,spill 0,VGPR **264→300**(A
+   两 k-half 全持),**M=4096 仍 1.08x(353µs,略升,VGPR 增)**。**没用**。ISA 实测根因:第一个
+   MFMA 前 `s_waitcnt vmcnt(11)` 等 w2,而 **B load 到 MFMA 之间只隔 ~16 个 ds_read(几百 cyc)
+   ≪ w2 HBM 延迟 ~1300cyc** → occ-1 单 tile 内没有足够 work 藏 w2。唯一能把 w2 提前一整 tile 的
+   是跨 tile 预取(尝试 5,寄存器代价失败)。per-stage barrier / 显式 waitcnt 改不了「w2 没到」
+   这个事实。**已回退**。
+
+**根因(为何到顶)**：(a) AGPR=128 固定 → occ 上限就是 2(3 blocks 需 ≤170 VGPR,光 AGPR 就 128);
+(b) occ 2 被 epilogue 的 128 个不可向量化 short store 的 write-port 争用抵消;(c) 跨 tile 预取的寄存器
+代价超过收益;(d) FLY 已对齐 HIP 所有结构杠杆(load/cache/L2/AGPR/persistent),残余是 HIP 手工
+单 block 调度(per-stage barrier + mfma_cluster interleave 把 w2 等待藏得更好),FlyDSL 高层结构难
+逐指令复刻。**当前保持 8c1dbcd5 基线(1.08x)**;上述 5 个尝试均已回退,代码干净。
 
 ### 3.2 小 M（BM=16/32 atomic）受 VGPR 所限（attack #2，AGPR 尝试中性已回退）
 
@@ -187,6 +289,110 @@ FLY 多 ~15 VGPR → 少 1 个并发 block → 慢（M=64 1.48x）。
 - 根因是 FLY 的总 VGPR（100）比 HIP 手调的 85 高 ~15，需削减 A/B/scale/地址寄存器才能上第 5 个
   block —— 收益小、风险高，未做。小 M 的 gemm2 绝对耗时小（M=64 ≈95µs，差 ~30µs），且 e2e 被
   sort/quant/gemm1 主导。
+
+#### 3.2.1 小 M post-revert 重新攻关（2026-06-11，2 个尝试失败）
+
+按 playbook 重新实测当前基线(8c1dbcd5)的 BM=16/32 ISA + M=64 ATT/occupancy:
+- **VGPR/occ(实测)**:FLY BM=16 = **102 VGPR / occ 4**;HIP BM=16 = 85 / occ 5。FLY BM=32 = 98 /
+  occ 4;HIP BM=32 = 99 / occ 4(BM=32 占用率已相同,gap 在别处)。
+- **achieved occupancy(occupancy_balance.py, M=64)**:FLY max slots/SIMD = **4**,HIP = **5**,grid
+  够大(都 over-subscribed)。dur median FLY 218k vs HIP 147k(≈1.48x,与 kernel gap 吻合)。
+- **cycle 预算(M=64)**:FLY TOTAL 12.3M vs HIP 9.8M;**FLY WAITCNT 44.8%(5.53M),其中 3 条
+  `s_waitcnt vmcnt(0)` = 4.2M**,全在 atomic epilogue 等 `sorted_token_ids`/`sorted_weights` 的
+  inline load(各 ~2000cyc HBM)。HIP epilogue **也是 inline load 同样的 token/weight**,但靠 occ 5
+  跨 block 藏住。
+
+**尝试(均失败,已回退)**:
+1. **token/weight 预取到 K-loop 前**(~4 VGPR,与 GEMM 重叠):**无效**。atomic 非 persistent(1
+   tile/block),BM=16 单 tile GEMM 太短(几百 cyc)≪ token/weight 的 ~2000cyc → tile 内来不及藏;
+   HIP 是靠 occ 5 跨 block 藏,不是 in-tile 预取。且 VGPR 102→108(更糟),M=64 仍 1.47x。
+2. **B 逐 stage(只 atomic)**:VGPR 102→**68 / occ 4→7**(spill 0),但 **全面回退**(M=64 1.49x、
+   M=16/128/256 都更差)。occ 7 的跨 block 收益**补不回丢失的 B in-tile 预取**(b1 在 mfma0 后才载 →
+   mfma1 等 b1)。证明小 M 需要 **B 双预取(藏 B 延迟)+ occ(藏 token/weight 延迟)二者兼得**。
+
+**根因(为何到顶)**:需 **occ 5 且保留 B 双预取**,即 VGPR 102→≤96(砍 6)。但 B 双预取本身占
+64 VGPR(编译器把 `_b0`/`_b1` 都保活;HIP 用 `b[stage][..]` 数组 + stage 循环让编译器轮转,85 VGPR
+就放下了)。前端层面找不到「保住 B 预取 + 砍 6 VGPR」的干净办法(readfirstlane 已证会涨 VGPR)。这是
+**寄存器分配效率差距**(HIP 85 vs FLY 102),与 M=4096 同属「FlyDSL 高层结构 vs HIP 手工 RA/调度」
+的固有差。BM=32(M=256)占用率已等同 HIP(都 occ 4),其 1.20-1.26x gap 是另一类(调度,见 §3.2.2)。
+
+#### 3.2.2 M=256(BM=32)指令 pattern 分析 + Pattern A 对齐(2026-06-11)
+
+按 `flydsl-align-reference-kernel.mdc` Stage 3 对 M=256 做 FLY vs HIP cycle 预算。occ 两边都 4(相同),
+gap 纯在指令 pattern。FLY−HIP 差值:**WAITCNT +1.42M**(主)、VALU +0.35M(`v_or` 多 20 条 vs HIP 的
+融合 `v_mad_u64_u32`)、MFMA/LDS_ST/SALU 各 +0.15M;BARRIER FLY 反而少 0.5M。
+
+- **Pattern A = atomic epilogue 的 token/weight `vmcnt(0)` 全 drain**(8 条,单 CU ATT 占 FLY-HIP 差的
+  ~88%)。根因:FLY 在原子循环里 **inline 加载** sorted_token_ids/sorted_weights,vmcnt(0) 等满 ~2000cyc
+  HBM。HIP 把这些 load **在 cshuffle 之前发出**(ISA 实证),与 cshuffle 重叠,原子循环 vmcnt 时已就绪。
+- **修复(已落地,HIP 对齐)**:把 token/weight 的 buffer_load 移到 **cshuffle ds_write+barrier 之前**
+  发出(== HIP),原子循环用预取值。**ISA 实证对齐**:FLY WAITCNT **7.86M→3.62M**(8 条 vmcnt(0) 消失),
+  单 CU TOTAL 14.93M→13.47M ≈ HIP 13.27M。cos 全 1.0000,大 M 无回退。
+- **但 wall-clock 只 1.22x→1.19x(小幅)**。**关键教训:`att_target_cu=1` 单 CU ATT 严重高估了 Pattern A
+  的 wall-clock 权重**——三个度量(单CU-ATT 1.015x、occupancy.json dur 1.066x、真实 kernel 1.19x)互不
+  一致,说明 M=256 真实 gap 主要在**跨 CU 内存吞吐 / L2**,不是单 block 的 waitcnt。需用 PMC
+  (pmc_fly_g2.yaml / TCC_HIT/MISS)而非单 CU ATT 才能定位剩余 gap。Pattern A 对齐是真实小赢 + 正确对齐,
+  但非 M=256 gap 的大头。
+
+**当前状态**:Pattern A 对齐(token/weight pre-cshuffle 预取)已落地在工作树(未提交);其余小 M 尝试
+(token/weight 预取-before-K-loop、B-per-stage)均已回退。bf16flat(§3.1.1)回到 8c1dbcd5 基线。
+
+##### Pattern B 对齐(cshuffle ds-立即-offset)+ 实测中性
+
+- **误诊澄清**:Pattern B 不是「该用 v_mad 却用了 v_or」。FLY 的输出地址**已经**用融合 `v_mad_u64_u32`
+  (== HIP)。那些 `v_or` 是**位不重叠的地址拼接**(or 与 add 等价、同 1 条 VALU);真正差异是 FLY 在
+  cshuffle 给每个 (i,J,v) 算**完整 LDS 地址**,而 HIP 用 `ds_read/write` 的**立即 offset 字段**。
+- **对齐(已落地)**:cshuffle store + epilogue read 改成「算一次 base + 编译期常量偏移」→ LLVM 折进
+  ds 的 `offset:N`(实测 32 处 ds 立即 offset)。VGPR BM=16 102→100。
+- **实测中性**:M=256 仍 1.20x(与 Pattern-A-only 同)。**符合预期**:VALU 是 issue-bound(M=256 cycle
+  预算 VALU stall 仅 1.8%)+ kernel memory-bound → 减 VALU 指令不减 wall-clock(同 M=4096 去 accvgpr)。
+
+##### PMC 定位 M=256 真实 gap = L2 内存流量(2026-06-11)
+
+`att_target_cu=1` 单 CU ATT 不代表跨 CU wall-clock。改用 **PMC(全 CU 聚合,TCC_HIT/MISS;gfx950 无
+TCC_EA_RDREQ)**,M=256:
+
+| | TCC_HIT | TCC_MISS | 总请求 | L2 命中率 |
+|---|---|---|---|---|
+| FLY | 740,700 | 5,679,000 | 6,419,700 | 11.5% |
+| HIP | 539,900 | 5,320,500 | 5,860,400 | 9.2% |
+
+**真实 gap = FLY L2 读请求 +9.6%、L2 miss(→HBM)+6.7%**(L2 命中率 FLY 反而略高 → 不是缓存策略,是
+**请求总量**:同一问题多读 ~0.56M 次)。这才是 1.20x 的大头;Pattern A(waitcnt)/B(VALU)是单 CU
+ATT 占比大但 wall-clock 权重小。**下一步**:per-load 归因找出多出的 10% 流量来自哪个 load(疑似 FLY
+未 early-skip padding tile → 对 padding tile 也做了 B-load+MFMA,而 HIP `if pid>=total_work return`
+早退),然后消除。
+
+**当前工作树(未提交)改动**:atomic 路径 (1) token/weight pre-cshuffle 预取(Pattern A 对齐),
+(2) cshuffle/epilogue ds-立即-offset(Pattern B 对齐)。cos 全 PASS,大 M 无回退,M=256 1.22→1.20x。
+
+##### ★ 根因 = padding tile 冗余 GEMM(per-load 归因发现);early-skip 后全 M 追平/反超 HIP
+
+PMC 显示 FLY 多发 ~10% L2 读请求。per-load 归因发现:**host 传给 gemm2 的 `total_m_blocks =
+max_sorted/BM`(padded 最坏情况),而 atomic + mxfp4out 的 dispatch 对 grid 里每个 tile 都
+`run_one(...)`,`blk_valid`(行 306)算了却没用 → FLY 对所有 padding tile 也做了完整 A+B load + MFMA**;
+HIP `if (pid >= cumsum/BM * nnb) return` 只跑 valid tile(cumsum 是运行时实际数)。M=256:FLY ~445
+tiles vs HIP ~385 → 多读 B → +10% L2 流量。
+
+**修复(已落地)**:atomic + mxfp4out dispatch 用已算好的 `blk_valid`(`m_block*BM < num_valid`,
+block-uniform 不发散)包住 `run_one` 的 scf.IfOp → early-skip padding tile(== HIP early-return)。
+bf16flat 不受影响(persistent loop 的 bound `(num_valid/BM)*nnb` 本就是 cumsum-based)。
+
+**效果(gemm2 fly/mx,canonical 全量 bench;cos 全 PASS)**:
+
+| M | early-skip 前 | **after** | | M | 前 | **after** |
+|---|---|---|---|---|---|---|
+| 16 | 1.23x | **1.01x** | | 256 | 1.22x | **0.98x** ✅ |
+| 32 | 1.25x | **1.00x** | | 4096 | 1.07x | 1.07x(bf16flat 不变) |
+| 64 | **1.47x** | **0.99x** ✅ | | 8192 | 0.93x | **0.79x** ✅ |
+| 128 | 1.33x | **1.00x** | | 16384 | 0.90x | **0.81x** ✅ |
+
+e2e total(msfg/mx 完整管线):小 M 0.99–1.00x、M=8192 **0.90x**、M=16384 **0.91x**。仅剩 M=4(1.13x,
+绝对 ~11µs,launch 开销主导)和 M=4096 bf16flat(1.07x,§3.1.1 的 memory-latency 墙)未达 1.0x。
+
+**教训**:单 CU ATT 的 Pattern A/B(waitcnt/VALU)是「看着大、wall-clock 权重小」的误导项;真正的杠杆
+靠 **PMC(全 CU L2 流量)+ per-load 归因**才暴露——是「跑了不该跑的 padding tile」这种**算法层冗余**,
+而非指令调度。一个 early-skip 同时修好了小 M(atomic)和大 M(mxfp4out)。
 
 历史残余分析（fix1–4，已被 fix5 的 occupancy 推翻其"1 block/CU 固有"结论）：
 
@@ -203,10 +409,14 @@ FLY 多 ~15 VGPR → 少 1 个并发 block → 慢（M=64 1.48x）。
   加载延迟。HIP 靠手工调度把这段藏得略好，是其剩余 ~1.3x 的来源。
 
 **已评估否决 / 未做**：
-- **persistent grid**：实测否决 —— HBM 未打满，persistent 的主要收益（打满 HBM + 摊薄 launch）
-  不成立，预计中性。
-- **降 LDS 提 occupancy**：bf16flat（M=4096）不需要 lds_acc，把 LDS 128KB→32KB 可上 2–3
-  block/CU 改善延迟隐藏 —— 但仅惠及 M=4096 且偏离 HIP（HIP 也用 128KB union），未做。
+- ~~**persistent grid**：实测否决~~ → **已采纳（fix6 §2.6）**。早先否决的依据（「HBM 未打满 →
+  persistent 无收益」）是错的：persistent 的真实收益是**摊销每 tile 的 prologue**（与 HBM 是否打满
+  无关），bf16flat 据此 1.31x→1.02x。教训：把 persistent 的收益只归因于「打满 HBM/摊薄 launch」会
+  漏判——对 prologue 占比大的 1-tile-per-block 形态，摊销 prologue 才是主因。
+- ~~**降 LDS 提 occupancy**：…未做~~ → **已采纳（fix5 §2.5）**：bf16flat LDS 128KB→32KB 已落地，
+  配合 fix6 的 2 blocks/CU。
+- **（仍未做）epilogue 向量化**：128 个散 short store 无法在直写布局下向量化（§3.1）；cshuffle 转
+  行连续需 128KB lds_acc → 退回 1 block/CU，得不偿失。
 
 **ATT 代表性注记**：`att_target_cu=1` 对本 memory-bound kernel 的 L2 复用不具代表性（单 CU L2
 偏冷），fix2/fix3 的真实收益体现在整网 kernel 时间 + PMC，不体现在单 CU ATT 总 cycle。故以
