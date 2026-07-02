@@ -277,7 +277,35 @@ playbook 重新 profile（**post-persistent 新 ATT**，非 fix5 旧数据）并
 (b) occ 2 被 epilogue 的 128 个不可向量化 short store 的 write-port 争用抵消;(c) 跨 tile 预取的寄存器
 代价超过收益;(d) FLY 已对齐 HIP 所有结构杠杆(load/cache/L2/AGPR/persistent),残余是 HIP 手工
 单 block 调度(per-stage barrier + mfma_cluster interleave 把 w2 等待藏得更好),FlyDSL 高层结构难
-逐指令复刻。**当前保持 8c1dbcd5 基线(1.08x)**;上述 5 个尝试均已回退,代码干净。
+逐指令复刻。**当前保持 8c1dbcd5 基线(1.08x)**;上述 5(+1)个尝试均已回退,代码干净。
+
+##### PMC 实测 M=4096 L2/HBM 字节量 + 延迟(2026-06-16):gap = 读延迟,非流量
+
+用 gfx950 PMC(TCC=L2,EA0=L2→HBM 接口)实测 FLY(bf16flat)vs HIP gemm2:
+
+| 指标 | FLY | HIP | FLY/HIP |
+|---|---|---|---|
+| L2 命中率 | 62.53%(HIT 27.21M/MISS 16.31M) | 63.12%(27.45M/16.04M) | ≈相同 |
+| HBM 读字节 | 547.7 MB(8.56M×64B) | 529.1 MB | **1.035** |
+| HBM 写字节 | 994.6 MB(15.54M×64B) | 994.6 MB | **1.000**(完全相同) |
+| **HBM 读延迟** | **2043** cyc/req | 1953 | **1.046** |
+| HBM 写延迟 | 439 cyc/req | 431 | 1.018 |
+| **L1→L2 读延迟** | **1111** cyc/req | 1040 | **1.068** |
+
+**结论**:1.08x gap 主因是 **HBM/L2 读延迟更高(+4.6% / L1→L2 +6.8%)**——印证 bf16flat 是
+memory-latency-bound(occ 1 藏不住 w2 读延迟);次因是读字节 +3.5%(L2 复用略差,miss 略多)。
+**写侧完全对齐**(字节 1.000、延迟 ~1.02),bf16 直写 epilogue 与 HIP 一致。延迟是 occ-1 单 block
+的固有短板,前端无法消除(occ 2 / 跨 tile 预取均已证否,见上)。
+
+**测量方法 / 坑**(计数器名经 `rocprofv3 --list-avail` 查证,`TCC_EA_*` 无 0 的名在 gfx950 不存在):
+- 字节:`TCC_EA0_RDREQ`/`_RDREQ_32B`、`TCC_EA0_WRREQ`/`_WRREQ_64B`;`字节=(REQ−粒度)×大+粒度×小`
+  (实测 M=4096 读写都是 64B)。延迟(Little's law,计数器描述自带公式):
+  `TCC_EA0_RDREQ_LEVEL/RDREQ`(HBM 读)、`TCC_EA0_WRREQ_LEVEL/WRREQ`(写)、
+  `TCP_TCC_READ_REQ_LATENCY/TCP_TCC_READ_REQ`(L1→L2 读)。
+- **关键坑**:`TCC_HIT/MISS` 与 EA0 字节计数器**放同一 yaml 会爆 pass 数 → rocprofv3 超时**(不同硬件
+  计数块);必须**拆成独立 yaml**(纯 EA0 字节 / 纯 EA0+TCP 延迟 / 纯 TCC_HIT+MISS),各 ≤6 同块计数器
+  → 1-2 pass 秒级完成。`kernel_iteration_range:"[1]"` 抓单 dispatch;解析 `out_counter_collection.csv`
+  的 `Counter_Name/Counter_Value` 用 csv 模块(HIP kernel 名含逗号,勿用 awk 切列)。
 
 ### 3.2 小 M（BM=16/32 atomic）受 VGPR 所限（attack #2，AGPR 尝试中性已回退）
 
