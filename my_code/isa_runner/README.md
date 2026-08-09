@@ -173,6 +173,8 @@ Production capture and candidate replay must be in the **same process** — the
 pointers are device addresses, so a saved JSON is metadata only. `--which
 gemm2` selects the no-activation production dispatch and applies the same flow;
 the candidate ISA must match the selected kernel's signature and launch shape.
+Input generation uses a fixed seed (`--seed 0` by default), applied to Python,
+torch, and all CUDA/HIP device generators before the production MoE setup.
 
 ### The production kernel is the reference
 

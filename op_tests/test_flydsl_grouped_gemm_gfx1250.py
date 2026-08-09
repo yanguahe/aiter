@@ -539,6 +539,7 @@ def run_moe(
     kernel_bench: bool = False,
     warmup: int = 5,
     iters: int = 101,
+    seed: int = 0,
     const_init: Optional[float] = None,
     check_aot_cache: bool = True,
 ) -> dict:
@@ -570,6 +571,7 @@ def run_moe(
             use_bias=use_bias,
             bench=bench,
             kernel_bench=kernel_bench,
+            seed=seed,
             warmup=warmup,
             iters=iters,
             const_init=const_init,

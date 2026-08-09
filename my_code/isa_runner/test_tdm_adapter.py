@@ -21,6 +21,7 @@ from tdm_adapter import (
     _tensor_sha256,
     Capture,
     IsaRunnerError,
+    capture_launches,
     replay,
 )
 
@@ -34,6 +35,11 @@ class TdmAdapterInterfaceTest(unittest.TestCase):
 
     def test_capture_has_no_reference_isa_state(self):
         self.assertNotIn("reference_isa", Capture.__dataclass_fields__)
+
+    def test_capture_uses_fixed_seed_by_default(self):
+        seed = inspect.signature(capture_launches).parameters["seed"]
+
+        self.assertEqual(seed.default, 0)
 
     def test_replay_enables_l2_flush_for_opt_in_flydsl_timer(self):
         parameters = inspect.signature(replay).parameters

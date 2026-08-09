@@ -3,14 +3,16 @@ set -Eeuo pipefail
 
 workspace_dir="${workspace_dir:-/data/yanguahe/code/wk_sp1}"
 REPO_ROOT="${REPO_ROOT:-${workspace_dir}/aiter}"
-CONTAINER_NAME="${CONTAINER_NAME:-hyg_fyd1}"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_RELATIVE_PATH="${SCRIPT_RELATIVE_PATH:-my_code/${SCRIPT_NAME}}"
 TRACE_ROOT="${TRACE_ROOT:-my_code}"
 HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0}"
 
 usage() {
-    echo "Usage: ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> <TEST_CMD> [--all-simd] [--git] [--am]" >&2
+    echo "Collect inside container:" >&2
+    echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> <TEST_CMD> [--all-simd]" >&2
+    echo "Commit on host:" >&2
+    echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> --git [--am]" >&2
     echo "Example: bash my_code/${SCRIPT_NAME} moe_gemm1_a8w4 isa_runner_att 'python my_code/isa_runner/tdm_adapter.py replay --which gemm1 --iters 100 --isa ./my_code/moe_gemm1_a8w4.v0.s'" >&2
     echo "  --all-simd  run four ATT captures for SIMD0, SIMD1, SIMD2, and SIMD3" >&2
     echo "  --git  only add/commit/push an existing trace directory; skip trace collection" >&2
@@ -55,7 +57,7 @@ validate_test_cmd() {
     fi
 }
 
-container_main() {
+collect_trace() {
     local kernel_name="$1"
     local output_dir_name="$2"
     local all_simd="$3"
@@ -90,10 +92,7 @@ container_main() {
     {
         echo "date: $(date -Is)"
         echo "host: $(hostname)"
-        echo "container: ${CONTAINER_NAME}"
         echo "pwd: $(pwd)"
-        echo "host_git_branch: ${HOST_GIT_BRANCH:-unknown}"
-        echo "host_git_commit: ${HOST_GIT_COMMIT:-unknown}"
         echo "HIP_VISIBLE_DEVICES: ${HIP_VISIBLE_DEVICES:-unset}"
         echo "requested kernel: ${kernel_name}"
         echo "capture all SIMDs: ${all_simd}"
@@ -347,49 +346,28 @@ YAML
     fi
 }
 
-if [[ "${1:-}" == "--inside-container" ]]; then
-    kernel_name="${2:-}"
-    output_dir_name="${3:-}"
-    TEST_CMD="${4:-}"
-    all_simd="${5:-0}"
-    if [[ "$#" -ne 5 ]]; then
-        usage
-        echo "--inside-container requires KERNEL_NAME, output-dir-name, TEST_CMD, and ALL_SIMD" >&2
-        exit 1
-    fi
-    if [[ "${all_simd}" != "0" && "${all_simd}" != "1" ]]; then
-        echo "ALL_SIMD must be 0 or 1" >&2
-        exit 1
-    fi
-    validate_kernel_name "${kernel_name}"
-    validate_output_dir_name "${output_dir_name}"
-    validate_test_cmd
-    container_main "${kernel_name}" "${output_dir_name}" "${all_simd}"
-    exit $?
-fi
-
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
 fi
 
-if [[ "$#" -lt 3 ]]; then
+if [[ "$#" -lt 2 ]]; then
     usage
     exit 1
 fi
 
 kernel_name="$1"
 output_dir_name="$2"
-TEST_CMD="$3"
 validate_kernel_name "${kernel_name}"
 validate_output_dir_name "${output_dir_name}"
 output_dir="${TRACE_ROOT}/${output_dir_name}"
 output_archive="${TRACE_ROOT}/${output_dir_name}.tar.gz"
-shift 3
+shift 2
 
 git_mode=0
 am_mode=0
 all_simd=0
+TEST_CMD=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --all-simd)
@@ -409,9 +387,14 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            usage
-            echo "Unknown option: $1" >&2
-            exit 1
+            if [[ -z "${TEST_CMD}" ]]; then
+                TEST_CMD="$1"
+                shift
+            else
+                usage
+                echo "Unexpected argument: $1" >&2
+                exit 1
+            fi
             ;;
     esac
 done
@@ -429,7 +412,7 @@ if [[ "${git_mode}" -eq 1 ]]; then
         exit 1
     fi
 
-    git -C "${REPO_ROOT}" add -f -- "${output_dir}"
+    git -C "${REPO_ROOT}" add -- "${output_dir}"
     if ! git -C "${REPO_ROOT}" diff --cached --quiet; then
         if [[ "${am_mode}" -eq 1 ]]; then
             git -C "${REPO_ROOT}" -c user.name=yanguahe -c user.email=yanguahe@amd.com \
@@ -447,31 +430,19 @@ if [[ "${git_mode}" -eq 1 ]]; then
     exit 0
 fi
 
-host_git_branch="not-requested"
-host_git_commit="not-requested"
-validate_test_cmd
-docker_env=(
-    -e workspace_dir="${workspace_dir}"
-    -e REPO_ROOT="${REPO_ROOT}"
-    -e CONTAINER_NAME="${CONTAINER_NAME}"
-    -e TRACE_ROOT="${TRACE_ROOT}"
-    -e SCRIPT_RELATIVE_PATH="${SCRIPT_RELATIVE_PATH}"
-    -e KERNEL_NAME="${kernel_name}"
-    -e OUTPUT_DIR_NAME="${output_dir_name}"
-    -e TEST_CMD="${TEST_CMD}"
-    -e ALL_SIMD="${all_simd}"
-    -e HOST_GIT_BRANCH="${host_git_branch}"
-    -e HOST_GIT_COMMIT="${host_git_commit}"
-    -e HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES}"
-)
+if [[ -z "${TEST_CMD}" ]]; then
+    usage
+    echo "TEST_CMD is required for trace collection" >&2
+    exit 1
+fi
 
+validate_test_cmd
 set +e
-docker exec -i "${docker_env[@]}" "${CONTAINER_NAME}" \
-    bash -lc 'cd "$REPO_ROOT" && bash "./$SCRIPT_RELATIVE_PATH" --inside-container "$KERNEL_NAME" "$OUTPUT_DIR_NAME" "$TEST_CMD" "$ALL_SIMD"'
+collect_trace "${kernel_name}" "${output_dir_name}" "${all_simd}"
 run_status=$?
 set -e
 
 echo "Trace collection complete; Git operations were not requested."
-echo "Run the same command with --git appended to commit the trace directory."
+echo "Run '${SCRIPT_RELATIVE_PATH} ${kernel_name} ${output_dir_name} --git' on the host to commit the trace directory."
 
 exit "${run_status}"

@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 workspace_dir="${workspace_dir:-/data/yanguahe/code/wk_sp1}"
 REPO_ROOT="${REPO_ROOT:-${workspace_dir}/aiter}"
-CONTAINER_NAME="${CONTAINER_NAME:-hyg_fyd1}"
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_RELATIVE_PATH="${SCRIPT_RELATIVE_PATH:-my_code/${SCRIPT_NAME}}"
 TRACE_ROOT="${TRACE_ROOT:-my_code}"
@@ -32,7 +31,9 @@ HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0}"
 
 usage() {
     echo "Usage: ${SCRIPT_NAME} <output-dir-name> [--git] [--am]" >&2
-    echo "  --git  only add/commit/push an existing .tar.gz; skip trace collection" >&2
+    echo "  Run without --git inside the ROCm container." >&2
+    echo "  Run with --git on the host after collection." >&2
+    echo "  --git  only add/commit/push an existing trace directory; skip trace collection" >&2
     echo "  --am   amend the current commit; requires --git" >&2
 }
 
@@ -47,7 +48,7 @@ validate_output_dir_name() {
     fi
 }
 
-container_main() {
+collect_trace() {
     local output_dir_name="$1"
     local output_dir="${TRACE_ROOT}/${output_dir_name}"
     local output_archive="${TRACE_ROOT}/${output_dir_name}.tar.gz"
@@ -79,10 +80,7 @@ container_main() {
     {
         echo "date: $(date -Is)"
         echo "host: $(hostname)"
-        echo "container: ${CONTAINER_NAME}"
         echo "pwd: $(pwd)"
-        echo "host_git_branch: ${HOST_GIT_BRANCH:-unknown}"
-        echo "host_git_commit: ${HOST_GIT_COMMIT:-unknown}"
         echo "HIP_VISIBLE_DEVICES: ${HIP_VISIBLE_DEVICES:-unset}"
         echo "gemm1 tile: ${AITER_TDM_TILE_M}x${AITER_TDM_TILE_N}x${AITER_TDM_TILE_K} nb=${AITER_TDM_NUM_BUFFERS}"
         echo "gemm2 tile: ${AITER_TDM_TILE_M2}x${AITER_TDM_TILE_N2}x${AITER_TDM_TILE_K2} nb=${AITER_TDM_NUM_BUFFERS2}"
@@ -509,11 +507,14 @@ YAML
     fi
 }
 
-if [[ "${1:-}" == "--inside-container" ]]; then
-    output_dir_name="${2:-}"
-    validate_output_dir_name "${output_dir_name}"
-    container_main "${output_dir_name}"
-    exit $?
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+if [[ "$#" -lt 1 ]]; then
+    usage
+    exit 1
 fi
 
 output_dir_name="${1:-}"
@@ -554,12 +555,12 @@ fi
 
 if [[ "${git_mode}" -eq 1 ]]; then
     export GIT_SSH_COMMAND='ssh -i /data/yanguahe/code/id_rsa.hyg -o IdentitiesOnly=yes'
-    if [[ ! -f "${REPO_ROOT}/${output_archive}" ]]; then
-        echo "Missing expected output archive: ${REPO_ROOT}/${output_archive}" >&2
+    if [[ ! -d "${REPO_ROOT}/${output_dir}" ]]; then
+        echo "Missing expected trace directory: ${REPO_ROOT}/${output_dir}" >&2
         exit 1
     fi
 
-    git -C "${REPO_ROOT}" add -f "${output_archive}"
+    git -C "${REPO_ROOT}" add -- "${output_dir}"
     if ! git -C "${REPO_ROOT}" diff --cached --quiet; then
         if [[ "${am_mode}" -eq 1 ]]; then
             git -C "${REPO_ROOT}" -c user.name=yanguahe -c user.email=yanguahe@amd.com \
@@ -577,36 +578,12 @@ if [[ "${git_mode}" -eq 1 ]]; then
     exit 0
 fi
 
-host_git_branch="not-requested"
-host_git_commit="not-requested"
-docker_env=(
-    -e workspace_dir="${workspace_dir}"
-    -e REPO_ROOT="${REPO_ROOT}"
-    -e CONTAINER_NAME="${CONTAINER_NAME}"
-    -e TRACE_ROOT="${TRACE_ROOT}"
-    -e SCRIPT_RELATIVE_PATH="${SCRIPT_RELATIVE_PATH}"
-    -e GEMM_TEST_CMD="${GEMM_TEST_CMD}"
-    -e HOST_GIT_BRANCH="${host_git_branch}"
-    -e HOST_GIT_COMMIT="${host_git_commit}"
-    -e AITER_TDM_TILE_M="${AITER_TDM_TILE_M}"
-    -e AITER_TDM_TILE_N="${AITER_TDM_TILE_N}"
-    -e AITER_TDM_TILE_K="${AITER_TDM_TILE_K}"
-    -e AITER_TDM_NUM_BUFFERS="${AITER_TDM_NUM_BUFFERS}"
-    -e AITER_TDM_TILE_M2="${AITER_TDM_TILE_M2}"
-    -e AITER_TDM_TILE_N2="${AITER_TDM_TILE_N2}"
-    -e AITER_TDM_TILE_K2="${AITER_TDM_TILE_K2}"
-    -e AITER_TDM_NUM_BUFFERS2="${AITER_TDM_NUM_BUFFERS2}"
-    -e AITER_TDM_WIDE_KSL="${AITER_TDM_WIDE_KSL}"
-    -e HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES}"
-)
-
 set +e
-docker exec -i "${docker_env[@]}" "${CONTAINER_NAME}" \
-    bash -lc "cd '${REPO_ROOT}' && bash './${SCRIPT_RELATIVE_PATH}' --inside-container '${output_dir_name}'"
+collect_trace "${output_dir_name}"
 run_status=$?
 set -e
 
 echo "Trace collection complete; Git operations were not requested."
-echo "Run '${SCRIPT_RELATIVE_PATH} ${output_dir_name} --git' separately to commit the archive."
+echo "Run '${SCRIPT_RELATIVE_PATH} ${output_dir_name} --git' on the host to commit the trace directory."
 
 exit "${run_status}"

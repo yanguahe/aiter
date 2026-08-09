@@ -30,6 +30,7 @@ import ctypes
 import hashlib
 import json
 import os
+import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,6 +115,7 @@ class Capture:
     out_ptr: int
     out_nbytes: int
     lds_bytes: int = 0
+    seed: int = 0
     tiles: dict[str, int] = field(default_factory=dict)
     reference: Any = field(default=None, repr=False)  # production tensor clone
 
@@ -127,6 +129,7 @@ class Capture:
             "out_ptr": self.out_ptr,
             "out_nbytes": self.out_nbytes,
             "lds_bytes": self.lds_bytes,
+            "seed": self.seed,
             "tiles": self.tiles,
         }
 
@@ -282,13 +285,20 @@ def _compare_outputs(reference, candidate) -> dict[str, Any]:
 
 def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                      experts: int = 384, topk: int = 6,
-                     model_dim: int = 7168, inter_dim: int = 768) -> Capture:
+                     model_dim: int = 7168, inter_dim: int = 768,
+                     seed: int = 0) -> Capture:
     """Run the production MoE path once and record the chosen kernel's args.
 
     Hooks flydsl's kernel launch rather than reimplementing the data prep, so
     the captured pointers are exactly what the real kernel receives.
     """
     import torch
+
+    seed = int(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
     os.environ.setdefault("ENABLE_CK", "0")
     os.environ.setdefault("AITER_FORCE_GFX1250", "1")
@@ -373,6 +383,7 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                 out_nbytes=0,
                 lds_bytes=arena_bytes(tile_m, tile_n, tile_k, num_buffers,
                                       m_warp, n_warp, a_is_fp4),
+                seed=seed,
                 tiles={"tile_m": tile_m, "tile_n": tile_n, "tile_k": tile_k,
                        "num_buffers": num_buffers, "m_warp": m_warp,
                        "n_warp": n_warp},
@@ -437,7 +448,7 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     # batched_gemm_mxfp4 imports launch_gemm_a8w4_tdm inside the function body,
     # so the module-level patch above is picked up on the next call.
     try:
-        _run_production_moe(tokens, experts, topk, model_dim, inter_dim)
+        _run_production_moe(tokens, experts, topk, model_dim, inter_dim, seed)
     finally:
         tdm_mod.launch_gemm_a8w4_tdm = real_launch
         bgm.flydsl_grouped_gemm_a8w4_masked = real_grouped
@@ -467,7 +478,7 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     return cap
 
 
-def _run_production_moe(tokens, experts, topk, model_dim, inter_dim):
+def _run_production_moe(tokens, experts, topk, model_dim, inter_dim, seed):
     """Drive one production MoE call with the standard bench shapes.
 
     Reuses the op_test's data prep (preshuffle, scales, routing) rather than
@@ -481,6 +492,7 @@ def _run_production_moe(tokens, experts, topk, model_dim, inter_dim):
         experts=experts, tokens=tokens, topk=topk, model_dim=model_dim,
         inter_dim=inter_dim, layout="gugu",
         activation=t.ActivationType.Silu,
+        seed=seed,
         # eager path (bench=False) so each stage launches once, unwrapped by a
         # CUDA graph -- the spy has to see a real dispatch.
         bench=False, iters=1, warmup=0, raise_on_fail=False,
@@ -819,11 +831,13 @@ def main(argv=None) -> int:
     p.add_argument("--topk", type=int, default=6)
     p.add_argument("--model-dim", type=int, default=7168)
     p.add_argument("--inter-dim", type=int, default=768)
+    p.add_argument("--seed", type=int, default=0,
+                   help="fixed input RNG seed (default: 0)")
     args = p.parse_args(argv)
 
     cap = capture_launches(args.which, tokens=args.tokens, experts=args.experts,
                            topk=args.topk, model_dim=args.model_dim,
-                           inter_dim=args.inter_dim)
+                           inter_dim=args.inter_dim, seed=args.seed)
 
     if args.command == "capture":
         report = cap.to_json()

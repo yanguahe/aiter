@@ -1,0 +1,3 @@
+# Keep ATT traces under my_code while ignoring profiler databases.
+!*.att
+*.db
