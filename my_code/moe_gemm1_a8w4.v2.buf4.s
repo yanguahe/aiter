@@ -981,9 +981,10 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	s_set_vgpr_msb 0x400
 	v_add_nc_u32_e32 v65, 0xc400, v0
 	s_barrier_wait -1
+	s_wait_alu depctr_va_vdst(0)
+	s_set_vgpr_msb 0x4000
 	v_add_nc_u32_e32 v67, 0xc400, v66
 	v_add_nc_u32_e32 v68, 0xc408, v66
-	s_wait_alu depctr_va_vdst(0)
 	s_set_vgpr_msb 64
 	ds_load_b128 v[8:11] /*v[264:267]*/, v64
 	ds_load_b128 v[12:15] /*v[268:271]*/, v64 offset:512
@@ -996,10 +997,11 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	s_set_vgpr_msb 0x4000
 	ds_load_2addr_b32 v[140:141], v65 offset0:128 offset1:144
 	ds_load_2addr_b32 v[144:145], v65 offset0:192 offset1:208
-	s_wait_alu depctr_va_vdst(3)
+	s_wait_alu depctr_va_vdst(1)
 	ds_load_2addr_b32 v[150:151], v67 offset1:1
-	s_wait_alu depctr_va_vdst(2)
+	s_wait_alu depctr_va_vdst(0)
 	ds_load_2addr_b32 v[148:149], v68 offset1:1
+	s_set_vgpr_msb 0x400
 	ds_load_b128 v[48:51], v124
 	ds_load_b128 v[52:55], v124 offset:32
 	ds_load_b128 v[56:59], v124 offset:64
@@ -1025,12 +1027,12 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	ds_load_b128 v[44:47] /*v[300:303]*/, v64 offset:5632
 	ds_load_b128 v[56:59] /*v[312:315]*/, v64 offset:7168
 	ds_load_b128 v[60:63] /*v[316:319]*/, v64 offset:7680
-	s_set_vgpr_msb 0x4000
-	ds_load_2addr_b32 v[136:137], v65 offset0:160 offset1:176
-	ds_load_2addr_b32 v[142:143], v65 offset0:224 offset1:240
 	s_wait_alu depctr_vm_vsrc(0)
+	s_set_vgpr_msb 0x4000
 	v_add_nc_u32_e32 v64, 0xc410, v66
 	v_add_nc_u32_e32 v66, 0xc418, v66
+	ds_load_2addr_b32 v[136:137], v65 offset0:160 offset1:176
+	ds_load_2addr_b32 v[142:143], v65 offset0:224 offset1:240
 	s_wait_alu depctr_va_vdst(1)
 	ds_load_2addr_b32 v[146:147], v64 offset1:1
 	s_wait_alu depctr_va_vdst(0)
