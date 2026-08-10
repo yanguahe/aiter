@@ -1,10 +1,10 @@
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
-	.globl	gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
+	.globl	moe_gemm1_a8w4
 	.p2align	8
-	.type	gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1,@function
-gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
+	.type	moe_gemm1_a8w4,@function
+moe_gemm1_a8w4:
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 0, 2), 2
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1
 	s_clause 0x1
@@ -3245,7 +3245,7 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	s_branch .LBB0_34
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
-	.amdhsa_kernel gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
+	.amdhsa_kernel moe_gemm1_a8w4
 		.amdhsa_group_segment_fixed_size 0
 		.amdhsa_private_segment_fixed_size 0
 		.amdhsa_kernarg_size 104
@@ -3288,18 +3288,18 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	.end_amdhsa_kernel
 	.text
 .Lfunc_end0:
-	.size	gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1, .Lfunc_end0-gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
+	.size	moe_gemm1_a8w4, .Lfunc_end0-moe_gemm1_a8w4
 
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.num_vgpr, 346
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.num_agpr, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.numbered_sgpr, 88
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.num_named_barrier, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.private_seg_size, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.uses_vcc, 1
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.uses_flat_scratch, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.has_dyn_sized_stack, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.has_recursion, 0
-	.set gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.has_indirect_call, 0
+	.set moe_gemm1_a8w4.num_vgpr, 346
+	.set moe_gemm1_a8w4.num_agpr, 0
+	.set moe_gemm1_a8w4.numbered_sgpr, 88
+	.set moe_gemm1_a8w4.num_named_barrier, 0
+	.set moe_gemm1_a8w4.private_seg_size, 0
+	.set moe_gemm1_a8w4.uses_vcc, 1
+	.set moe_gemm1_a8w4.uses_flat_scratch, 0
+	.set moe_gemm1_a8w4.has_dyn_sized_stack, 0
+	.set moe_gemm1_a8w4.has_recursion, 0
+	.set moe_gemm1_a8w4.has_indirect_call, 0
 	.p2alignl 7, 3214868480
 	.fill 96, 4, 3214868480
 	.section	.AMDGPU.gpr_maximums,"",@progbits
@@ -3370,7 +3370,7 @@ amdhsa.kernels:
     .kernarg_segment_align: 8
     .kernarg_segment_size: 104
     .max_flat_workgroup_size: 128
-    .name:           gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
+    .name:           moe_gemm1_a8w4
     .private_segment_fixed_size: 0
     .reqd_workgroup_size:
       - 128
@@ -3378,7 +3378,7 @@ amdhsa.kernels:
       - 1
     .sgpr_count:     90
     .sgpr_spill_count: 0
-    .symbol:         gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1.kd
+    .symbol:         moe_gemm1_a8w4.kd
     .uniform_work_group_size: 1
     .uses_dynamic_stack: false
     .vgpr_count:     346
