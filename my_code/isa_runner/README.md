@@ -175,6 +175,10 @@ gemm2` selects the no-activation production dispatch and applies the same flow;
 the candidate ISA must match the selected kernel's signature and launch shape.
 Input generation uses a fixed seed (`--seed 0` by default), applied to Python,
 torch, and all CUDA/HIP device generators before the production MoE setup.
+Production route mapping normally assigns each expert's row slots with GPU
+atomics, whose within-expert ordering may change across runs. Pass
+`--deterministic-route-map` to replace that preprocessing step with a
+token-major deterministic route map while keeping the same GEMM launch.
 
 ### The production kernel is the reference
 
@@ -193,10 +197,12 @@ are checked: production-written positions still poisoned by the candidate are
 reported as `missing_writes`, and candidate writes in production padding are
 reported as `unexpected_writes`; either condition fails the run.
 
-The report also includes `output_hash`: SHA256 values for the production and
-ISA outputs over their complete raw tensor bytes, including poison padding.
-`match=true` therefore means exact byte equality, while the existing `passed`
-field remains the numerical correctness gate.
+The report also includes `output_hash`. By default it restores valid GEMM rows
+to token-major order, sorts each token's top-k slots by expert id, and hashes
+that canonical byte stream, so the main hash is stable across atomic route-row
+permutations. `--no-canonical-hash` restores the old full-physical-buffer hash.
+Both physical hashes are always reported as `physical_*`; `passed` remains the
+numerical correctness gate.
 
 ### Gotchas the adapter handles
 

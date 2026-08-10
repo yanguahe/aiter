@@ -116,6 +116,8 @@ class Capture:
     out_nbytes: int
     lds_bytes: int = 0
     seed: int = 0
+    deterministic_route_map: bool = False
+    deterministic_route_map_applied: bool = False
     tiles: dict[str, int] = field(default_factory=dict)
     reference: Any = field(default=None, repr=False)  # production tensor clone
 
@@ -130,6 +132,8 @@ class Capture:
             "out_nbytes": self.out_nbytes,
             "lds_bytes": self.lds_bytes,
             "seed": self.seed,
+            "deterministic_route_map": self.deterministic_route_map,
+            "deterministic_route_map_applied": self.deterministic_route_map_applied,
             "tiles": self.tiles,
         }
 
@@ -219,6 +223,38 @@ def _tensor_sha256(tensor) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _canonical_route_sha256(tensor, route_rows, route_experts) -> str:
+    """Hash valid route rows in token-major, expert-sorted canonical order."""
+    import torch
+
+    if route_rows is None or route_experts is None:
+        raise IsaRunnerError(
+            "canonical output hash requires captured route rows and expert ids"
+        )
+    if route_rows.shape != route_experts.shape:
+        raise IsaRunnerError(
+            f"route shape mismatch: rows={tuple(route_rows.shape)}, "
+            f"experts={tuple(route_experts.shape)}"
+        )
+    if tensor.ndim < 2:
+        raise IsaRunnerError(
+            f"canonical output hash requires a row-major tensor, got {tensor.shape}"
+        )
+
+    order = torch.argsort(route_experts.to(torch.int64), dim=-1, stable=True)
+    canonical_rows = torch.gather(route_rows.to(torch.int64), -1, order).reshape(-1)
+    flat = tensor.detach().reshape(-1, tensor.shape[-1])
+    if canonical_rows.numel():
+        lo = int(canonical_rows.min().item())
+        hi = int(canonical_rows.max().item())
+        if lo < 0 or hi >= flat.shape[0]:
+            raise IsaRunnerError(
+                f"canonical route row out of range: [{lo}, {hi}] vs {flat.shape[0]}"
+            )
+    canonical = flat.index_select(0, canonical_rows)
+    return _tensor_sha256(canonical)
+
+
 def _compare_outputs(reference, candidate) -> dict[str, Any]:
     """Compare production and candidate outputs with poison-aware padding."""
     import torch
@@ -286,7 +322,8 @@ def _compare_outputs(reference, candidate) -> dict[str, Any]:
 def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                      experts: int = 384, topk: int = 6,
                      model_dim: int = 7168, inter_dim: int = 768,
-                     seed: int = 0) -> Capture:
+                     seed: int = 0,
+                     deterministic_route_map: bool = False) -> Capture:
     """Run the production MoE path once and record the chosen kernel's args.
 
     Hooks flydsl's kernel launch rather than reimplementing the data prep, so
@@ -321,8 +358,39 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     # the wrapper, which still has them as tensors.
     keepalive: list[Any] = []
     from aiter.ops.flydsl import batched_gemm_mxfp4 as bgm
+    from aiter.ops.flydsl import grouped_moe_gfx1250 as grouped_mod
+    from aiter.ops.flydsl import moe_kernels as moe_kernels_mod
 
     real_grouped = bgm.flydsl_grouped_gemm_a8w4_masked
+    real_route = moe_kernels_mod.flydsl_moe_topids_to_rows
+    real_psum_remap = grouped_mod.contiguous_psum_remap
+    route_state: dict[str, Any] = {
+        "experts": None,
+        "rows": None,
+        "deterministic_applied": False,
+    }
+
+    def route_spy(topk_ids, E, max_m, **kwargs):
+        route_state["experts"] = topk_ids.detach().clone()
+        deterministic_supported = (
+            deterministic_route_map
+            and kwargs.get("g2l_lut") is None
+            and kwargs.get("expert_mask") is None
+            and kwargs.get("num_local_tokens") is None
+        )
+        if deterministic_supported:
+            topids_to_rows, _rows_to_tokens, masked_m = (
+                grouped_mod._build_route_maps_naive(topk_ids, int(E), int(max_m))
+            )
+            route_state["deterministic_applied"] = True
+            return masked_m, topids_to_rows
+        return real_route(topk_ids, E, max_m, **kwargs)
+
+    def psum_remap_spy(masked_m, topids_to_rows, *args, **kwargs):
+        result = real_psum_remap(masked_m, topids_to_rows, *args, **kwargs)
+        torch.cuda.synchronize(topids_to_rows.device)
+        route_state["rows"] = topids_to_rows.detach().clone()
+        return result
 
     def grouped_spy(out, a, w, a_scales, w_scales, m_tile_map, **kw):
         keepalive.extend([out, a, w, a_scales, w_scales, m_tile_map,
@@ -384,12 +452,18 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                 lds_bytes=arena_bytes(tile_m, tile_n, tile_k, num_buffers,
                                       m_warp, n_warp, a_is_fp4),
                 seed=seed,
+                deterministic_route_map=bool(deterministic_route_map),
+                deterministic_route_map_applied=bool(
+                    route_state["deterministic_applied"]
+                ),
                 tiles={"tile_m": tile_m, "tile_n": tile_n, "tile_k": tile_k,
                        "num_buffers": num_buffers, "m_warp": m_warp,
                        "n_warp": n_warp},
             )
             record._out_tensor = out_tensor
             record.out_nbytes = out_tensor.numel() * out_tensor.element_size()
+            record._route_rows = route_state["rows"]
+            record._route_experts = route_state["experts"]
             launch_kw = dict(kw)
 
             def production_launch():
@@ -445,6 +519,8 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
 
     tdm_mod.launch_gemm_a8w4_tdm = spy
     bgm.flydsl_grouped_gemm_a8w4_masked = grouped_spy
+    moe_kernels_mod.flydsl_moe_topids_to_rows = route_spy
+    grouped_mod.contiguous_psum_remap = psum_remap_spy
     # batched_gemm_mxfp4 imports launch_gemm_a8w4_tdm inside the function body,
     # so the module-level patch above is picked up on the next call.
     try:
@@ -452,6 +528,8 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     finally:
         tdm_mod.launch_gemm_a8w4_tdm = real_launch
         bgm.flydsl_grouped_gemm_a8w4_masked = real_grouped
+        moe_kernels_mod.flydsl_moe_topids_to_rows = real_route
+        grouped_mod.contiguous_psum_remap = real_psum_remap
 
     if not records:
         raise IsaRunnerError(f"no {which} launch captured")
@@ -709,7 +787,8 @@ def _benchmark_dispatch(
 def replay(cap: Capture, isa_source: str | Path, *, kernel: str | None = None,
            device: int = 0, lds_bytes: int | None = None,
            iters: int = 0, warmup: int = 20,
-           flush_l2: bool = True) -> dict:
+           flush_l2: bool = True,
+           canonical_hash: bool = True) -> dict:
     """Launch *isa_source* with the captured arguments.
 
     The reference is the selected production output cloned immediately after
@@ -751,16 +830,37 @@ def replay(cap: Capture, isa_source: str | Path, *, kernel: str | None = None,
         got = live.detach().clone()
         torch.cuda.synchronize(live.device)
         report.update(_compare_outputs(cap.reference, got))
-        production_sha256 = _tensor_sha256(cap.reference)
-        isa_sha256 = _tensor_sha256(got)
+        physical_production_sha256 = _tensor_sha256(cap.reference)
+        physical_isa_sha256 = _tensor_sha256(got)
+        if canonical_hash:
+            route_rows = getattr(cap, "_route_rows", None)
+            route_experts = getattr(cap, "_route_experts", None)
+            production_sha256 = _canonical_route_sha256(
+                cap.reference, route_rows, route_experts
+            )
+            isa_sha256 = _canonical_route_sha256(
+                got, route_rows, route_experts
+            )
+            hash_scope = "valid_route_rows_token_major_expert_sorted"
+        else:
+            production_sha256 = physical_production_sha256
+            isa_sha256 = physical_isa_sha256
+            hash_scope = "full_tensor_raw_bytes_including_poison_padding"
         report["output_hash"] = {
             "algorithm": "sha256",
-            "scope": "full_tensor_raw_bytes_including_poison_padding",
+            "scope": hash_scope,
+            "canonical": bool(canonical_hash),
             "production_kernel": cap.kernel,
             "production_sha256": production_sha256,
             "isa_kernel": name,
             "isa_sha256": isa_sha256,
             "match": production_sha256 == isa_sha256,
+            "physical_scope": "full_tensor_raw_bytes_including_poison_padding",
+            "physical_production_sha256": physical_production_sha256,
+            "physical_isa_sha256": physical_isa_sha256,
+            "physical_match": (
+                physical_production_sha256 == physical_isa_sha256
+            ),
         }
 
         if iters:
@@ -833,11 +933,24 @@ def main(argv=None) -> int:
     p.add_argument("--inter-dim", type=int, default=768)
     p.add_argument("--seed", type=int, default=0,
                    help="fixed input RNG seed (default: 0)")
+    p.add_argument(
+        "--deterministic-route-map",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="replace atomic route slots with deterministic token-major slots",
+    )
+    p.add_argument(
+        "--canonical-hash",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="hash valid route rows in canonical order (default: enabled)",
+    )
     args = p.parse_args(argv)
 
     cap = capture_launches(args.which, tokens=args.tokens, experts=args.experts,
                            topk=args.topk, model_dim=args.model_dim,
-                           inter_dim=args.inter_dim, seed=args.seed)
+                           inter_dim=args.inter_dim, seed=args.seed,
+                           deterministic_route_map=args.deterministic_route_map)
 
     if args.command == "capture":
         report = cap.to_json()
@@ -848,7 +961,8 @@ def main(argv=None) -> int:
         report = replay(cap, args.isa, kernel=args.kernel,
                         lds_bytes=args.lds_bytes, iters=args.iters,
                         warmup=args.warmup,
-                        flush_l2=not args.no_flush_l2)
+                        flush_l2=not args.no_flush_l2,
+                        canonical_hash=args.canonical_hash)
 
     text = json.dumps(report, indent=2)
     print(text)

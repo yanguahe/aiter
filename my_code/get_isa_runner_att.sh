@@ -12,7 +12,7 @@ usage() {
     echo "Collect inside container:" >&2
     echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> <TEST_CMD> [--all-simd]" >&2
     echo "Commit on host:" >&2
-    echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> --git [--am]" >&2
+    echo "  ${SCRIPT_NAME} <output-dir-name> --git [--am]" >&2
     echo "Example: bash my_code/${SCRIPT_NAME} moe_gemm1_a8w4 isa_runner_att 'python my_code/isa_runner/tdm_adapter.py replay --which gemm1 --iters 100 --isa ./my_code/moe_gemm1_a8w4.v0.s'" >&2
     echo "  --all-simd  run four ATT captures for SIMD0, SIMD1, SIMD2, and SIMD3" >&2
     echo "  --git  only add/commit/push an existing trace directory; skip trace collection" >&2
@@ -351,61 +351,45 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-if [[ "$#" -lt 2 ]]; then
-    usage
-    exit 1
-fi
-
-kernel_name="$1"
-output_dir_name="$2"
-validate_kernel_name "${kernel_name}"
-validate_output_dir_name "${output_dir_name}"
-output_dir="${TRACE_ROOT}/${output_dir_name}"
-output_archive="${TRACE_ROOT}/${output_dir_name}.tar.gz"
-shift 2
-
-git_mode=0
-am_mode=0
-all_simd=0
-TEST_CMD=""
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --all-simd)
-            all_simd=1
-            shift
-            ;;
-        --git)
-            git_mode=1
-            shift
-            ;;
-        --am)
-            am_mode=1
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            if [[ -z "${TEST_CMD}" ]]; then
-                TEST_CMD="$1"
-                shift
-            else
-                usage
-                echo "Unexpected argument: $1" >&2
-                exit 1
-            fi
-            ;;
-    esac
+git_requested=0
+for arg in "$@"; do
+    if [[ "${arg}" == "--git" ]]; then
+        git_requested=1
+    fi
 done
 
-if [[ "${am_mode}" -eq 1 && "${git_mode}" -ne 1 ]]; then
-    usage
-    echo "--am requires --git" >&2
-    exit 1
-fi
+if [[ "${git_requested}" -eq 1 ]]; then
+    if [[ "$#" -lt 2 ]]; then
+        usage
+        exit 1
+    fi
+    output_dir_name="$1"
+    validate_output_dir_name "${output_dir_name}"
+    output_dir="${TRACE_ROOT}/${output_dir_name}"
+    shift
 
-if [[ "${git_mode}" -eq 1 ]]; then
+    am_mode=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --git)
+                shift
+                ;;
+            --am)
+                am_mode=1
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                usage
+                echo "Unexpected argument in --git mode: $1" >&2
+                exit 1
+                ;;
+        esac
+    done
+
     export GIT_SSH_COMMAND='ssh -i /data/yanguahe/code/id_rsa.hyg -o IdentitiesOnly=yes'
     if [[ ! -d "${REPO_ROOT}/${output_dir}" ]]; then
         echo "Missing expected trace directory: ${REPO_ROOT}/${output_dir}" >&2
@@ -430,11 +414,37 @@ if [[ "${git_mode}" -eq 1 ]]; then
     exit 0
 fi
 
-if [[ -z "${TEST_CMD}" ]]; then
+if [[ "$#" -lt 3 ]]; then
     usage
     echo "TEST_CMD is required for trace collection" >&2
     exit 1
 fi
+
+kernel_name="$1"
+output_dir_name="$2"
+TEST_CMD="$3"
+validate_kernel_name "${kernel_name}"
+validate_output_dir_name "${output_dir_name}"
+shift 3
+
+all_simd=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --all-simd)
+            all_simd=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            echo "Unexpected collection argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
 
 validate_test_cmd
 set +e
@@ -443,6 +453,6 @@ run_status=$?
 set -e
 
 echo "Trace collection complete; Git operations were not requested."
-echo "Run '${SCRIPT_RELATIVE_PATH} ${kernel_name} ${output_dir_name} --git' on the host to commit the trace directory."
+echo "Run '${SCRIPT_RELATIVE_PATH} ${output_dir_name} --git' on the host to commit the trace directory."
 
 exit "${run_status}"

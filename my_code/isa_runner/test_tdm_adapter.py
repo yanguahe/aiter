@@ -14,6 +14,7 @@ except ModuleNotFoundError:
 import tdm_adapter as adapter
 from tdm_adapter import (
     _POISON,
+    _canonical_route_sha256,
     _compare_outputs,
     _find_output_tensor,
     _flydsl_timer_enabled,
@@ -40,6 +41,13 @@ class TdmAdapterInterfaceTest(unittest.TestCase):
         seed = inspect.signature(capture_launches).parameters["seed"]
 
         self.assertEqual(seed.default, 0)
+
+    def test_route_and_hash_modes_have_safe_defaults(self):
+        capture_parameters = inspect.signature(capture_launches).parameters
+        replay_parameters = inspect.signature(replay).parameters
+
+        self.assertFalse(capture_parameters["deterministic_route_map"].default)
+        self.assertTrue(replay_parameters["canonical_hash"].default)
 
     def test_replay_enables_l2_flush_for_opt_in_flydsl_timer(self):
         parameters = inspect.signature(replay).parameters
@@ -91,6 +99,21 @@ class TdmAdapterInterfaceTest(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "PyTorch is not installed")
 class TdmAdapterHelpersTest(unittest.TestCase):
+    def test_canonical_hash_ignores_route_row_and_topk_slot_order(self):
+        output_a = torch.tensor([100.0, 200.0, 300.0, 400.0]).view(1, 4, 1)
+        rows_a = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+        experts_a = torch.tensor([[2, 1], [2, 1]], dtype=torch.int32)
+
+        output_b = torch.tensor([300.0, 100.0, 400.0, 200.0]).view(1, 4, 1)
+        rows_b = torch.tensor([[3, 1], [2, 0]], dtype=torch.int32)
+        experts_b = torch.tensor([[1, 2], [1, 2]], dtype=torch.int32)
+
+        self.assertNotEqual(_tensor_sha256(output_a), _tensor_sha256(output_b))
+        self.assertEqual(
+            _canonical_route_sha256(output_a, rows_a, experts_a),
+            _canonical_route_sha256(output_b, rows_b, experts_b),
+        )
+
     def test_tensor_sha256_compares_exact_raw_bytes(self):
         positive_zero = torch.tensor([0.0], dtype=torch.float32)
         negative_zero = torch.tensor([-0.0], dtype=torch.float32)
