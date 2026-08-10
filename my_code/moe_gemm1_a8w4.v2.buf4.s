@@ -982,7 +982,7 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	v_add_nc_u32_e32 v65, 0xc400, v0
 	s_barrier_wait -1
 	s_wait_alu depctr_va_vdst(0)
-	s_set_vgpr_msb 0x4000
+	s_set_vgpr_msb 0
 	v_add_nc_u32_e32 v67, 0xc400, v66
 	v_add_nc_u32_e32 v68, 0xc408, v66
 	s_set_vgpr_msb 64
@@ -1001,7 +1001,7 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	ds_load_2addr_b32 v[150:151], v67 offset1:1
 	s_wait_alu depctr_va_vdst(0)
 	ds_load_2addr_b32 v[148:149], v68 offset1:1
-	s_set_vgpr_msb 0x400
+	s_set_vgpr_msb 0
 	ds_load_b128 v[48:51], v124
 	ds_load_b128 v[52:55], v124 offset:32
 	ds_load_b128 v[56:59], v124 offset:64
@@ -1056,7 +1056,7 @@ gemm_a8w4_tdm_t64x256x256_w1x4_b4_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1:
 	s_delay_alu instid0(SALU_CYCLE_1)
 	tensor_load_to_lds s[80:83], s[36:43]
 .LBB0_39:
-	s_wait_alu depctr_vm_vsrc(3)
+	s_wait_alu depctr_vm_vsrc(1)
 	s_set_vgpr_msb 4
 	v_add_nc_u32_e32 v64, s58, v88 /*v344*/
 	s_and_b32 vcc_lo, exec_lo, s4
