@@ -1,0 +1,16 @@
+ground	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/ground.json
+wait0_moved_keep_wait11	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/wait0_moved_keep_wait11.json
+delete_wait11_full_wait0	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/delete_wait11_full_wait0.json
+reorder_full_wait0	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/reorder_full_wait0.json
+target_waitcnt0	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/target_waitcnt0.json
+target_waitcnt4	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/target_waitcnt4.json
+target_waitcnt8	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/target_waitcnt8.json
+target_waitcnt12	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/target_waitcnt12.json
+target_waitcnt16	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/target_waitcnt16.json
+modefix_only	3	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_only.json
+vm1_only	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/vm1_only.json
+modefix_vm1_full	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_vm1_full.json
+modefix_vm1_wait0	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_vm1_wait0.json
+modefix_vm1_wait4	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_vm1_wait4.json
+modefix_vm1_wait8	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_vm1_wait8.json
+modefix_vm1_wait12	0	/data/yanguahe/code/wk_sp1/aiter/my_code/b4_pipeline_debug_results/reports/modefix_vm1_wait12.json
