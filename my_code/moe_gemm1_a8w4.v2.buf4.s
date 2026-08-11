@@ -894,7 +894,6 @@ moe_gemm1_a8w4:
 	s_mov_b32 s11, 0x407fff
 	s_branch .LBB0_36
 .LBB0_35:
-	s_wait_dscnt 0xc
 	s_wait_alu depctr_va_vdst(0) depctr_vm_vsrc(0)
 	ds_load_b128 v[64:67], v124 offset:128
 	ds_load_b128 v[68:71], v124 offset:160
@@ -913,6 +912,7 @@ moe_gemm1_a8w4:
 	ds_load_b128 v[120:123], v124 offset:13248
 	s_wait_alu depctr_vm_vsrc(0)
 	ds_load_b128 v[124:127], v124 offset:13280
+	s_wait_dscnt 0x1c
 	s_set_vgpr_msb 1
 	v_wmma_scale_f32_16x16x128_f8f6f4 v[128:135], v[8:15] /*v[264:271]*/, v[48:63], v[128:135], v140, v150 matrix_a_fmt:MATRIX_FMT_FP4
 	s_set_vgpr_msb 0x151

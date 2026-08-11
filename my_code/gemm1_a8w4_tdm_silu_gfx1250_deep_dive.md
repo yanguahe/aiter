@@ -15,6 +15,7 @@
   - [1.4 Full kernel-relative PC phase map](#sec-1-4-full-kernel-relative-pc-phase-map)
   - [1.5 Dynamic LDS arena and two-buffer ring](#sec-1-5-dynamic-lds-arena-and-two-buffer-ring)
   - [1.6 TDM descriptors and exact tensor instructions](#sec-1-6-tdm-descriptors-and-exact-tensor-instructions)
+    - [1.6.1 tile_m=64 wave-specialized TDM load partition](#sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition)
   - [1.7 Prologue, 27 steady iterations, and drain](#sec-1-7-prologue-27-steady-iterations-and-drain)
   - [1.8 Waits, barriers, and scheduling boundaries](#sec-1-8-waits-barriers-and-scheduling-boundaries)
   - [1.9 VOP3PX2 WMMAScale and hardware operand swap](#sec-1-9-vop3px2-wmmascale-and-hardware-operand-swap)
@@ -42,11 +43,15 @@
 
 <!-- markdown-toc-generator:end -->
 
-本文只分析下面这一份 **GEMM1** 编译实例：
+本文主体只分析下面这一份 **GEMM1** 编译实例：
 
 ```text
 gemm_a8w4_tdm_t16x256x256_w1x4_b2_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
 ```
+
+唯一的独立 scope 是[第 1.6.1 节](#sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition)：
+它专门按当前前端解释 `tile_m=64`、`b3/b4` 目标的 wave-specialized TDM 分工，不把
+`t16/b2` dump 的 PC、resource usage 或动态计数外推到该目标。
 
 它是 gfx1250 grouped MoE stage-1 的 A8W4 gate/up projection：输入 activation 为
 MXFP8 E4M3，weight 为 MXFP4 E2M1，A/B 两侧都使用 block-32 E8M0 scale；计算完成后在
@@ -79,6 +84,7 @@ FP32 accumulator 上加 BF16 bias，按 GUGU 相邻列做 clamp 和
 | `aiter/aiter/fused_moe.py` | public `fused_moe_` 到 grouped gfx1250 path 的 dispatch |
 | `aiter/op_tests/test_flydsl_grouped_gemm_gfx1250.py` | workload 构造、balanced routing、weight/scale shuffle、reference |
 | `aiter/my_code/run_gemm.log` | 本次编译日志、逻辑 arena 打印、correctness/perf 上下文 |
+| `aiter/my_code/gemm1_a8w4.v1.f01-2.att/thread_trace/kernel/rpf_v3/` | `tile_m=64` b3 ATT；只用于第 1.6.1 节的 wave 到达时序推断，不替代前端 shape 公式 |
 | `C:/Users/yanguahe/Documents/code/llm-wiki/mi400_hw_wiki/raw/papers/mi400_hd_txt/architecture/subsystem/SH/MI400_Shader_Programming#65.txt` | GFX12 TDM、WMMA block-scale、VOP3PX2、packed convert 的硬件语义参考 |
 
 **MI400 guide 适用性声明。** 该 guide 明确描述 MI450-B0/MI400 家族，而本 kernel target
@@ -758,7 +764,9 @@ buffer0。
 <a id="sec-1-6-tdm-descriptors-and-exact-tensor-instructions"></a>
 ### 1.6 TDM descriptors and exact tensor instructions
 
-FlyDSL 建立四个 2D TDM load job：
+对本文主体的 `t16/b2` dump，FlyDSL 建立四个 all-wave cooperative 2D TDM load job。
+这与 `tile_m=64` 时拆成 8 个 wave-specific jobs 的路径不同；后者单列在
+[第 1.6.1 节](#sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition)。
 
 | Job | GM view | GM outer stride | LDS offset/shape/stride | K-tile immediate advance |
 |---|---|---:|---|---:|
@@ -814,6 +822,143 @@ MI400 guide §4.10（printed p.197 onward）提供三个有用、但需带 gfx12
 - tensor op 不按 lane 执行、忽略 EXEC；因此本 kernel 的 expert branch 必须 workgroup-uniform。
 - tensor load/store 由 `TENSORcnt` 追踪，wave 内 tensor ops 保序，不同 wave 之间不保序。
 - TDM 可与 shader 指令并行，且可在 LDS 中按规则插入 padding。
+
+<a id="sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition"></a>
+#### 1.6.1 tile_m=64 wave-specialized TDM load partition
+
+本小节只讨论当前前端
+`aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm.py` 的目标配置：
+
+```text
+tile_m=64, tile_n=256, tile_k=256
+m_warp=1, n_warp=4, A=MXFP8, K=7168
+num_waves=1*4=4, wave size=32, block=128 threads
+```
+
+其中 `WAVE=32`、`num_waves` 和 `block` 来自前端第 99–110 行。前端第 181–188 行把
+`wave` 定义为 `readfirstlane(tid // 32)`；因此下文的 wave0..3 是 **workgroup 内的
+logical wave ID**，不是物理 SIMD 编号。某次 ATT 中的 logical-wave→SIMD 映射只对该次
+调度有效，不能反向写成固定硬件映射。这 4 个 logical waves 属于同一个 128-thread
+workgroup，并调度到同一 WGP；“一个 WGP 的 4 个 wave”在本节只表示这组 software
+wave IDs，不表示 wave0..3 分别固定绑定 physical SIMD0..3。
+
+该配置在前端第 265–274 行得到：
+
+```python
+# mxfp4_preshuffle_gfx1250_tdm.py:265-274
+WS8 = num_waves >= 8
+WAVE_SPEC = num_waves >= 4 and tile_m >= 64 and tile_n >= 64
+if const_expr(WAVE_SPEC):
+    waves = [(0, 1), (2, 3), (4, 5) if WS8 else (0, 1), (6, 7) if WS8 else (2, 3)]
+    nw = 1
+```
+
+故这里 `WAVE_SPEC=true`、`WS8=false`：
+
+```text
+waves = [(0,1), (2,3), (0,1), (2,3)]
+nw    = 1
+```
+
+`add_tdm_loads()` 在第 280–287 行以
+`seg = outer // len(wv)` 平分 outer 维，为 `wv` 中每个 logical wave 建立一个
+`num_warps=nw=1` 的 job。第 289–296 行的调用顺序是：
+
+```python
+# mxfp4_preshuffle_gfx1250_tdm.py:289-296
+add_tdm_loads(gA_base, a_off0, A_KROW, mn_oob, A_ROW_B, tile_m,
+              on_i32=False, lds_off=0, lds_row=A_LDS_ROW, k_adv=A_ROW_B, wv=waves[0], pad=(A_ROW_B, LDS_PAD_A))
+add_tdm_loads(gB_base, b_off0, Kp16, None, PACK_TK * 16, tile_n // 16,
+              on_i32=False, lds_off=STAGE_A, lds_row=B_LDS_ROW, k_adv=PACK_TK * 16, wv=waves[1])
+add_tdm_loads(gSA_base, (blk_m64 // wmma_m_rep) * AS_ROW, AS_ROW, None, AS_INNER, AS_SUPERS,
+              on_i32=True, lds_off=SA_OFF // 4, lds_row=AS_INNER, k_adv=AS_INNER * 4, wv=waves[2])
+add_tdm_loads(gSB_base, sb_off0, SB_OUTER_STRIDE, None, SC_INNER, SB_SUPERS,
+              on_i32=True, lds_off=SB_OFF // 4, lds_row=SC_INNER, k_adv=SC_INNER * 4, wv=waves[3])
+```
+
+四个调用依次把 A→wave0/1、B→wave2/3、SA→wave0/1、SB→wave2/3。未切分的
+full shape、实际 per-wave job shape 和 global payload 如下；B 是 preshuffled packed-FP4
+的物理 byte view，不是 2,048 个 FP4 数值。
+
+| Call order | Tensor -> logical waves | Full K-tile aggregate shape | Per-wave TDM job shape | Global payload / wave |
+|---:|---|---|---|---:|
+| 1 | A -> wave0/1 | `[64,256]` FP8/uint8 = 16,384 B | `[32,256]` FP8/uint8 | 8,192 B |
+| 2 | B -> wave2/3 | `[16,2048]` uint8 = 32,768 B | `[8,2048]` uint8 | 16,384 B |
+| 3 | SA -> wave0/1 | `[16,8]` int32 = 512 B | `[8,8]` int32 | 256 B |
+| 4 | SB -> wave2/3 | `[8,64]` int32 = 2,048 B | `[4,64]` int32 | 1,024 B |
+
+这里 `wmma_m_rep=(64/1)/16=4`，所以
+`AS_SUPERS=64/4=16`、`AS_INNER=(256/128)*4=8`；同时
+`PACK_TK=128`、`SB_SUPERS=256/32=8`、`SC_INNER=256/4=64`。这些公式分别来自
+前端第 99–130 行。SA/SB shape 与 stride 中的单位是 **int32**：一个 int32 只是
+bit-pack 了 4 个连续 E8M0 scale bytes，并非 4 个 int32 scale，所以上表 byte 数均需
+乘 4。
+
+完整 `K=7168` 下，global/LDS row stride 由前端第 176–179、219–225、289–296 行确定：
+
+| Tensor | Global outer-row stride | LDS row stride / padding | Per-wave LDS span |
+|---|---:|---:|---:|
+| A | `A_KROW=7168` uint8 = 7,168 B | 272 B = 256 useful + 16 B pad | `32*272=8,704 B` |
+| B | `Kp16=(7168/2)*16=57344` uint8 = 57,344 B | 2,048 B, no pad | 16,384 B |
+| SA | `AS_ROW=(7168/128)*4=224` int32 = 896 B | 8 int32 = 32 B, no pad | 256 B |
+| SB | `K4=7168/4=1792` int32 = 7,168 B | 64 int32 = 256 B, no pad | 1,024 B |
+
+前端第 298–309 行解释了为什么每个 logical wave 只真正 issue 自己的两个 jobs：
+
+```python
+# mxfp4_preshuffle_gfx1250_tdm.py:301-309
+for j in jobs:
+    ...
+    if const_expr(j.wave is None):
+        fx.copy(j.atom, j.gt, dst, imm_offset=off)
+    else:
+        if wave == j.wave:
+            fx.copy(j.atom, j.gt, dst, imm_offset=off)
+```
+
+在本 `WAVE_SPEC` 路径中，8 个 `j.wave` 都是 0..3，而不是 `None`；所有 wave 虽然
+展开同一个 `jobs` list，只有 `wave == j.wave` 的 wave 执行相应 `fx.copy`。按 jobs
+建立顺序，每个 K tile 的动态分工如下；所有 row/N 范围都相对当前 tile base：
+
+| Logical wave | Jobs in issue order | Global payload |
+|---:|---|---:|
+| 0 | A rows `0..31` + SA outer rows `0..7` | `8192+256=8,448 B` |
+| 1 | A rows `32..63` + SA outer rows `8..15` | `8192+256=8,448 B` |
+| 2 | B physical outer rows `0..7` / N `0..127` + SB super-rows `0..3` | `16384+1024=17,408 B` |
+| 3 | B physical outer rows `8..15` / N `128..255` + SB super-rows `4..7` | `16384+1024=17,408 B` |
+
+这也与前端第 466 行的 `TDM_PER=(1 if WS8 else 2)=2` 一致。所以每个 wave 每个
+K tile 都 issue 2 个 TDM jobs；整个 workgroup/WGP 合计 8 jobs，global payload 为：
+
+```text
+2*8448 + 2*17408 = 51,712 B
+17408 / 8448 = 2.0606... ~= 2.06
+```
+
+51,712 B 是 **global useful payload**，不是 LDS stage footprint。A 每行额外插入
+16 B padding，因此单个 K-tile stage 实际占用：
+
+```text
+A  = 64*272      = 17,408 B
+B  = 16*2048     = 32,768 B
+SA = 16*8*4      =    512 B
+SB = 8*64*4      =  2,048 B
+LDS stage total  = 52,736 B
+```
+
+二者正好相差 `64*16=1,024 B` 的 A row padding。
+
+`AITER_TDM_WIDE_KSL` 在前端第 403–463 行选择 `compute_ktile_wide`，改变两个
+KSL 的 LDS→VGPR→WMMA operand lifetime、wait 和 next-tile issue 的调度位置；它不会
+重建第 277–296 行的 jobs，因而不改变本节的 global→LDS wave 分工、shape 或 bytes。
+同理，第 491–503 行中的 `num_buffers=b3/b4` 只改变 ring/in-flight 深度、prologue、
+steady/drain 范围和 tensor-wait threshold，不改变单个 K tile 的 8 个 job shapes。
+
+> **推断边界（source fact + ATT observation）：** 前端源码能证明的是 wave2/3 的
+> B/SB global payload 为 wave0/1 A/SA 的 2.06 倍，不能单凭 byte 数证明完成周期。
+> “B/SB logical waves 更晚到 barrier”是结合该负载差与 b3 的 per-wave ATT
+> `TENSORcnt`/barrier 到达时序得到的推断；cache、TDM arbitration 和运行时
+> logical-wave→physical-SIMD placement 都可能影响绝对时序，因此它不是纯源码事实。
 
 <a id="sec-1-7-prologue-27-steady-iterations-and-drain"></a>
 ### 1.7 Prologue, 27 steady iterations, and drain
@@ -1775,7 +1920,9 @@ output fx.copy
 - A/B/SA/SB 的 GM/LDS address formulas；
 - hardware SRC0=weight、SRC1=activation 和 `scale_a=SB, scale_b=SA`；
 - gated-SiLU 的 clamp、`-log2(e)`、exp2 range repair、rcp、BF16 pack；
-- fixed LDS metadata 为 0、launcher dynamic LDS 为 79,872 的表面矛盾及其原因。
+- fixed LDS metadata 为 0、launcher dynamic LDS 为 79,872 的表面矛盾及其原因；
+- 第 1.6.1 节 `t64/w1x4` 前端的 8 个 wave-specific TDM jobs、per-wave shape、
+  51,712 B global payload 与 52,736 B padded LDS stage footprint。
 
 **Guide-supported interpretation，且已注明 gfx1250 caution：**
 
@@ -1783,6 +1930,12 @@ output fx.copy
 - block-32 E8M0 scale 的 WMMA layout；
 - VOP3PX2 软件单指令、硬件 scale-load+WMMA 的解释；
 - packed BF16 convert 的 two-source/RNE 行为。
+
+**Source + ATT-supported inference：**
+
+- `t64` 的 B/SB logical waves 比 A/SA logical waves 多搬 2.06 倍 global payload 是
+  source-verified；“B/SB 更晚到 barrier”还依赖 per-wave ATT observation，不能由
+  payload bytes 单独推出。
 
 **不从当前材料过度推断：**
 
@@ -1816,3 +1969,6 @@ output fx.copy
    barrier 后由 `tensor_store_from_lds` 写入 GM `[1,30720,768]`。
 10. `.amdhsa_group_segment_fixed_size 0` 与大量 LDS 指令并不冲突；它只说明 fixed LDS
     为 0，本 kernel 使用 launcher 指定的 dynamic LDS。
+11. 对第 1.6.1 节的 `t64/w1x4` 目标，wave0/1 各 issue A+SA 两个 jobs、8,448 B；
+    wave2/3 各 issue B+SB 两个 jobs、17,408 B。`b3/b4` 和 `WIDE_KSL` 不改变这组
+    per-K-tile 分工。
