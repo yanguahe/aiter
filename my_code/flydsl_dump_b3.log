@@ -1,0 +1,28 @@
+[aiter] import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+[lds] gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1: A=17408 B=32768 SA=512 SB=2048 per_buf(unpadded)=52736 PITCH(512-aligned)=52736 x num_buffers=3 | C_STORE=32768 -> ARENA=158208 B (154.50 KiB)
+[sched] gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1: KWS=2 wide_operand_vgpr~320 -> WIDE (both K-slices in flight)
+[flydsl.compile] FLYDSL_DUMP_IR=1 dir=/data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
+[flydsl.compile] dump 00_origin -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/00_origin.mlir
+[flydsl.compile] dump 01_fly_rewrite_func_signature -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/01_fly_rewrite_func_signature.mlir
+[flydsl.compile] dump 02_fly_canonicalize -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/02_fly_canonicalize.mlir
+[flydsl.compile] dump 03_fly_layout_lowering -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/03_fly_layout_lowering.mlir
+[flydsl.compile] dump 04_fly_int_swizzle_simplify -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/04_fly_int_swizzle_simplify.mlir
+[flydsl.compile] dump 05_canonicalize -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/05_canonicalize.mlir
+[flydsl.compile] dump 06_fly_convert_atom_call_to_ssa_form -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/06_fly_convert_atom_call_to_ssa_form.mlir
+[flydsl.compile] dump 07_fly_promote_regmem_to_vectorssa -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/07_fly_promote_regmem_to_vectorssa.mlir
+[flydsl.compile] dump 08_convert_fly_to_rocdl -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/08_convert_fly_to_rocdl.mlir
+[flydsl.compile] dump 09_canonicalize -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/09_canonicalize.mlir
+[flydsl.compile] dump 10_convert_scf_to_cf_cse_convert_gpu_to_rocdl -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/10_convert_scf_to_cf_cse_convert_gpu_to_rocdl.mlir
+[flydsl.compile] dump 11_rocdl_attach_target -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/11_rocdl_attach_target.mlir
+[flydsl.compile] dump 12_convert_scf_to_cf -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/12_convert_scf_to_cf.mlir
+[flydsl.compile] dump 13_convert_cf_to_llvm -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/13_convert_cf_to_llvm.mlir
+[flydsl.compile] dump 14_gpu_to_llvm -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/14_gpu_to_llvm.mlir
+[flydsl.compile] dump 15_convert_vector_to_llvm -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/15_convert_vector_to_llvm.mlir
+[flydsl.compile] dump 16_convert_arith_to_llvm -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/16_convert_arith_to_llvm.mlir
+[flydsl.compile] dump 17_convert_func_to_llvm -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/17_convert_func_to_llvm.mlir
+[flydsl.compile] dump 18_reconcile_unrealized_casts -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/18_reconcile_unrealized_casts.mlir
+[flydsl.compile] dump 19_gpu_module_to_binary -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/19_gpu_module_to_binary.mlir
+[flydsl.compile] dump 20_llvm_ir -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/20_llvm_ir.ll
+[flydsl.compile] dump 21_final_isa -> /data/yanguahe/code/wk_sp1/aiter/my_code/flydsl_dump_b3/gemm_a8w4_tdm_t64x256x256_w1x4_b3_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1/21_final_isa.s
+[flydsl] COMPILE_ONLY=1, compilation succeeded (arch=gfx1250)
+__RESULT__ ok 3.2
