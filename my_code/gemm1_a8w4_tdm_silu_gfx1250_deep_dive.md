@@ -11,6 +11,7 @@
 - [1. Kernel overview and software pipeline](#1-kernel-overview-and-software-pipeline)
   - [1.1 Source call path and lowering chain](#sec-1-1-source-call-path-and-lowering-chain)
   - [1.2 Grid swizzle and expert lookup](#sec-1-2-grid-swizzle-and-expert-lookup)
+    - [1.2.1 t64/b3 adapter launch: M/N/K partition and grid](#sec-1-2-1-t64-b3-adapter-launch-mnk-partition-and-grid)
   - [1.3 End-to-end software pipeline](#sec-1-3-end-to-end-software-pipeline)
   - [1.4 Full kernel-relative PC phase map](#sec-1-4-full-kernel-relative-pc-phase-map)
   - [1.5 Dynamic LDS arena and two-buffer ring](#sec-1-5-dynamic-lds-arena-and-two-buffer-ring)
@@ -49,9 +50,12 @@
 gemm_a8w4_tdm_t16x256x256_w1x4_b2_e384_afp8_outbf16_silu_bias1_qout0_qrep1_v1
 ```
 
-唯一的独立 scope 是[第 1.6.1 节](#sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition)：
-它专门按当前前端解释 `tile_m=64`、`b3/b4` 目标的 wave-specialized TDM 分工，不把
-`t16/b2` dump 的 PC、resource usage 或动态计数外推到该目标。
+两个独立 scope 是
+[第 1.2.1 节](#sec-1-2-1-t64-b3-adapter-launch-mnk-partition-and-grid)和
+[第 1.6.1 节](#sec-1-6-1-tile-m64-wave-specialized-tdm-load-partition)：
+前者解释 `tdm_adapter.py --which gemm1` 默认 `t64/b3` launch 的 M/N/K 分工与
+grid，后者解释同一目标的 wave-specialized TDM 负载。二者都不把 `t16/b2` dump 的
+PC、resource usage 或动态计数外推到该目标。
 
 它是 gfx1250 grouped MoE stage-1 的 A8W4 gate/up projection：输入 activation 为
 MXFP8 E4M3，weight 为 MXFP4 E2M1，A/B 两侧都使用 block-32 E8M0 scale；计算完成后在
@@ -83,6 +87,7 @@ FP32 accumulator 上加 BF16 bias，按 GUGU 相邻列做 clamp 和
 | `aiter/aiter/ops/flydsl/grouped_moe_gfx1250.py` | routing、contiguous-M、GUGU/non-EP TDM path、GEMM1/GEMM2 串联 |
 | `aiter/aiter/fused_moe.py` | public `fused_moe_` 到 grouped gfx1250 path 的 dispatch |
 | `aiter/op_tests/test_flydsl_grouped_gemm_gfx1250.py` | workload 构造、balanced routing、weight/scale shuffle、reference |
+| `aiter/my_code/isa_runner/tdm_adapter.py` | `t64/b3` capture 默认值、production GEMM1 参数与 ISA replay launch |
 | `aiter/my_code/run_gemm.log` | 本次编译日志、逻辑 arena 打印、correctness/perf 上下文 |
 | `aiter/my_code/gemm1_a8w4.v1.f01-2.att/thread_trace/kernel/rpf_v3/` | `tile_m=64` b3 ATT；只用于第 1.6.1 节的 wave 到达时序推断，不替代前端 shape 公式 |
 | `C:/Users/yanguahe/Documents/code/llm-wiki/mi400_hw_wiki/raw/papers/mi400_hd_txt/architecture/subsystem/SH/MI400_Shader_Programming#65.txt` | GFX12 TDM、WMMA block-scale、VOP3PX2、packed convert 的硬件语义参考 |
@@ -364,6 +369,205 @@ balanced workload 中每个 expert 64 行、边界 16 对齐，所以四个有�
 `mn_oob` 依次为 64、48、32、16，均足以覆盖当前 16 行；capacity tail 查到
 `expert=384`，在 `+0x0698` 跳到 `+0x1a04 s_endpgm`。该 branch 在 arena zero-init
 之后，因此 sentinel workgroup 仍执行统一的 LDS 初始化，但不执行 TDM/GEMM/epilogue。
+
+<a id="sec-1-2-1-t64-b3-adapter-launch-mnk-partition-and-grid"></a>
+#### 1.2.1 t64/b3 adapter launch: M/N/K partition and grid
+
+本节只解释下面这个 ISA replay 命令捕获的 production GEMM1，不改变本文主体
+`t16/b2` dump 的结论：
+
+```bash
+AITER_LOG_MORE=1 \
+AITER_TDM_WIDE_KSL=1 \
+AITER_TDM_NUM_BUFFERS=3 \
+python my_code/isa_runner/tdm_adapter.py replay \
+  --which gemm1 --iters 100 \
+  --isa ./my_code/moe_gemm1_a8w4.v1.s
+```
+
+`tdm_adapter.py` 默认固定：
+
+```text
+tokens=4096, topk=6, experts=384
+model_dim K=7168, inter_dim=768
+GEMM1 raw N=2*inter_dim=1536
+tile_m=64, tile_n=256, tile_k=256
+m_warp=1, n_warp=4, num_buffers=3
+```
+
+这里必须区分三个不同的 M：
+
+```text
+valid route M = tokens * topk = 4096 * 6 = 24576
+per-expert logical M = 24576 / 384 = 64
+static contiguous i32_m = 49152
+```
+
+`grouped_moe_gfx1250.py:398-405` 先用 GEMM1/GEMM2 的最大 tile-M 形成静态
+CUDA-Graph-safe capacity。adapter 默认两级 `tile_m=tile_m2=64`，所以：
+
+```text
+align_m      = max(tile_m, tile_m2) = 64
+upper_bound  = T*topk + E*align_m - topk
+             = 24576 + 384*64 - 6
+             = 49146
+contiguous_m = align_up(49146, 64) = 49152
+max_m        = align_up(24576, 64) = 24576
+```
+
+balanced routing 使每个 expert 恰好 64 行，因此 `m_tile_map` 的有效边界为：
+
+```text
+m_tile_map[e] = (e + 1) * 64, e=0..383
+```
+
+前 24,576 行包含真实 routes；后 24,576 行只是静态 capacity tail。这个 tail 不会
+执行 GEMM：当 `blk_m>=24576` 时，lower-bound 得到 `expert=384`，统一分支跳过
+TDM、WMMA 和 epilogue。
+
+##### Grid维度和M/N tile展平
+
+launcher 使用三元素 HIP grid/block tuple，但只有 X 维非 1
+（`mxfp4_preshuffle_gfx1250_tdm.py:596-612`）：
+
+```python
+m_tiles = ceil(i32_m / tile_m)
+n_tiles = ceil(N / tile_n)
+grid    = (m_tiles * n_tiles, 1, 1)
+block   = (m_warp * n_warp * 32, 1, 1)
+```
+
+代入当前值：
+
+```text
+m_tiles = 49152 / 64 = 768
+n_tiles = 1536 / 256 = 6
+grid    = (768 * 6, 1, 1) = (4608, 1, 1) workgroups
+block   = (1 * 4 * 32, 1, 1) = (128, 1, 1) threads
+```
+
+所以接口形式是 3D grid，但逻辑调度是一维 `grid_x=4608`；没有独立的
+`grid_y=M`、`grid_z=N` 或 K 维。
+
+X维通过 `TILES_PER_GROUP=16` 做 DeepGEMM-style swizzle。当前
+`blocks_per_group=6*16=96`，对 group `g=0..47`：
+
+```text
+group            = bid_x // 96
+in_group         = bid_x % 96
+m_tile           = 16*g + (in_group % 16)
+n_tile           = in_group // 16
+blk_m            = m_tile * 64
+blk_n            = n_tile * 256
+```
+
+因此每连续 96 个 workgroups 覆盖：
+
+```text
+16 个 M64 tiles * 6 个 N256 tiles
+= static M 1024 rows * raw N 1536 columns
+```
+
+同一 N tile 内 M tile 变化最快；然后 `in_group//16` 使 N 依次前进
+`0,256,...,1280`。前 24 个 group 对应 384 个有效 expert-M tiles，后 24 个
+group 是 sentinel capacity tail。
+
+静态与有效 workgroup 数量为：
+
+```text
+static workgroups   = 768 M tiles * 6 N tiles = 4608
+valid workgroups    = 384 experts * 1 M tile/expert * 6 N tiles = 2304
+sentinel workgroups = 384 padding M tiles * 6 N tiles = 2304
+```
+
+##### 单个WGP内部的M/N分工
+
+一个有效 WGP 不循环处理其他 M/N tiles；它只负责一个
+`(blk_m:blk_m+64, blk_n:blk_n+256)` raw GEMM tile，并通过 `m_tile_map`
+取得这个 M tile 对应的 expert B/SB/bias slab。
+
+四个 logical wave 的映射为：
+
+```text
+warp_tile_m = 64 / 1 = 64
+warp_tile_n = 256 / 4 = 64
+wave_m      = wave // 4 = 0
+wave_n      = wave % 4  = 0..3
+```
+
+所以四个 wave 都覆盖相同的 64 个 M rows，并沿 N 分片：
+
+```text
+wave0: M64 * raw N[  0: 64]
+wave1: M64 * raw N[ 64:128]
+wave2: M64 * raw N[128:192]
+wave3: M64 * raw N[192:256]
+```
+
+每个 wave 内部的 `wm=0..3`、`wn=0..3` 是编译期展开的四个 M16 和四个
+N16 subtile；每个 K128 slice 执行 `4*4=16` 条 WMMAScale。四个 wave 合起来
+覆盖 WGP 的完整 M64×N256 raw accumulator tile。
+
+Gated-SiLU 将相邻 GUGU raw N columns 配对，因此 epilogue 中：
+
+```text
+STORE_N = tile_n / 2 = 128
+out_col = blk_n / 2
+```
+
+一个 WGP 最终写 M64×N128 BF16；六个 N workgroups 合起来覆盖输出 N=768。
+
+##### 单个WGP内部的K循环
+
+K不在workgroups之间切分。每个有效 WGP 都从 K=0 累加到7167：
+
+```text
+K_TILES = 7168 / 256 = 28
+KWS     = 256 / 128 = 2
+```
+
+每个 K256 tile 包含 KSL0/KSL1 两个 K128 slice。`WIDE_KSL=1` 时每个 wave
+对每个 K256 tile 执行：
+
+```text
+16 WMMAScale for KSL0
+16 WMMAScale for KSL1
+= 32 WMMAScale
+```
+
+`num_buffers=3` 的 ring 控制流为：
+
+```text
+Prologue:
+  issue(buffer0, kt0)
+  issue(buffer1, kt1)
+  buffer2 empty
+
+Steady: n_steady = 28 - (3 - 1) = 26
+  for kt=0..25:
+    slot = kt % 3
+    wait/compute current kt
+    prefetch kt+2 into buffer[(kt+2)%3]
+
+Drain:
+  compute kt26 from buffer2
+  compute kt27 from buffer0
+  no further prefetch
+```
+
+所以K维是每个WGP内部唯一的运行时tile循环；M/N只由 `bid_x` 选择，没有
+跨WGP split-K，也没有跨WGP accumulator reduction。不同 N workgroups 会为同一个
+expert-M tile重复读取相同的 A/SA K range，但使用不同的 B/SB N slab，并写入互不
+重叠的输出列。
+
+##### 三维切分总结
+
+```text
+M：跨WGP按64行切分；WGP内部每个wave都覆盖全部64行，再按4个M16 subtile展开。
+N：跨WGP按raw 256列切分；WGP内部4 waves各负责64列；SiLU后每WGP写128列。
+K：不跨WGP切分；每个有效WGP串行遍历28个K256 tile，每tile含两个K128 slice。
+Grid：HIP tuple为(4608,1,1)，逻辑上是一维flattened/swizzled M×N tile grid。
+```
 
 <a id="sec-1-3-end-to-end-software-pipeline"></a>
 ### 1.3 End-to-end software pipeline
@@ -1921,6 +2125,8 @@ output fx.copy
 - hardware SRC0=weight、SRC1=activation 和 `scale_a=SB, scale_b=SA`；
 - gated-SiLU 的 clamp、`-log2(e)`、exp2 range repair、rcp、BF16 pack；
 - fixed LDS metadata 为 0、launcher dynamic LDS 为 79,872 的表面矛盾及其原因；
+- 第 1.2.1 节 `t64/b3` adapter launch 的 `grid=(4608,1,1)`、M/N WGP
+  partition、每WGP完整K循环及2304个valid/2304个sentinel workgroups；
 - 第 1.6.1 节 `t64/w1x4` 前端的 8 个 wave-specific TDM jobs、per-wave shape、
   51,712 B global payload 与 52,736 B padded LDS stage footprint。
 
@@ -1972,3 +2178,7 @@ output fx.copy
 11. 对第 1.6.1 节的 `t64/w1x4` 目标，wave0/1 各 issue A+SA 两个 jobs、8,448 B；
     wave2/3 各 issue B+SB 两个 jobs、17,408 B。`b3/b4` 和 `WIDE_KSL` 不改变这组
     per-K-tile 分工。
+12. 对第 1.2.1 节的 `t64/b3` adapter launch，grid 是
+    `(ceil(49152/64)*ceil(1536/256),1,1)=(4608,1,1)`。M/N由WGP切成
+    `64×256` raw tiles，四个wave沿N各覆盖64列；K不做split-K，每个有效WGP独立
+    遍历全部28个K256 tiles。
