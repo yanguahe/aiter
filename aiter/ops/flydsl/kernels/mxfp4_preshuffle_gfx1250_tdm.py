@@ -28,14 +28,14 @@ from aiter.utility.mx_types import MxDtypeInt as MxDtype
 TDM_DESCRIPTOR_VERSION = 1
 
 
-def _waves_per_eu_value_attrs():
-    """Build the LLVM occupancy attribute from AITER_TDM_WAVES_PER_EU.
+def _normalize_waves_per_eu(raw):
+    """Normalize AITER_TDM_WAVES_PER_EU to an explicit (minimum, maximum).
 
     A single value locks min=max; use 0/off/none to leave occupancy uncapped.
     """
-    raw = os.environ.get("AITER_TDM_WAVES_PER_EU", "1,1").strip()
+    raw = raw.strip()
     if raw.lower() in ("", "0", "off", "none"):
-        return {}
+        return 0, 0
     parts = [part.strip() for part in raw.split(",")]
     if len(parts) == 1:
         parts *= 2
@@ -48,6 +48,13 @@ def _waves_per_eu_value_attrs():
         raise ValueError(
             "AITER_TDM_WAVES_PER_EU requires 1 <= min <= max"
         )
+    return minimum, maximum
+
+
+def _waves_per_eu_value_attrs(minimum, maximum):
+    """Build the LLVM occupancy attribute from normalized constexpr values."""
+    if minimum == 0 and maximum == 0:
+        return {}
     return {
         "passthrough": [
             ["amdgpu-waves-per-eu", f"{minimum},{maximum}"],
@@ -56,7 +63,7 @@ def _waves_per_eu_value_attrs():
 
 
 @flyc.jit
-def launch_gemm_a8w4_tdm(
+def _launch_gemm_a8w4_tdm_jit(
     arg_c: fx.Tensor,
     arg_a: fx.Pointer,
     arg_b: fx.Pointer,
@@ -80,6 +87,8 @@ def launch_gemm_a8w4_tdm(
     has_bias: Constexpr[int],
     arg_bias: fx.Pointer,
     f32_swiglu_limit: fx.Float32,
+    waves_per_eu_min: Constexpr[int],
+    waves_per_eu_max: Constexpr[int],
     stage1_quant_out: Constexpr[int] = 0,
     quant_wmma_rep: Constexpr[int] = 1,
     arg_quant_scale: fx.Tensor = None,
@@ -607,12 +616,80 @@ def launch_gemm_a8w4_tdm(
         i32_m,
         N,
         f32_swiglu_limit,
-        value_attrs=_waves_per_eu_value_attrs(),
+        value_attrs=_waves_per_eu_value_attrs(
+            waves_per_eu_min, waves_per_eu_max
+        ),
     ).launch(
         grid=(m_tiles * n_tiles, 1, 1), block=(block, 1, 1), stream=stream
     )
 
 
-launch_gemm_a8w4_tdm.compile_hints["llvm_options"] = {
+def launch_gemm_a8w4_tdm(
+    arg_c: fx.Tensor,
+    arg_a: fx.Pointer,
+    arg_b: fx.Pointer,
+    arg_scale_a: fx.Tensor,
+    arg_scale_b: fx.Tensor,
+    i32_m: fx.Int32,
+    stream: fx.Stream,
+    N: fx.Int32,
+    K: Constexpr[int],
+    tile_m: Constexpr[int],
+    tile_n: Constexpr[int],
+    tile_k: Constexpr[int],
+    m_warp: Constexpr[int],
+    n_warp: Constexpr[int],
+    out_is_f16: Constexpr[int],
+    num_buffers: Constexpr[int],
+    a_is_fp4: Constexpr[int],
+    arg_m_tile_map: fx.Pointer,
+    n_experts: Constexpr[int],
+    stage1_act: Constexpr[int],
+    has_bias: Constexpr[int],
+    arg_bias: fx.Pointer,
+    f32_swiglu_limit: fx.Float32,
+    stage1_quant_out: Constexpr[int] = 0,
+    quant_wmma_rep: Constexpr[int] = 1,
+    arg_quant_scale: fx.Tensor = None,
+):
+    """Public TDM launcher that keys the JIT on normalized occupancy values."""
+    waves_per_eu_min, waves_per_eu_max = _normalize_waves_per_eu(
+        os.environ.get("AITER_TDM_WAVES_PER_EU", "1,1")
+    )
+    return _launch_gemm_a8w4_tdm_jit(
+        arg_c,
+        arg_a,
+        arg_b,
+        arg_scale_a,
+        arg_scale_b,
+        i32_m,
+        stream,
+        N,
+        K,
+        tile_m,
+        tile_n,
+        tile_k,
+        m_warp,
+        n_warp,
+        out_is_f16,
+        num_buffers,
+        a_is_fp4,
+        arg_m_tile_map,
+        n_experts,
+        stage1_act,
+        has_bias,
+        arg_bias,
+        f32_swiglu_limit,
+        waves_per_eu_min=waves_per_eu_min,
+        waves_per_eu_max=waves_per_eu_max,
+        stage1_quant_out=stage1_quant_out,
+        quant_wmma_rep=quant_wmma_rep,
+        arg_quant_scale=arg_quant_scale,
+    )
+
+
+_launch_gemm_a8w4_tdm_jit.compile_hints["llvm_options"] = {
     "amdgpu-expert-scheduling-mode": True,
 }
+# Preserve the public attribute used by callers before the wrapper split.
+launch_gemm_a8w4_tdm.compile_hints = _launch_gemm_a8w4_tdm_jit.compile_hints
