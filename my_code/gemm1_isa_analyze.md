@@ -871,9 +871,10 @@ C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\
 |---|---:|---:|---|
 | 3.4.9 Scheduling Mode | Page 52 | 2910-2932 | `DEP_MODE=2`、`VA_VDST`/`VM_VSRC` 检查关闭，以及 XDL stall bit 的争议说明 |
 | 4.3.7.1 VALU Ordering | Page 95 | 5532-5547 | 不同 VALU pipeline 的完成顺序 |
-| 4.3.7.2 Memory Dependency Counters | Page 95-97 | 5548-5680 | `DScnt`、`TENSORcnt`、`VA_VDST`、`VM_VSRC` 的增减条件 |
+| 4.3.7.2 Memory Dependency Counters | Page 95-97 | 5548-5680 | `DScnt` 6-bit/最大63、overflow issue stall、`TENSORcnt`、`VA_VDST`、`VM_VSRC` 的增减条件 |
 | 4.3.7.4 Expert Scheduling Mode | Page 100-102 | 5826-6000 | `S_WAIT_ALU` 阈值、mode 2 暴露的 hazard、非零阈值限制 |
 | 4.3.8 ALU Instruction Software Scheduling | Page 102-104 | 6001-6104 | `S_DELAY_ALU`、`instid`、`instskip`、TRANS/XDL scoreboard |
+| 4.10.1/4.10.8 Tensor Instructions/Tracking | Page 206/215 | 14095-14104, 14740-14755 | `TENSORcnt` 6-bit/最大63、3/wave与6/SIMD XACK credit、Tensor-Done |
 | 5.3.1 Hardware Enforced Interlocks | Page 224-226 | 15196-15341 | ALU scoreboard 与 instruction dependency counter 的边界 |
 | 5.3.3 Instruction Co-issue Scheduling | Page 228-229 | 15443-15481 | `S_DELAY_ALU`/`S_WAIT_ALU` co-issue |
 | 5.3.4-5.3.5 SALU/VALU Scheduling | Page 229-230 | 15506-15565 | SALU forwarding、VALU pipeline 深度与 fast forwarding |
@@ -890,9 +891,12 @@ C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-s
 
 | 章节 | 文本页标 | 文件行 | 用途 |
 |---|---:|---:|---|
+| 3.1 State Overview | Page 22 | 958-990 | `DScnt`/`TENSORcnt` 均为6-bit，分别跟踪LDS和tensor instructions |
 | 5.7 Data Dependency Resolution | Page 65 | 3607-3614 | `DISABLE_XDL_ARB_STALL` 和 WMMA back-to-back 发射 |
 | 5.8 ALU Instruction Software Scheduling | Page 66-67 | 3620-3697 | delay 可零周期执行、`INSTID`/`SKIP`、SALU/VALU/TRANS/XDL 分类 |
 | 15.5 SOPP Instructions: `S_DELAY_ALU` | Page 292-294 | 19627-19720 | `SIMM16` 位段、所有实际 operand code、正确性定位 |
+| 15.5 SOPP Instructions: `S_WAIT_DSCNT` | Page 302 | 20007-20019 | `SIMM16[5:0]` 阈值和 `DScnt<=N` 语义 |
+| 15.5 SOPP Instructions: `S_WAIT_TENSORCNT` | Page 294 | 20041-20045 | `SIMM16[5:0]` 阈值和 `TENSORcnt<=N` 语义 |
 | 5.3 Instruction Clauses | Page 52 | 2884-2916 | clause 内 `S_DELAY_ALU` 的限制 |
 
 ### 2.3 MI400 corpus 补充交叉核对
@@ -1229,6 +1233,132 @@ s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 4, 1), 1
 
 Programming Guide 行 5588-5597、5802-5805 定义 `DScnt` 在 LDS 指令发射时增加，load/atomic return 或 store 写入 LDS 时减少；这是比“已读源 VGPR”更晚的完成点。行 5618-5622、14100-14104 定义 `TENSORcnt` 独立跟踪 TDM，且 tensor 与其他 memory type、其他 wave 不排序。
 
+### 7.1 `DScnt`位宽、最大值和wait立即数
+
+**结论：gfx1250/CDNA5的 `DScnt` 是每wave 6-bit counter，可表示范围为
+`0..63`，因此最大可跟踪63条issued-but-not-completed DS/LDS instructions。**
+
+证据有三处互相一致：
+
+- CDNA5 ISA的wave-state表把 `DScnt` 标为6 bit，并定义为尚未完成的LDS
+  instruction count（ISA 3.1，行958-974）。
+- `IB_STS.DScnt` 占6 bit：Programming Guide行3009-3011为bits `[8:3]`，
+  CDNA5 ISA行1892-1894为performance snapshot bits `[26:21]`。
+- `S_WAIT_DSCNT` 只读取 `SIMM16[5:0]`，条件是 `DScnt <= N`
+  （CDNA5 ISA 15.5，行20007-20019）。
+
+因此：
+
+```text
+counter width        = 6 bit
+counter range        = 0x00 .. 0x3f
+maximum pending      = 0x3f = 63 instructions / wave
+s_wait_dscnt 0       = wait until all tracked DS operations complete
+s_wait_dscnt 0x1c    = wait until DScnt <= 28
+s_wait_dscnt 0x3f    = DScnt <= 63，等价于不施加额外等待
+```
+
+这里统计的是**物理instruction**，不是lane、DWORD、逻辑load或地址数量。
+Programming Guide行5552-5557还明确说明：memory dependency counter即将溢出时，
+硬件会阻塞那条会导致overflow的指令发射，因此counter不会从63回绕到0。例如一条
+`ds_load_2addr_b32` 虽然携带两个地址、返回两个b32，仍只是一条DS instruction，
+只增加一次 `DScnt`。
+
+完成语义为：
+
+```text
+DS load / atomic-with-return：数据返回VGPR时减1
+DS store                    ：数据写入LDS时减1
+Flat                        ：LDS half完成时减1
+```
+
+同一wave的LDS operations保持顺序，所以在只包含LDS load的ordering stream中，
+partial wait可以按年龄推导“足够老”的load已经返回。若混入Flat/global half或不同
+counter type，必须同时考虑对应的 `LOADcnt/STOREcnt`，不能只看 `DScnt`。
+
+对后续wide-KSL重排实验，这个位宽还给出一个明确安全边界：
+
+```text
+B0/S0 + A0 + B1/S1 = 12 + 16 + 12 = 40 physical DS
+再发 A1            = 40 + 16      = 56 physical DS
+56 < 63，尚余7个counter slots
+```
+
+随后 `s_wait_dscnt 0x1c` 的含义不是“DScnt从12增加到28”，而是允许A1先发出，
+再等待最老的28条 `B0/S0+A0` 完成，使最多28条 `B1/S1+A1` 保持pending。若某些
+旧load已经提前完成，wait入口的实际counter自然小于56，但正确性条件不变。
+
+### 7.2 `TENSORcnt`位宽、最大值和两级issue限制
+
+**结论：gfx1250/CDNA5的 `TENSORcnt` 也是每wave 6-bit counter，最大值为
+`0x3f=63`。它统计从TDM instruction issue到Tensor-Done之间尚未完成的
+`tensor_load_to_lds`/`tensor_store_from_lds` instructions。**
+
+直接证据为：
+
+- CDNA5 ISA的wave-state表把 `TENSORcnt` 标为6 bit
+  （ISA 3.1，行985-990）。
+- Programming Guide行5618-5622定义它在每条TDM transfer发射时加1、完成时减1；
+  行14740-14755进一步明确“issue-to-completion limit is 63”以及counter为per-wave
+  6 bit。
+- `S_WAIT_TENSORCNT` 使用 `SIMM16[5:0]`，条件为 `TENSORcnt <= N`
+  （CDNA5 ISA 15.5，行20041-20045）。
+
+因此wait立即数语义与 `DScnt` 相同：
+
+```text
+counter width            = 6 bit
+counter range            = 0x00 .. 0x3f
+maximum not-done TDM ops = 63 instructions / wave
+s_wait_tensorcnt 0       = wait until all prior TDM instructions report done
+s_wait_tensorcnt N       = allow at most N younger/not-done TDM instructions
+s_wait_tensorcnt 0x3f    = TENSORcnt <= 63，等价于不施加额外等待
+```
+
+一个tensor instruction无论内部拆成多少memory transfer，都只在最终返回一次
+Tensor-Done时把counter减1（Programming Guide行14100-14104；CDNA5 ISA
+行10152-10156）。该计数同样是instruction数，不是lane、tensor element、cache
+transaction或TDM descriptor内的分片数。
+
+不要把 `STATUS.TENSORcnt` 的2-bit摘要字段误认为真实counter位宽。Programming
+Guide行3031-3034明确规定该字段只编码 `0/1/2/three_or_more`；完整值由内部6-bit
+counter维护，performance snapshot也用6 bit导出。
+
+#### `63`不能与`3/wave、6/SIMD`混为一谈
+
+TDM另有两个只覆盖issue→XACK阶段的throttling counters：
+
+```text
+tensor_wave_cnt：每wave最多3
+tensor_simd_cnt：每SIMD最多6
+TENSORcnt       ：每wave最多63，覆盖issue→Tensor-Done
+```
+
+Programming Guide行14740-14744说明XACK通常远早于Tensor-Done。一个descriptor
+收到XACK后会释放 `tensor_wave_cnt/tensor_simd_cnt` credit，但对应transfer仍可继续
+占用 `TENSORcnt`。因此“最多3条TDM/wave”是同时等待XACK的issue限制，不是
+`s_wait_tensorcnt`能看到的最大completion深度。credit饱和时硬件反压后续TDM
+issue，不会让counter回绕。
+
+对本文主体 `t16/b2` kernel，`WAVE_SPEC=false`，每wave为一个K tile发出4条TDM，
+第四条可能因3/wave XACK限制短暂停顿；它仍可在较老descriptor收到XACK后发射，
+并由6-bit `TENSORcnt`继续跟踪到Done。
+
+对后续 `t64` wave-specialized ring，每wave每K tile有2条TDM：
+
+```text
+buffers  prime tiles  prologue TENSORcnt/wave  steady wait threshold
+b3       2            <=4                      2
+b4       3            <=6                      4
+b5       4            <=8                      6
+b6       5            <=10                     8
+```
+
+这些completion深度都远小于63，因此b3..b6不会造成 `TENSORcnt` overflow；实际
+性能限制更可能先来自3/wave、6/SIMD的XACK credit和随后出现的
+`s_wait_tensorcnt`/barrier arrival skew。这里的“<=”表示较早TDM可能已经Done，
+进入wait时实际counter可以更低。
+
 当前文件能看到三者明确分工：
 
 - 行 735 `VA_VDST(0)` 让行 730/732 的地址写回，行 736-746 才发 DS load；行 796 的 `s_wait_dscnt 0` 再等这些 load 返回。
@@ -1274,3 +1404,5 @@ Programming Guide 行 5967 写“incremented and decremented in order”，但�
 3. `VA_VDST` 保护 VALU→DS/VMEM 的地址、数据和 destination RAW/WAW；`VM_VSRC` 保护 DS/VMEM 先读地址/data、后续覆盖的 WAR。
 4. full wait 清空相关可见 counter；partial wait 只在已证明 ordering class、相对年龄和 `EXEC` 行为时安全。当前三个 partial `VM_VSRC` 站点从附近控制流看很可能已经达标，不能把它们描述成必然发生的实际 stall。
 5. `s_wait_alu` 不等待内存完成；`DScnt`、`LOADcnt`、`TENSORcnt` 分别负责相应 memory operation 的完成语义。
+6. `DScnt` 是每wave 6-bit counter，最大值为63；硬件在第64条pending DS将导致overflow时阻塞issue而不是回绕。`s_wait_dscnt N` 的 `N` 是“允许剩余的最大pending instruction数”，不是要等待完成的条数。
+7. `TENSORcnt` 同样是每wave 6-bit counter，最大值为63并由 `s_wait_tensorcnt N` 等待到 `<=N`；独立的3/wave、6/SIMD限制只覆盖issue→XACK阶段，不能当作 `TENSORcnt` 最大值。
