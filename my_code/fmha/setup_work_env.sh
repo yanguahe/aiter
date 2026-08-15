@@ -91,8 +91,8 @@ CLONE_REPO_URLS=(
 
     "git@github.com:yanguahe/triton.git"
 
-    # "git@github.com:yanguahe/aiter.git"
-    "git@github.com:ROCm/aiter.git"
+    "git@github.com:yanguahe/aiter.git"
+    # "git@github.com:ROCm/aiter.git"
 
     "git@github.com:yanguahe/cursor_rules.git"
 )
