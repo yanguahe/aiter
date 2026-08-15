@@ -17,8 +17,15 @@ export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-0}
 export AITER_FORCE_GFX1250=1
 unset FLYDSL_DUMP_IR FLYDSL_DUMP_DIR
 
+# Keep real tabs as machine delimiters. Fixed minimum widths make the TSV
+# readable directly; consumers should trim the presentation padding per field.
+summary_row() {
+  printf '%-20s\t%-16s\t%-16s\t%-30s\t%10s\t%10s\t%10s\t%12s\t%8s\t%8s\n' "$@"
+}
+
 ONLY=" $* "
-[ -f "$SUM" ] || printf 'tag\tg1cfg\tg2cfg\tstatus\tgemm1_us\tgemm2_us\te2e_us\trel_l2\tlds1\tlds2\n' > "$SUM"
+[ -f "$SUM" ] || summary_row \
+  tag g1cfg g2cfg status gemm1_us gemm2_us e2e_us rel_l2 lds1 lds2 > "$SUM"
 
 run() {  # tag tm tn tk nb tm2 tn2 tk2 nb2
   local tag=$1 tm=$2 tn=$3 tk=$4 nb=$5 tm2=$6 tn2=$7 tk2=$8 nb2=$9
@@ -54,8 +61,8 @@ run() {  # tag tm tn tk nb tm2 tn2 tk2 nb2
   [ -z "$g2" ] && { st="$st/no-g2"; g2=-1; }
   grep -qiE 'Traceback|out of memory|LDS.*exceed|insufficient' "$log" && st="$st/err"
 
-  printf '%s\t%dx%dx%d_b%d\t%dx%dx%d_b%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$tag" "$tm" "$tn" "$tk" "$nb" "$tm2" "$tn2" "$tk2" "$nb2" \
+  summary_row \
+    "$tag" "${tm}x${tn}x${tk}_b${nb}" "${tm2}x${tn2}x${tk2}_b${nb2}" \
     "$st" "$g1" "$g2" "${e2e:--}" "${l2:--}" "${l1b:--}" "${l2b:--}" >> "$SUM"
   echo "    -> $st gemm1=${g1}us gemm2=${g2}us e2e=${e2e:--} rel_l2=${l2:--} lds=${l1b:--}/${l2b:--}"
 }
@@ -105,4 +112,4 @@ run g2_m64_nb3        64 256 256 3      64 512 128 3
 
 echo
 echo "================ SUMMARY ================"
-column -t -s $'\t' "$SUM" 2>/dev/null || cat "$SUM"
+cat "$SUM"
