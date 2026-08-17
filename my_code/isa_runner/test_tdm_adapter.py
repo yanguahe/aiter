@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""CPU-only unit tests for tdm_adapter capture and comparison helpers."""
+
+import inspect
+import os
+import unittest
+from unittest.mock import patch
+
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
+import tdm_adapter as adapter
+from tdm_adapter import (
+    _POISON,
+    _canonical_route_sha256,
+    _compare_outputs,
+    _find_output_tensor,
+    _flydsl_timer_enabled,
+    _iqr_trimmed_median_us,
+    _tensor_sha256,
+    Capture,
+    IsaRunnerError,
+    capture_launches,
+    replay,
+)
+
+
+class TdmAdapterInterfaceTest(unittest.TestCase):
+    def test_replay_has_no_optional_check_or_reference_isa(self):
+        parameters = inspect.signature(replay).parameters
+
+        self.assertNotIn("check", parameters)
+        self.assertNotIn("reference_isa", parameters)
+
+    def test_capture_has_no_reference_isa_state(self):
+        self.assertNotIn("reference_isa", Capture.__dataclass_fields__)
+
+    def test_capture_uses_fixed_seed_by_default(self):
+        seed = inspect.signature(capture_launches).parameters["seed"]
+
+        self.assertEqual(seed.default, 0)
+
+    def test_route_and_hash_modes_have_safe_defaults(self):
+        capture_parameters = inspect.signature(capture_launches).parameters
+        replay_parameters = inspect.signature(replay).parameters
+
+        self.assertFalse(capture_parameters["deterministic_route_map"].default)
+        self.assertTrue(replay_parameters["canonical_hash"].default)
+
+    def test_replay_enables_l2_flush_for_opt_in_flydsl_timer(self):
+        parameters = inspect.signature(replay).parameters
+
+        self.assertIn("flush_l2", parameters)
+        self.assertTrue(parameters["flush_l2"].default)
+
+    def test_iqr_trimmed_median_rejects_outlier(self):
+        median, raw_count, filtered_count = _iqr_trimmed_median_us(
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0]
+        )
+
+        self.assertEqual(median, 1.0)
+        self.assertEqual(raw_count, 8)
+        self.assertEqual(filtered_count, 7)
+
+    def test_flydsl_timer_requires_opt_in(self):
+        with patch.dict(os.environ, {"FLYDSL_TIMER": "0"}):
+            self.assertFalse(_flydsl_timer_enabled())
+        with patch.dict(os.environ, {"FLYDSL_TIMER": "1"}):
+            self.assertTrue(_flydsl_timer_enabled())
+
+    def test_benchmark_dispatch_forwards_production_callable(self):
+        production_launch = object()
+        expected = {"per_launch_us": 1.0}
+        with (
+            patch.object(adapter, "_flydsl_timer_enabled", return_value=False),
+            patch.object(
+                adapter,
+                "_benchmark_with_run_perftest",
+                return_value=expected,
+            ) as timer,
+        ):
+            result = adapter._benchmark_dispatch(
+                None,
+                "production_kernel",
+                None,
+                object(),
+                None,
+                iters=100,
+                warmup=20,
+                flush_l2=True,
+                launch_fn=production_launch,
+            )
+
+        self.assertIs(result, expected)
+        self.assertIs(timer.call_args.kwargs["launch_fn"], production_launch)
+
+
+@unittest.skipIf(torch is None, "PyTorch is not installed")
+class TdmAdapterHelpersTest(unittest.TestCase):
+    def test_canonical_hash_ignores_route_row_and_topk_slot_order(self):
+        output_a = torch.tensor([100.0, 200.0, 300.0, 400.0]).view(1, 4, 1)
+        rows_a = torch.tensor([[0, 1], [2, 3]], dtype=torch.int32)
+        experts_a = torch.tensor([[2, 1], [2, 1]], dtype=torch.int32)
+
+        output_b = torch.tensor([300.0, 100.0, 400.0, 200.0]).view(1, 4, 1)
+        rows_b = torch.tensor([[3, 1], [2, 0]], dtype=torch.int32)
+        experts_b = torch.tensor([[1, 2], [1, 2]], dtype=torch.int32)
+
+        self.assertNotEqual(_tensor_sha256(output_a), _tensor_sha256(output_b))
+        self.assertEqual(
+            _canonical_route_sha256(output_a, rows_a, experts_a),
+            _canonical_route_sha256(output_b, rows_b, experts_b),
+        )
+
+    def test_tensor_sha256_compares_exact_raw_bytes(self):
+        positive_zero = torch.tensor([0.0], dtype=torch.float32)
+        negative_zero = torch.tensor([-0.0], dtype=torch.float32)
+
+        self.assertEqual(_tensor_sha256(positive_zero), _tensor_sha256(positive_zero.clone()))
+        self.assertNotEqual(_tensor_sha256(positive_zero), _tensor_sha256(negative_zero))
+
+    def test_bfloat16_poison_padding_is_masked_before_float_conversion(self):
+        production = torch.full((4,), _POISON, dtype=torch.bfloat16)
+        production[:2] = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
+        candidate = production.clone()
+
+        self.assertNotEqual(
+            torch.tensor(_POISON, dtype=torch.bfloat16).item(), _POISON
+        )
+        report = _compare_outputs(production, candidate)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["production_wrote_elems"], 2)
+        self.assertEqual(report["skipped_padding_elems"], 2)
+        self.assertEqual(report["missing_writes"], 0)
+        self.assertEqual(report["unexpected_writes"], 0)
+
+    def test_candidate_missing_production_write_fails(self):
+        production = torch.full((3,), _POISON, dtype=torch.bfloat16)
+        production[0] = 3.0
+        candidate = production.clone()
+        candidate[0] = torch.tensor(_POISON, dtype=candidate.dtype)
+
+        report = _compare_outputs(production, candidate)
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["missing_writes"], 1)
+        self.assertEqual(report["still_poisoned"], 1)
+        self.assertEqual(report["unexpected_writes"], 0)
+
+    def test_candidate_write_in_production_padding_fails(self):
+        production = torch.full((3,), _POISON, dtype=torch.bfloat16)
+        production[0] = 3.0
+        candidate = production.clone()
+        candidate[1] = 0.0
+
+        report = _compare_outputs(production, candidate)
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["missing_writes"], 0)
+        self.assertEqual(report["unexpected_writes"], 1)
+
+    def test_numeric_difference_fails(self):
+        production = torch.tensor([1.0, 2.0], dtype=torch.float32)
+        candidate = torch.tensor([1.0, 2.25], dtype=torch.float32)
+
+        report = _compare_outputs(production, candidate)
+
+        self.assertFalse(report["passed"])
+        self.assertGreater(report["rel_l2"], 0.0)
+        self.assertEqual(report["missing_writes"], 0)
+        self.assertEqual(report["unexpected_writes"], 0)
+
+    def test_output_tensor_resolves_from_arg_or_keepalive(self):
+        output = torch.empty(4)
+
+        class Wrapper:
+            def __init__(self, tensor):
+                self.tensor = tensor
+
+        self.assertIs(_find_output_tensor(Wrapper(output), []), output)
+        self.assertIs(
+            _find_output_tensor(output.data_ptr(), [torch.empty(1), output]),
+            output,
+        )
+
+    def test_missing_output_tensor_is_explicit(self):
+        output = torch.empty(1)
+        missing_ptr = output.data_ptr() + output.element_size()
+
+        with self.assertRaisesRegex(
+            IsaRunnerError, "cannot find a live torch output tensor"
+        ):
+            _find_output_tensor(missing_ptr, [output])
+
+
+if __name__ == "__main__":
+    unittest.main()
