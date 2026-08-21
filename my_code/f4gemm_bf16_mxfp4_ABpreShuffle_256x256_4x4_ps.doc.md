@@ -173,25 +173,99 @@ f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.co
 
 ### 1.4 MXFP4 preload ABI
 
-该 CO 使用 preload SGPR 模式。C++ packed `KernelArgs` 的逻辑顺序见
-`asm_f4gemm.cu` L34–L57；MXFP4 发送 80 B，尾部 dw18/19 不作 global
-scale，而复用为 persistent `log2_grid_x/log2_grid_y`
-（L195–L200、L317–L329）。
+该符号的 MXFP4 kernarg 是 **80 B = 20 dword**，不是整个 C++
+`KernelArgs` 的 88 B。字段声明/offset 在 `asm_f4gemm.cu` L34–L57，赋值在
+L168–L188；MXFP4 的 `arg_size=sizeof(KernelArgs)-8=80` 在 L195–L200。
+dw18/19 占用结构体中名为 `GlobalScaleA/B` 的 8 B，但 MXFP4 路径在
+L317–L329 用 `memcpy` 写入两个 `uint32_t` persistent-grid 参数；这里的
+bit pattern 是整数，不是 float global scale。
 
-| preload SGPR | kernarg dw | 含义 |
-|---|---:|---|
-| `s[2:3]` | 0..1 | `ptr_D` |
-| `s[4:5]` | 2..3 | `ptr_A` |
-| `s[6:7]` | 4..5 | `ptr_B` |
-| `s[8:9]` | 6..7 | `ptr_ScaleA` |
-| `s[10:11]` | 8..9 | `ptr_ScaleB` |
-| `s12` | 10 | `strideD0`（byte） |
-| `s13..s16` | 11..14 | A/B/SA/SB byte stride |
-| `s17,s18,s19` | 15..17 | M、N、K |
-| `s20,s21` | 18..19 | `log2_grid_x`,`log2_grid_y` |
+CO 本身给出了相同且更底层的 ABI 约束：metadata 的
+`.kernarg_segment_size=80`；kernel descriptor 的
+`COMPUTE_PGM_RSRC2=0x000013ac` 解码为 `USER_SGPR_COUNT=22`，其
+0-based dw14（word 15）`0x00140408` 解码为
+`ENABLE_SGPR_KERNARG_SEGMENT_PTR=1`、`KERNARG_PRELOAD_LENGTH=20`、
+`KERNARG_PRELOAD_OFFSET=0` 和 wave32。因而 **`s[0:1]` 是系统提供的隐式
+kernarg-segment pointer**，不对应下表字段；20 个 kernarg dword 从 byte
+offset 0 开始，由 CP 依次 preload 到 **`s2..s21`**。ISA 入口 L10–L11
+直接把 `s[2:3]` 复制为 D 指针，没有任何显式 `s_load`，与该解码一致。
+ISA L42–L57 又直接把 `s19/s18/s17` 用作 K/N/M；L257–L272 逐一配对
+`s[4:5]/s13`（A）、`s[6:7]/s14`（B）、`s[8:9]/s15`（SA）和
+`s[10:11]/s16`（SB），排除了仅凭 C++ 字段顺序猜 SGPR 映射。
 
-ISA L10–L12 立即使用 `s[2:3]` 和 wave ID，L43–L56 使用
-`s17/s18/s19` 构造 logical task 数，和上述 ABI 一致。
+| 字段 | preload SGPR | kernarg dword | byte offset | 当前 shape 的具体值 | 语义/单位；pointer 所指 tensor |
+|---|---|---:|---:|---|---|
+| `ptr_D` | `s[2:3]` | 0..1 | 0..7 (`0x00..0x07`) | runtime 64-bit pointer（地址不固定） | `torch.bfloat16` / BF16 output；logical=physical shape `[M,N]=[18432,2048]`，contiguous row-major；2 B/elem，row stride `4096 B`；storage `18432*2048*2 = 75,497,472 B (0x04800000)`。 |
+| `ptr_A` | `s[4:5]` | 2..3 | 8..15 (`0x08..0x0f`) | runtime 64-bit pointer（地址不固定） | 当前测试为 `torch.uint8` on-wire packed MXFP4（每 byte 两个 E2M1）；logical shape `[M,K]=[18432,7168]`，2-D physical byte tensor shape `[M,K/2]=[18432,3584]`；16×16 packed-byte preshuffle 的实际存储次序为 `[M/16,(K/2)/16,16,16]=[1152,224,16,16]`（`row_tile,k_byte_tile,row_in_tile,byte_in_tile`），再 flatten 为上述 2-D shape；storage `18432*3584 = 66,060,288 B (0x03f00000)`。 |
+| `ptr_B` | `s[6:7]` | 4..5 | 16..23 (`0x10..0x17`) | runtime 64-bit pointer（地址不固定） | 当前测试为 `torch.uint8` on-wire packed MXFP4；logical shape `[N,K]=[2048,7168]`，2-D physical byte tensor shape `[N,K/2]=[2048,3584]`；同一 16×16 packed-byte preshuffle 存储次序 `[N/16,(K/2)/16,16,16]=[128,224,16,16]`，再 flatten 为 2-D；storage `2048*3584 = 7,340,032 B (0x00700000)`。 |
+| `ptr_ScaleA` | `s[8:9]` | 6..7 | 24..31 (`0x18..0x1f`) | runtime 64-bit pointer（地址不固定） | `torch.uint8` on-wire E8M0，1 B/scale、每个 scale 覆盖 K32；logical shape `[M,K/32]=[18432,224]`，wrapper-visible physical 2-D shape 仍为 `[18432,224]`；32×4 preshuffle 存储次序 `[M/32,(K/32)/4,32,4]=[576,56,32,4]`（`row_tile,k_scale_tile,row_in_tile,scale_in_tile`），再 flatten 为上述 2-D shape；storage `18432*224 = 4,128,768 B (0x003f0000)`。 |
+| `ptr_ScaleB` | `s[10:11]` | 8..9 | 32..39 (`0x20..0x27`) | runtime 64-bit pointer（地址不固定） | `torch.uint8` on-wire E8M0，1 B/scale、每个 scale 覆盖 K32；logical shape `[N,K/32]=[2048,224]`，wrapper-visible physical 2-D shape 仍为 `[2048,224]`；32×4 preshuffle 存储次序 `[N/32,(K/32)/4,32,4]=[64,56,32,4]`，再 flatten 为上述 2-D shape；storage `2048*224 = 458,752 B (0x00070000)`。 |
+| `strideD0` | `s12` | 10 | 40..43 (`0x28..0x2b`) | `4096 B (0x1000)` | D 的真实 contiguous row byte stride：`N*sizeof(bf16)=2048*2=4096`。 |
+| `strideA0` | `s13` | 11 | 44..47 (`0x2c..0x2f`) | `3584 B (0x0e00)` | `K/2=7168/2`，packed A 的原始单-row byte extent；也是 flatten 后 2-D tensor 的表面 stride0，但不是 preshuffle 16×16 tile stride。 |
+| `strideB0` | `s14` | 12 | 48..51 (`0x30..0x33`) | `3584 B (0x0e00)` | `K/2=7168/2`，packed B 的原始单-row byte extent；不是 preshuffle tile stride。 |
+| `ScaleA_stride0` | `s15` | 13 | 52..55 (`0x34..0x37`) | `224 B (0x00e0)` | `K/32=7168/32`，未 shuffle scale 的单-row byte extent；不是 32×4 tile stride。 |
+| `ScaleB_stride0` | `s16` | 14 | 56..59 (`0x38..0x3b`) | `224 B (0x00e0)` | `K/32=7168/32`，未 shuffle scale 的单-row byte extent；不是 32×4 tile stride。 |
+| `M` | `s17` | 15 | 60..63 (`0x3c..0x3f`) | `18432 (0x4800)` | 逻辑 A/D row 数、输出 M dimension length；单位是 rows，不是 bytes。 |
+| `N` | `s18` | 16 | 64..67 (`0x40..0x43`) | `2048 (0x0800)` | 逻辑 B row 数和 D column 数、输出 N dimension length；单位是 rows/columns，不是 bytes。 |
+| `K` | `s19` | 17 | 68..71 (`0x44..0x47`) | `7168 (0x1c00)` | unpacked logical FP4 reduction length；单位是 logical FP4 values/row，不是 packed bytes（后者为 3584）也不是 scale 数（后者为 224/row）。 |
+| `log2_grid_x` | `s20` | 18 | 72..75 (`0x48..0x4b`) | `2 (0x00000002)` | `log2` **physical persistent cluster-grid X**；`gridX=4`，不是 logical WG-grid X=8，也不是 logical cluster-grid X=2。 |
+| `log2_grid_y` | `s21` | 19 | 76..79 (`0x4c..0x4f`) | `2 (0x00000002)` | `log2` **physical persistent cluster-grid Y**；`gridY=4`，不是 logical WG-grid Y=72，也不是 logical cluster-grid Y=18。 |
+
+表中 pointer 的“logical”语义来自 reference 使用的 shuffle 前 buffers：
+`test_f4gemm.py` L62–L80 生成/解释
+`A[M,K/2]`、`B[N,K/2]`、`SA[M,K/32]`、`SB[N,K/32]`；L81–L89
+才把 preshuffled buffers 交给候选。`gemm_a4w4` 的 gfx1250 wrapper
+只把 A view 成 `[M,K/2]` 并原样下传 A/B/scale（
+`gemm_op_a4w4.py` L144–L166、L297–L319），所以 CO 收到的 pointer
+确实指向表中的 physical/preshuffled storage，而 reference 仍按 logical
+矩阵解释。`shuffle_weight_f4` 的
+`view(rows/16,16,(K/2)/16,16) -> permute(0,2,1,3)` 见
+`shuffle.py` L318–L335；`shuffle_scale_f4` 的
+`view(rows/32,32,(K/32)/4,4) -> permute(0,2,1,3)` 见 L292–L315。
+两个函数最后都 flatten 回原 2-D tensor shape；因此 4-D shape 描述的是
+线性存储次序，不是 wrapper 看见的 `Tensor.shape`。
+
+五个 stride 不是从 `Tensor.stride()` 动态读取；C++ 在
+`asm_f4gemm.cu` L157–L173 只由 `Ndim`、`Kdim` 和 dtype byte 数构造它们。
+ISA 又给出 preshuffle 后的实际解释：
+
+- D 未 shuffle；ISA L273–L286 用 `s12` 乘 M-row offset，并把 N offset
+  乘 2，所以 `s12=4096 B` 就是真实相邻 D row stride。
+- A/B 的 `s13/s14=3584 B` 是原始 packed-row extent。ISA 以
+  `tile_index*256*stride` 定位 256-row tile（L257–L272），并分别在
+  L350–L370、L1052–L1072 计算 `stride<<4`。所以 16-row preshuffle
+  super-row stride 是 `16*3584 = 57,344 B (0x0e000)`；单个
+  16×16 packed-byte tile 是 `256 B (0x0100)`。kernarg 本身两者都不是。
+- SA/SB 同理：`s15/s16=224 B` 是原始 scale-row extent，ISA 在
+  L1759–L1779、L2461–L2481 计算 `stride<<5`，得到 32-row super-row
+  stride `32*224 = 7,168 B (0x1c00)`；单个 32×4 scale tile 是
+  `128 B (0x0080)`。
+
+dw18/19 的算法也不涉及对 72 取近似 log。C++ L252–L315 对当前配置计算：
+
+```text
+cluster_size = 4*4 = 16 WG
+persistent clusters = PERSISTENT_TG/cluster_size = 256/16 = 16
+gridY = PERSISTENT_GY = 4
+gridX = persistent_clusters/gridY = 4
+log2_grid_x = exact_log2(4) = 2
+log2_grid_y = exact_log2(4) = 2
+physical WG launch = (gridX*cluster_x, gridY*cluster_y) = (16,16)
+```
+
+代码先显式要求 `clusters/gridX/gridY` 都是 2 的幂（L289–L304），再用
+右移循环计数（L312–L315），所以这里是 **exact integer log2**，不是
+floor/ceil log、bit-width，也不是 fast-div magic。更准确的字段名应是
+`log2_persistent_cluster_grid_x/y`。ISA L39–L41 用 `s20` 把物理 cluster
+坐标 flatten；L204–L207 及 L6872–L6877 用
+`1 << (s20+s21) = 16` 作为下一 persistent logical-cluster task 的步长。
+
+相反，M 方向的 72 是 `M/256=72` 个 **logical WG rows**。ISA L45–L57
+利用 `s17/s18` 和 TTMP 中的 4×4 cluster dimensions，以
+`(dim+1024-1)>>10` 分别得到 logical cluster grid
+`(ceil(N/1024),ceil(M/1024))=(2,18)`，再得到 36 个 logical cluster
+tasks；当前 selector 已保证整除，所以这里的 ceil 恰好等于精确除法。
+因此 72、18 和 36 都不写入 dw18/19。
 
 ### 1.5 Shape 约束的事实边界
 
