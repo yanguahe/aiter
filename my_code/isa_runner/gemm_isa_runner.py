@@ -120,6 +120,7 @@ SUMMARY_COLUMNS = (
 EVENT_TIMING_COLUMNS = (
     "name",
     "cnt",
+    "warmup",
     "device_time_sum",
     "device_time_avg",
     "device_type",
@@ -180,7 +181,6 @@ class _Dependencies:
     torch: Any
     f4_test: Any
     check_allclose: Any
-    run_perftest: Any
     get_gfx: Any
 
 
@@ -811,32 +811,99 @@ def run_static_contract_checks() -> None:
         else:
             raise AssertionError(f"{label} fixture did not fail")
 
-    perf_call: dict[str, Any] = {}
+    timing_calls: list[tuple[Any, ...]] = []
 
-    def perf_stub(launch: Any, **kwargs: Any) -> tuple[str, float]:
-        perf_call.update(kwargs)
-        return launch(), 75.3293
+    class EventStub:
+        def __init__(self, label: str) -> None:
+            self.label = label
 
-    output_marker, event_avg = _run_cuda_event_perftest(
-        perf_stub,
-        lambda: "fixture-output",
-        100,
+        def record(self, stream: Any) -> None:
+            timing_calls.append(("event.record", self.label, stream))
+
+        def synchronize(self) -> None:
+            timing_calls.append(("event.synchronize", self.label))
+
+        def elapsed_time(self, other: Any) -> float:
+            timing_calls.append(
+                ("event.elapsed_time", self.label, other.label)
+            )
+            return 1.5  # milliseconds for the complete two-launch batch
+
+    class CudaStub:
+        def __init__(self) -> None:
+            self.event_count = 0
+
+        def synchronize(self) -> None:
+            timing_calls.append(("cuda.synchronize",))
+
+        def Event(self, *, enable_timing: bool) -> EventStub:
+            if not enable_timing:
+                raise AssertionError("timing event was not enabled")
+            label = "start" if self.event_count == 0 else "end"
+            self.event_count += 1
+            timing_calls.append(("event.create", label))
+            return EventStub(label)
+
+    class TorchStub:
+        def __init__(self) -> None:
+            self.cuda = CudaStub()
+
+    launch_count = 0
+
+    def launch_stub() -> str:
+        nonlocal launch_count
+        launch_count += 1
+        timing_calls.append(("launch", launch_count))
+        return f"fixture-output-{launch_count}"
+
+    stream_marker = object()
+    output_marker, event_avg = _run_batched_cuda_event_timing(
+        TorchStub(),
+        launch_stub,
+        stream_marker,
+        num_warmup=3,
+        num_iters=2,
     )
-    if output_marker != "fixture-output" or event_avg != 75.3293:
-        raise AssertionError("CUDA-event run_perftest stub returned wrong values")
-    expected_perf_call = {
-        "num_iters": 100,
-        "testGraph": False,
-        "use_cuda_event": True,
-    }
-    if perf_call != expected_perf_call:
+    expected_timing_calls = [
+        ("launch", 1),
+        ("launch", 2),
+        ("launch", 3),
+        ("cuda.synchronize",),
+        ("event.create", "start"),
+        ("event.create", "end"),
+        ("event.record", "start", stream_marker),
+        ("launch", 4),
+        ("launch", 5),
+        ("event.record", "end", stream_marker),
+        ("event.synchronize", "end"),
+        ("event.elapsed_time", "start", "end"),
+    ]
+    if timing_calls != expected_timing_calls:
         raise AssertionError(
-            f"CUDA-event run_perftest kwargs are {perf_call}, "
-            f"expected {expected_perf_call}"
+            f"batched CUDA-event call order is {timing_calls}, "
+            f"expected {expected_timing_calls}"
         )
+    if output_marker != "fixture-output-5" or event_avg != 750.0:
+        raise AssertionError(
+            f"batched CUDA-event result is {(output_marker, event_avg)}, "
+            "expected ('fixture-output-5', 750.0)"
+        )
+
+    defaults = _build_parser().parse_args(["--isa", "fixture.s"])
+    if defaults.warmup != 101 or defaults.iters != 100:
+        raise AssertionError(
+            f"timing CLI defaults are warmup={defaults.warmup}, "
+            f"iters={defaults.iters}; expected 101/100"
+        )
+    zero_warmup = _build_parser().parse_args(
+        ["--isa", "fixture.s", "--warmup", "0"]
+    )
+    if zero_warmup.warmup != 0:
+        raise AssertionError("--warmup 0 was not preserved")
     timing_row = make_cuda_event_timing_row(
         EXPECTED_KERNEL_BASENAME,
-        100,
+        2,
+        3,
         event_avg,
         0,
     )
@@ -847,12 +914,13 @@ def run_static_contract_checks() -> None:
         )
     if (
         timing_row["name"] != EXPECTED_KERNEL_BASENAME
-        or timing_row["cnt"] != 100
-        or abs(timing_row["device_time_sum"] - 7532.93) > 1e-9
-        or timing_row["device_time_avg"] != 75.3293
+        or timing_row["cnt"] != 2
+        or timing_row["warmup"] != 3
+        or timing_row["device_time_sum"] != 1500.0
+        or timing_row["device_time_avg"] != 750.0
         or timing_row["device_type"] != "CUDA/HIP"
         or timing_row["device_index"] != 0
-        or timing_row["source"] != "cuda.Event"
+        or timing_row["source"] != "cuda.Event batched"
     ):
         raise AssertionError(f"unexpected CUDA-event timing row: {timing_row}")
 
@@ -1042,6 +1110,7 @@ class _LoadedClusterKernel:
         self._function = ctypes.c_void_p()
         self._stream = ctypes.c_void_p()
         self._configured = False
+        self._stream_synchronized = True
 
         data = code_object.read_bytes()
         self._blob = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
@@ -1111,12 +1180,14 @@ class _LoadedClusterKernel:
             numAttrs=1,
         )
         self._configured = True
+        self._stream_synchronized = True
 
     def launch(self) -> None:
         """Enqueue exactly one dispatch; no loading, packing, or synchronization."""
 
         if not self._configured:
             raise GemmIsaRunnerError("kernel launch attempted before configure()")
+        self._stream_synchronized = False
         # hipExtModuleLaunchKernel uses this same five-entry extra-buffer
         # protocol, but it has no cluster-attribute parameter.  The current
         # Aiter cluster launcher therefore uses hipDrvLaunchKernelEx.
@@ -1138,12 +1209,18 @@ class _LoadedClusterKernel:
             self._hip.lib.hipStreamSynchronize(self._stream),
             "hipStreamSynchronize",
         )
+        self._stream_synchronized = True
+
+    def mark_stream_synchronized(self) -> None:
+        """Record that an event on this same stream has completed."""
+
+        self._stream_synchronized = True
 
     def close(self) -> None:
         if not self._module.value:
             return
         sync_error: BaseException | None = None
-        if self._configured:
+        if self._configured and not self._stream_synchronized:
             try:
                 self.synchronize()
             except BaseException as exc:
@@ -1199,7 +1276,7 @@ def _load_dependencies(device: int) -> _Dependencies:
     try:
         import test_f4gemm as f4_test  # type: ignore[import-not-found]
         from aiter.jit.utils.chip_info import get_gfx_runtime
-        from aiter.test_common import checkAllclose, run_perftest
+        from aiter.test_common import checkAllclose
     except ImportError as exc:
         raise GemmIsaRunnerError(
             f"failed to import aiter from repository root {_REPO}: {exc}"
@@ -1208,7 +1285,6 @@ def _load_dependencies(device: int) -> _Dependencies:
         torch=torch,
         f4_test=f4_test,
         check_allclose=checkAllclose,
-        run_perftest=run_perftest,
         get_gfx=get_gfx_runtime,
     )
 
@@ -1250,28 +1326,55 @@ def _validate_mode(
         )
 
 
-def _run_cuda_event_perftest(
-    run_perftest: Any,
+def _run_batched_cuda_event_timing(
+    torch_module: Any,
     launch: Any,
-    iters: int,
+    stream: Any,
+    *,
+    num_warmup: int,
+    num_iters: int,
 ) -> tuple[Any, float]:
-    """Use run_perftest warmups/iterations but return before Kineto profiling."""
+    """Time one continuously queued launch batch with two CUDA events.
 
-    return run_perftest(
-        launch,
-        num_iters=iters,
-        testGraph=False,
-        use_cuda_event=True,
-    )
+    Warmups are enqueued back-to-back and followed by one device sync.  The
+    measured launches are then enclosed by one start/end pair on the exact
+    PyTorch stream also passed to ``hipDrvLaunchKernelEx``.  Only the end event
+    is synchronized; there is no per-iteration synchronization or cache flush.
+    """
+
+    if num_warmup < 0:
+        raise GemmIsaRunnerError(
+            f"batched CUDA-event warmup must be non-negative, got {num_warmup}"
+        )
+    if num_iters < 1:
+        raise GemmIsaRunnerError(
+            f"batched CUDA-event iterations must be at least one, got {num_iters}"
+        )
+
+    for _ in range(num_warmup):
+        launch()
+    torch_module.cuda.synchronize()
+
+    start = torch_module.cuda.Event(enable_timing=True)
+    end = torch_module.cuda.Event(enable_timing=True)
+    start.record(stream)
+    output = None
+    for _ in range(num_iters):
+        output = launch()
+    end.record(stream)
+    end.synchronize()
+    avg_us = float(start.elapsed_time(end)) * 1000.0 / num_iters
+    return output, avg_us
 
 
 def make_cuda_event_timing_row(
     symbol: str,
     iters: int,
+    warmup: int,
     avg_us: float,
     device: int,
 ) -> dict[str, Any]:
-    """Build a profiler-like row whose source is explicitly cuda.Event."""
+    """Build a profiler-like row explicitly sourced from batched CUDA events."""
 
     avg_us = float(avg_us)
     if avg_us <= 0.0:
@@ -1282,14 +1385,19 @@ def make_cuda_event_timing_row(
         raise GemmIsaRunnerError(
             f"CUDA-event timing requires at least one iteration, got {iters}"
         )
+    if warmup < 0:
+        raise GemmIsaRunnerError(
+            f"CUDA-event timing warmup must be non-negative, got {warmup}"
+        )
     return {
         "name": symbol,
         "cnt": int(iters),
+        "warmup": int(warmup),
         "device_time_sum": avg_us * iters,
         "device_time_avg": avg_us,
         "device_type": "CUDA/HIP",
         "device_index": int(device),
-        "source": "cuda.Event",
+        "source": "cuda.Event batched",
     }
 
 
@@ -1318,8 +1426,8 @@ def _print_cuda_event_timing(row: Mapping[str, Any]) -> None:
     display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
     display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
     print(
-        "CUDA-event kernel timing "
-        "(microseconds; source=cuda.Event, not torch profiler):"
+        "CUDA-event batched kernel timing "
+        "(microseconds; source=cuda.Event batched, not torch profiler):"
     )
     print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
 
@@ -1390,15 +1498,19 @@ def _run_gemm(
             module.launch()
             return output
 
-        timed_output, microseconds = _run_cuda_event_perftest(
-            dependencies.run_perftest,
+        timed_output, microseconds = _run_batched_cuda_event_timing(
+            torch,
             launch,
-            args.iters,
+            stream,
+            num_warmup=args.warmup,
+            num_iters=args.iters,
         )
-        module.synchronize()
+        # end.synchronize() completed every launch on this exact stream.
+        module.mark_stream_synchronized()
         event_timing = make_cuda_event_timing_row(
             symbol,
             args.iters,
+            args.warmup,
             microseconds,
             args.device,
         )
@@ -1510,10 +1622,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="single GEMM shape (default: 18432,2048,7168)",
     )
     parser.add_argument(
+        "--warmup",
+        type=int,
+        default=101,
+        help="continuously enqueued untimed warmup launches (default: 101)",
+    )
+    parser.add_argument(
         "--iters",
         type=int,
         default=100,
-        help="run_perftest timed iterations (default: 100)",
+        help="continuously enqueued batched event iterations (default: 100)",
     )
     parser.add_argument(
         "--device",
@@ -1536,6 +1654,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.warmup < 0:
+        parser.error("--warmup must be non-negative")
     if args.iters < 1:
         parser.error("--iters must be at least 1")
     if args.device < 0:
