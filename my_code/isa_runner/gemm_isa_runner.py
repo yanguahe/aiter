@@ -117,6 +117,16 @@ SUMMARY_COLUMNS = (
     "gemm_a4w4 rel_l2",
 )
 
+EVENT_TIMING_COLUMNS = (
+    "name",
+    "cnt",
+    "device_time_sum",
+    "device_time_avg",
+    "device_type",
+    "device_index",
+    "source",
+)
+
 
 class GemmIsaRunnerError(RuntimeError):
     """Expected build, validation, HIP, or launch failure."""
@@ -801,6 +811,51 @@ def run_static_contract_checks() -> None:
         else:
             raise AssertionError(f"{label} fixture did not fail")
 
+    perf_call: dict[str, Any] = {}
+
+    def perf_stub(launch: Any, **kwargs: Any) -> tuple[str, float]:
+        perf_call.update(kwargs)
+        return launch(), 75.3293
+
+    output_marker, event_avg = _run_cuda_event_perftest(
+        perf_stub,
+        lambda: "fixture-output",
+        100,
+    )
+    if output_marker != "fixture-output" or event_avg != 75.3293:
+        raise AssertionError("CUDA-event run_perftest stub returned wrong values")
+    expected_perf_call = {
+        "num_iters": 100,
+        "testGraph": False,
+        "use_cuda_event": True,
+    }
+    if perf_call != expected_perf_call:
+        raise AssertionError(
+            f"CUDA-event run_perftest kwargs are {perf_call}, "
+            f"expected {expected_perf_call}"
+        )
+    timing_row = make_cuda_event_timing_row(
+        EXPECTED_KERNEL_BASENAME,
+        100,
+        event_avg,
+        0,
+    )
+    if tuple(timing_row) != EVENT_TIMING_COLUMNS:
+        raise AssertionError(
+            f"event timing columns are {tuple(timing_row)}, "
+            f"expected {EVENT_TIMING_COLUMNS}"
+        )
+    if (
+        timing_row["name"] != EXPECTED_KERNEL_BASENAME
+        or timing_row["cnt"] != 100
+        or abs(timing_row["device_time_sum"] - 7532.93) > 1e-9
+        or timing_row["device_time_avg"] != 75.3293
+        or timing_row["device_type"] != "CUDA/HIP"
+        or timing_row["device_index"] != 0
+        or timing_row["source"] != "cuda.Event"
+    ):
+        raise AssertionError(f"unexpected CUDA-event timing row: {timing_row}")
+
     fixture: dict[str, int] = {}
     for index, (name, _offset, kind) in enumerate(KERNARG_LAYOUT, start=1):
         fixture[name] = (
@@ -1195,11 +1250,57 @@ def _validate_mode(
         )
 
 
-def _plain_markdown(row: Mapping[str, Any]) -> str:
-    values = [str(row[column]) for column in SUMMARY_COLUMNS]
+def _run_cuda_event_perftest(
+    run_perftest: Any,
+    launch: Any,
+    iters: int,
+) -> tuple[Any, float]:
+    """Use run_perftest warmups/iterations but return before Kineto profiling."""
+
+    return run_perftest(
+        launch,
+        num_iters=iters,
+        testGraph=False,
+        use_cuda_event=True,
+    )
+
+
+def make_cuda_event_timing_row(
+    symbol: str,
+    iters: int,
+    avg_us: float,
+    device: int,
+) -> dict[str, Any]:
+    """Build a profiler-like row whose source is explicitly cuda.Event."""
+
+    avg_us = float(avg_us)
+    if avg_us <= 0.0:
+        raise GemmIsaRunnerError(
+            f"cuda.Event returned a non-positive latency: {avg_us} us"
+        )
+    if iters < 1:
+        raise GemmIsaRunnerError(
+            f"CUDA-event timing requires at least one iteration, got {iters}"
+        )
+    return {
+        "name": symbol,
+        "cnt": int(iters),
+        "device_time_sum": avg_us * iters,
+        "device_time_avg": avg_us,
+        "device_type": "CUDA/HIP",
+        "device_index": int(device),
+        "source": "cuda.Event",
+    }
+
+
+def _plain_markdown(
+    row: Mapping[str, Any],
+    columns: Sequence[str] = SUMMARY_COLUMNS,
+) -> str:
+    values = [str(row[column]) for column in columns]
     widths = [
         max(len(column), len(value))
-        for column, value in zip(SUMMARY_COLUMNS, values)
+        for column, value in zip(columns, values)
     ]
 
     def line(items: Sequence[str]) -> str:
@@ -1209,7 +1310,18 @@ def _plain_markdown(row: Mapping[str, Any]) -> str:
         ) + " |"
 
     separator = ["-" * width for width in widths]
-    return "\n".join((line(SUMMARY_COLUMNS), line(separator), line(values)))
+    return "\n".join((line(columns), line(separator), line(values)))
+
+
+def _print_cuda_event_timing(row: Mapping[str, Any]) -> None:
+    display = dict(row)
+    display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
+    display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
+    print(
+        "CUDA-event kernel timing "
+        "(microseconds; source=cuda.Event, not torch profiler):"
+    )
+    print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
 
 
 def _print_summary(row: Mapping[str, Any], pandas_module: Any) -> None:
@@ -1226,7 +1338,7 @@ def _run_gemm(
     args: argparse.Namespace,
     code_object: Path,
     symbol: str,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
     m, n, k = args.shape
     geometry = make_launch_geometry(m, n, k)
     dependencies = _load_dependencies(args.device)
@@ -1278,12 +1390,19 @@ def _run_gemm(
             module.launch()
             return output
 
-        timed_output, microseconds = dependencies.run_perftest(
+        timed_output, microseconds = _run_cuda_event_perftest(
+            dependencies.run_perftest,
             launch,
-            num_iters=args.iters,
-            testGraph=False,
+            args.iters,
         )
         module.synchronize()
+        event_timing = make_cuda_event_timing_row(
+            symbol,
+            args.iters,
+            microseconds,
+            args.device,
+        )
+        us = float(event_timing["device_time_avg"])
 
     error = dependencies.check_allclose(
         reference,
@@ -1306,11 +1425,6 @@ def _run_gemm(
         + inputs["sB"].nbytes
         + m * n * dtype.itemsize
     )
-    us = float(microseconds)
-    if us <= 0.0:
-        raise GemmIsaRunnerError(
-            f"run_perftest returned a non-positive latency: {us} us"
-        )
     row = {
         "intype": args.intype,
         "M": m,
@@ -1330,7 +1444,7 @@ def _run_gemm(
         "gemm_a4w4 max_abs": max_abs,
         "gemm_a4w4 rel_l2": rel_l2,
     }
-    return row, bool(error == 0)
+    return row, event_timing, bool(error == 0)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1460,7 +1574,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 shutil.copy2(result.code_object, destination)
                 print(f"[gemm_isa_runner] kept code object: {destination}")
 
-            row, passed = _run_gemm(args, result.code_object, symbol)
+            row, event_timing, passed = _run_gemm(
+                args,
+                result.code_object,
+                symbol,
+            )
+            _print_cuda_event_timing(event_timing)
             _print_summary(row, _load_pandas_from_row_context())
             return 0 if passed else 3
     except CompileError as exc:
