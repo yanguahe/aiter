@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import sys
 from contextlib import nullcontext
 
@@ -82,6 +83,26 @@ _ACT_BY_NAME = {
     "swiglu": ActivationType.Swiglu,
     "situv2": ActivationType.Situv2,
 }
+_STAGE1_ACT_ID = {
+    ActivationType.Silu: 1,
+    ActivationType.Swiglu: 2,
+    ActivationType.Situv2: 3,
+}
+_GEMM_SUMMARY_COLUMNS = (
+    "gemm1 executed",
+    "gemm1 TDM read",
+    "gemm1 BF16 write",
+    "gemm1 R+W",
+    "gemm2 executed",
+    "gemm2 TDM read",
+    "gemm2 BF16 write",
+    "gemm2 R+W",
+)
+_A4W4_TDM_KERNEL_RE = re.compile(
+    r"a8w4_tdm_fp4_t(?P<tile_m>\d+)x(?P<tile_n>\d+)x(?P<tile_k>\d+)"
+    r"_w(?P<m_warp>\d+)x(?P<n_warp>\d+)_b(?P<num_buffers>\d+)"
+    r"_K(?P<K>\d+)_e(?P<experts>\d+)(?P<suffix>[A-Za-z0-9_]*)"
+)
 
 VERIFY_TOL_A4W4 = 0.02
 VERIFY_TOL_A8W4 = 0.02
@@ -89,6 +110,256 @@ VERIFY_TOL_A8W4 = 0.02
 # logits_diff = ||x-y||^2 / (||x||^2 + ||y||^2).  rel_l2 is kept as an
 # informational print only; logits_diff < 0.01 is the actual pass/fail gate.
 LOGITS_DIFF_TOL = 0.01
+
+
+def _empty_gemm_summary() -> dict[str, str]:
+    return {column: "N/A" for column in _GEMM_SUMMARY_COLUMNS}
+
+
+def _calculate_a4w4_tdm_stage_metrics(
+    *,
+    route_counts: list[int],
+    tile_m: int,
+    tile_n: int,
+    tile_k: int,
+    n: int,
+    k: int,
+    output_n: int,
+    latency_us: float,
+    cluster_n: int,
+) -> dict[str, int | float]:
+    """Pure-Python executed-work/TDM accounting for one grouped A4W4 stage.
+
+    Each real expert M tile requests a complete B/B-scale N×K surface. A payload
+    is row-OOB clamped to valid routes, while A scale is not and therefore uses
+    tile-aligned rows. Sentinel tiles outside these per-expert tiles never enter
+    this accounting.
+    """
+    if not route_counts or any(count < 0 for count in route_counts):
+        raise ValueError("route_counts must contain non-negative expert counts")
+    if min(tile_m, tile_n, tile_k, n, k, output_n) <= 0:
+        raise ValueError("tile and problem dimensions must be positive")
+    if cluster_n != 1:
+        raise ValueError("cluster_n > 1 multicast accounting is not supported")
+    if n % tile_n or k % tile_k:
+        raise ValueError("N and K must be exact multiples of the observed tiles")
+    if k % 2 or k % SCALE_BLOCK:
+        raise ValueError("A4W4 K must be divisible by 2 and the scale block")
+    if latency_us <= 0:
+        raise ValueError("kernel latency must be positive")
+
+    active_m_tiles = sum((count + tile_m - 1) // tile_m for count in route_counts)
+    valid_rows = sum(route_counts)
+    aligned_rows = active_m_tiles * tile_m
+    n_tiles = n // tile_n
+
+    # A is shared only within a cluster. The guarded cluster_n==1 case requests
+    # one valid-row A surface per N tile; A scales include aligned padding rows.
+    a_payload_bytes = valid_rows * (k // 2) * n_tiles
+    a_scale_bytes = aligned_rows * (k // SCALE_BLOCK) * n_tiles
+    b_payload_bytes = active_m_tiles * n * (k // 2)
+    b_scale_bytes = active_m_tiles * n * (k // SCALE_BLOCK)
+    tdm_read_bytes = (
+        a_payload_bytes + a_scale_bytes + b_payload_bytes + b_scale_bytes
+    )
+    bf16_write_bytes = valid_rows * output_n * 2
+    executed_flops = 2 * aligned_rows * n * k
+    read_write_bytes = tdm_read_bytes + bf16_write_bytes
+
+    return {
+        "valid_rows": valid_rows,
+        "aligned_rows": aligned_rows,
+        "active_m_tiles": active_m_tiles,
+        "executed_flops": executed_flops,
+        "tdm_read_bytes": tdm_read_bytes,
+        "bf16_write_bytes": bf16_write_bytes,
+        "read_write_bytes": read_write_bytes,
+        "executed_tflops": executed_flops / latency_us / 1e6,
+        "tdm_read_tbps": tdm_read_bytes / latency_us / 1e6,
+        "bf16_write_tbps": bf16_write_bytes / latency_us / 1e6,
+        "read_write_tbps": read_write_bytes / latency_us / 1e6,
+    }
+
+
+def _format_a4w4_tdm_stage_metrics(stage: dict[str, int | float]) -> tuple[str, ...]:
+    return (
+        f"{stage['executed_flops']:,} FLOP \u2192 "
+        f"{stage['executed_tflops']:,.1f} TFLOP/s",
+        f"{stage['tdm_read_bytes']:,} B \u2192 "
+        f"{stage['tdm_read_tbps']:.3f} TB/s",
+        f"{stage['bf16_write_bytes']:,} B \u2192 "
+        f"{stage['bf16_write_tbps']:.3f} TB/s",
+        f"{stage['read_write_bytes']:,} B \u2192 "
+        f"{stage['read_write_tbps']:.3f} TB/s",
+    )
+
+
+def _parse_a4w4_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
+    match = _A4W4_TDM_KERNEL_RE.search(name)
+    if match is None:
+        return None
+    suffix = match.group("suffix")
+    act_match = re.search(r"(?:^|_)act(\d+)(?:_|$)", suffix)
+    cluster_match = re.search(r"(?:^|_)cn(\d+)(?:_|$)", suffix)
+    parsed: dict[str, int | str | bool] = {
+        key: int(match.group(key))
+        for key in (
+            "tile_m",
+            "tile_n",
+            "tile_k",
+            "m_warp",
+            "n_warp",
+            "num_buffers",
+            "K",
+            "experts",
+        )
+    }
+    parsed.update(
+        {
+            "name": match.group(0),
+            "stage1_act": int(act_match.group(1)) if act_match else 0,
+            "cluster_n": int(cluster_match.group(1)) if cluster_match else 1,
+            "has_bias": "_bias" in f"_{suffix}",
+        }
+    )
+    return parsed
+
+
+def _build_a4w4_tdm_summary(
+    *,
+    trace_df,
+    route_counts: list[int],
+    data_format: str,
+    activation: ActivationType,
+    use_bias: bool,
+    experts: int,
+    tokens: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+) -> tuple[dict[str, str], dict[str, float]]:
+    """Build exactly eight columns, or eight N/A values unless fully verified.
+
+    The strict guards intentionally exclude A8W4, bias reads, multicast
+    clusters, incomplete/ambiguous profiler rows, and non-integral tile shapes.
+    """
+    empty = _empty_gemm_summary()
+    if data_format != "a4w4" or use_bias or trace_df is None:
+        return empty, {}
+    stage1_act = _STAGE1_ACT_ID.get(activation)
+    if stage1_act is None:
+        return empty, {}
+    if len(route_counts) != experts or sum(route_counts) != tokens * topk:
+        return empty, {}
+
+    candidates = []
+    for rec in trace_df.to_dict("records"):
+        parsed = _parse_a4w4_tdm_kernel_name(str(rec.get("name", "")))
+        if parsed is None or parsed["experts"] != experts:
+            continue
+        try:
+            latency_us = float(rec.get("device_time_avg"))
+        except (TypeError, ValueError):
+            continue
+        if not latency_us > 0:
+            continue
+        parsed["latency_us"] = latency_us
+        candidates.append(parsed)
+
+    gemm1 = [
+        cfg
+        for cfg in candidates
+        if cfg["K"] == model_dim and cfg["stage1_act"] == stage1_act
+    ]
+    gemm2 = [
+        cfg for cfg in candidates if cfg["K"] == inter_dim and cfg["stage1_act"] == 0
+    ]
+    if len(gemm1) != 1 or len(gemm2) != 1:
+        return empty, {}
+    if gemm1[0]["has_bias"] or gemm2[0]["has_bias"]:
+        return empty, {}
+
+    try:
+        stage1 = _calculate_a4w4_tdm_stage_metrics(
+            route_counts=route_counts,
+            tile_m=int(gemm1[0]["tile_m"]),
+            tile_n=int(gemm1[0]["tile_n"]),
+            tile_k=int(gemm1[0]["tile_k"]),
+            n=2 * inter_dim,
+            k=model_dim,
+            output_n=inter_dim,
+            latency_us=float(gemm1[0]["latency_us"]),
+            cluster_n=int(gemm1[0]["cluster_n"]),
+        )
+        stage2 = _calculate_a4w4_tdm_stage_metrics(
+            route_counts=route_counts,
+            tile_m=int(gemm2[0]["tile_m"]),
+            tile_n=int(gemm2[0]["tile_n"]),
+            tile_k=int(gemm2[0]["tile_k"]),
+            n=model_dim,
+            k=inter_dim,
+            output_n=model_dim,
+            latency_us=float(gemm2[0]["latency_us"]),
+            cluster_n=int(gemm2[0]["cluster_n"]),
+        )
+    except (TypeError, ValueError):
+        return empty, {}
+
+    summary = dict(
+        zip(
+            _GEMM_SUMMARY_COLUMNS,
+            _format_a4w4_tdm_stage_metrics(stage1)
+            + _format_a4w4_tdm_stage_metrics(stage2),
+        )
+    )
+    return summary, {
+        "gemm1_us": float(gemm1[0]["latency_us"]),
+        "gemm2_us": float(gemm2[0]["latency_us"]),
+    }
+
+
+def test_a4w4_tdm_stage_metrics_fixture():
+    """CPU-only arithmetic fixture for the 512-token balanced benchmark."""
+    route_counts = [32] * 96
+    gemm1 = _calculate_a4w4_tdm_stage_metrics(
+        route_counts=route_counts,
+        tile_m=64,
+        tile_n=256,
+        tile_k=256,
+        n=2 * 3072,
+        k=7168,
+        output_n=3072,
+        latency_us=144.7,
+        cluster_n=1,
+    )
+    gemm2 = _calculate_a4w4_tdm_stage_metrics(
+        route_counts=route_counts,
+        tile_m=64,
+        tile_n=256,
+        tile_k=256,
+        n=7168,
+        k=3072,
+        output_n=7168,
+        latency_us=76.1,
+        cluster_n=1,
+    )
+
+    assert gemm1["valid_rows"] == 3072
+    assert gemm1["aligned_rows"] == 6144
+    assert _format_a4w4_tdm_stage_metrics(gemm1) == (
+        "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
+        "2,543,321,088 B \u2192 17.577 TB/s",
+        "18,874,368 B \u2192 0.130 TB/s",
+        "2,562,195,456 B \u2192 17.707 TB/s",
+    )
+    assert gemm2["valid_rows"] == 3072
+    assert gemm2["aligned_rows"] == 6144
+    assert _format_a4w4_tdm_stage_metrics(gemm2) == (
+        "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
+        "1,271,660,544 B \u2192 16.710 TB/s",
+        "44,040,192 B \u2192 0.579 TB/s",
+        "1,315,700,736 B \u2192 17.289 TB/s",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +604,14 @@ def _run_grouped_via_fused_moe(
     warmup: int = 5,
     iters: int = 101,
     const_init: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, float | None, dict | None]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    float | None,
+    dict | None,
+    object | None,
+    list[int],
+]:
     """Build mxfp4 weights + routing, dispatch through ``fused_moe``.
 
     Stage1 weights are always laid out GUGU (gate/up row-interleaved) paired
@@ -347,7 +625,7 @@ def _run_grouped_via_fused_moe(
     timing; otherwise the output is a single eager (graph-off) call and ``us`` is
     None. ``kernel_bench`` instead times the gemm1/gemm2 kernels in isolation
     (looping each launch alone) and returns their per-kernel us in ``kernel_us``.
-    Returns ``(out, ref, us_or_None, kernel_us_or_None)``.
+    Returns ``(out, ref, us_or_None, kernel_us_or_None, trace_df, route_counts)``.
     """
     if data_format not in ("a4w4", "a8w4"):
         raise ValueError(f"data_format must be a4w4 or a8w4, got {data_format!r}")
@@ -444,6 +722,7 @@ def _run_grouped_via_fused_moe(
 
     torch.cuda.synchronize()
     kernel_us = None
+    trace_df = None
     if kernel_bench:
         # Kernel-bench: time gemm1 and gemm2 in isolation. One eager call
         # populates the per-stage launch callables (and yields a correct ``out`` to
@@ -472,8 +751,12 @@ def _run_grouped_via_fused_moe(
         # data is the graph-captured output.
         from aiter.test_common import run_perftest
 
-        out, us = run_perftest(
-            _call, num_warmup=warmup, num_iters=iters, testGraph=False
+        out, us, trace_df = run_perftest(
+            _call,
+            num_warmup=warmup,
+            num_iters=iters,
+            testGraph=False,
+            return_trace_df=True,
         )
     else:
         # Verify: validate the eager (graph-off) path; no timing.
@@ -498,7 +781,12 @@ def _run_grouped_via_fused_moe(
         situ_beta=situ_beta,
         situ_linear_beta=situ_linear_beta,
     ).to(out.dtype)
-    return out, ref, us, kernel_us
+    # Read the real routing histogram only after timing; this synchronization is
+    # summary post-processing and cannot perturb any measured iteration.
+    route_counts = (
+        torch.bincount(topk_id.reshape(-1).long(), minlength=experts).cpu().tolist()
+    )
+    return out, ref, us, kernel_us, trace_df, route_counts
 
 
 def _rel_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -565,7 +853,7 @@ def run_moe(
     # --- grouped FlyDSL vs PyTorch fp32 ref (graph path if bench, else eager) ---
     run_only = run_only_env() if check_aot_cache else nullcontext()
     with run_only:
-        out, ref, us, kernel_us = _run_grouped_via_fused_moe(
+        out, ref, us, kernel_us, trace_df, route_counts = _run_grouped_via_fused_moe(
             experts=experts,
             tokens=tokens,
             topk=topk,
@@ -603,6 +891,7 @@ def run_moe(
         "grouped_norm": float(out.float().norm()),
         "ref_norm": float(ref.float().norm()),
     }
+    metrics.update(_empty_gemm_summary())
 
     # --- perf (bench only): timed end-to-end inside _run_grouped_via_fused_moe ---
     if bench:
@@ -611,6 +900,20 @@ def run_moe(
             flush=True,
         )
         metrics["us"] = us
+        gemm_summary, profiled_kernel_us = _build_a4w4_tdm_summary(
+            trace_df=trace_df,
+            route_counts=route_counts,
+            data_format=data_format,
+            activation=activation,
+            use_bias=use_bias,
+            experts=experts,
+            tokens=tokens,
+            topk=topk,
+            model_dim=model_dim,
+            inter_dim=inter_dim,
+        )
+        metrics.update(gemm_summary)
+        metrics.update(profiled_kernel_us)
     # --- perf (kernel-bench only): per-kernel gemm1/gemm2 timing (looped alone) ---
     if kernel_bench:
         kernel_us = kernel_us or {}
@@ -1004,6 +1307,7 @@ def run_csv_scenario(args) -> None:
                     "us": None,
                     "gemm1_us": None,
                     "gemm2_us": None,
+                    **_empty_gemm_summary(),
                 }
             )
             continue
@@ -1025,6 +1329,7 @@ def run_csv_scenario(args) -> None:
                 "us": metrics.get("us"),
                 "gemm1_us": metrics.get("gemm1_us"),
                 "gemm2_us": metrics.get("gemm2_us"),
+                **{column: metrics[column] for column in _GEMM_SUMMARY_COLUMNS},
             }
         )
 
@@ -1211,6 +1516,7 @@ def main() -> None:
                 "us": metrics.get("us"),
                 "gemm1_us": metrics.get("gemm1_us"),
                 "gemm2_us": metrics.get("gemm2_us"),
+                **{column: metrics[column] for column in _GEMM_SUMMARY_COLUMNS},
             }
         )
 

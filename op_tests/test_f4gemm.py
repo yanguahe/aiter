@@ -15,6 +15,7 @@
 #   NVFP4 (intype=nvfp4): e4m3 per-16 scales + per-tensor global scales
 
 import argparse
+import hashlib
 import itertools
 
 import pandas as pd
@@ -35,6 +36,33 @@ pd.set_option("display.width", 1000)
 SUPPORTED_GFX = ["gfx1250"]  # gfx1250-only F4GEMM (preload SGPR) path
 MXFP4_SCALE_BLOCK = 32
 NVFP4_SCALE_BLOCK = 16
+
+
+def _tensor_blake2b128(tensor: torch.Tensor) -> str:
+    """Return a 32-hex BLAKE2b-128 hash of the raw contiguous tensor bytes."""
+    raw = tensor.detach().contiguous().view(torch.uint8).cpu()
+    # dtype/shape metadata is deliberately excluded; numpy() exposes this CPU
+    # tensor as a zero-copy buffer, directly comparable for equal dtype/shape.
+    return hashlib.blake2b(raw.numpy(), digest_size=16).hexdigest()
+
+
+def _float32_error_metrics(
+    ref: torch.Tensor, out: torch.Tensor
+) -> tuple[float, float]:
+    """Return (max_abs, rel_l2) for out - ref computed in float32."""
+    ref_f32 = ref.detach().to(dtype=torch.float32)
+    # Reuse the output conversion as abs(diff) to avoid another full-size
+    # float32 temporary. NaN/Inf naturally propagate to the scalar metrics.
+    diff = out.detach().to(dtype=torch.float32, copy=True)
+    diff.sub_(ref_f32).abs_()
+    max_abs = float(diff.max().item()) if diff.numel() else 0.0
+    diff_norm = float(torch.linalg.vector_norm(diff).item())
+    ref_norm = float(torch.linalg.vector_norm(ref_f32).item())
+    if ref_norm == 0.0:
+        rel_l2 = 0.0 if diff_norm == 0.0 else float("inf")
+    else:
+        rel_l2 = diff_norm / ref_norm
+    return max_abs, rel_l2
 
 
 def _e4m3_to_f32(s: torch.Tensor) -> torch.Tensor:
@@ -180,14 +208,22 @@ def test_gemm(intype, M, N, K, apre, init, dtype=dtypes.bf16):
         + M * N * dtype.itemsize  # bf16 output
     )
 
-    ret = {"gfx": get_gfx()}
+    # Correctness-only reference digest: one calculation per row, outside timing.
+    ret = {"gfx": get_gfx(), "ref hash128": _tensor_blake2b128(ref)}
     for name, fn in candidates.items():
         out, us = run_perftest(fn)
+        # Correctness-only post-processing. Its synchronizations and CPU copy
+        # happen after run_perftest and cannot contribute to measured latency.
         err = checkAllclose(ref, out, rtol=1e-1, atol=1.0, msg=f"{intype} {name}")
+        out_hash128 = _tensor_blake2b128(out)
+        max_abs, rel_l2 = _float32_error_metrics(ref, out)
         ret[f"{name} us"] = round(us, 2)
         ret[f"{name} TFLOPS"] = round(flops / us / 1e6, 1)
         ret[f"{name} TB/s"] = round(nbytes / us / 1e6, 2)
         ret[f"{name} err"] = err
+        ret[f"{name} out hash128"] = out_hash128
+        ret[f"{name} max_abs"] = max_abs
+        ret[f"{name} rel_l2"] = rel_l2
     return ret
 
 

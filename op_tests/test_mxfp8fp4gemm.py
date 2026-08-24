@@ -18,6 +18,7 @@
 # The .cu heuristic picks whichever registered tile fits the shape.
 
 import argparse
+import hashlib
 import itertools
 
 import pandas as pd
@@ -52,6 +53,31 @@ SUPPORTED_GFX = ["gfx1250"]  # ASM kernels are gfx1250-only (kernarg preload)
 # checkAllclose returns 0 when all-close, else the mismatch fraction. Its own
 # verdict thresholds: pass (0) / warning (<= tol_err_ratio) / failed (above).
 _TOL_ERR_RATIO = 0.05  # matches checkAllclose default tol_err_ratio
+
+
+def _tensor_blake2b128(tensor: torch.Tensor) -> str:
+    """Return a 32-hex BLAKE2b-128 hash of the raw contiguous tensor bytes."""
+    raw = tensor.detach().contiguous().view(torch.uint8).cpu()
+    # dtype/shape metadata is deliberately excluded; numpy() exposes this CPU
+    # tensor as a zero-copy buffer, directly comparable for equal dtype/shape.
+    return hashlib.blake2b(raw.numpy(), digest_size=16).hexdigest()
+
+
+def _float32_error_metrics(
+    ref_f32: torch.Tensor, out_f32: torch.Tensor
+) -> tuple[float, float]:
+    """Return float32 (max_abs, rel_l2), consuming the disposable out copy."""
+    # The copies were already used by checkAllclose, so reuse out_f32 in place
+    # as abs(diff). NaN/Inf naturally propagate to the scalar metrics.
+    diff = out_f32.sub_(ref_f32).abs_()
+    max_abs = float(diff.max().item()) if diff.numel() else 0.0
+    diff_norm = float(torch.linalg.vector_norm(diff).item())
+    ref_norm = float(torch.linalg.vector_norm(ref_f32).item())
+    if ref_norm == 0.0:
+        rel_l2 = 0.0 if diff_norm == 0.0 else float("inf")
+    else:
+        rel_l2 = diff_norm / ref_norm
+    return max_abs, rel_l2
 
 
 def _verdict(err):
@@ -146,24 +172,42 @@ def test_gemm(
     flops = 2 * M * N * K
     in_bytes = inp["A"].nbytes + inp["B"].nbytes + inp["sA"].nbytes + inp["sB"].nbytes
 
+    collect_perf_metrics = mode == "perf"
     ret = {"gfx": get_gfx()}
+    if collect_perf_metrics:
+        # Correctness-only reference digest: one calculation per case, outside timing.
+        ret["ref hash128"] = _tensor_blake2b128(ref)
     for name, (cand, cand_args) in candidates.items():
         out, us = run_perftest(
             cand, *cand_args, num_iters=num_iters, needTrace=needTrace
         )
+        ref_f32 = ref.detach().to(dtype=torch.float32)
+        # perf metrics consume this correctness-only copy after checkAllclose.
+        out_f32 = out.detach().to(
+            dtype=torch.float32, copy=collect_perf_metrics
+        )
         err = checkAllclose(
-            ref.to(dtypes.fp32),
-            out.to(dtypes.fp32),
+            ref_f32,
+            out_f32,
             rtol=1e-1,
             atol=1.0,
             msg=f"{intype} {name}",
         )
+        if collect_perf_metrics:
+            # Correctness-only post-processing. Synchronization and the CPU copy
+            # happen after run_perftest and cannot contribute to measured latency.
+            out_hash128 = _tensor_blake2b128(out)
+            max_abs, rel_l2 = _float32_error_metrics(ref_f32, out_f32)
         io_bytes = in_bytes + out.nbytes
         ret[f"{name} us"] = round(us, 2)
         ret[f"{name} TFLOPS"] = round(flops / us / 1e6, 1)
         ret[f"{name} TB/s"] = round(io_bytes / us / 1e6, 2)
         ret[f"{name} err"] = err
         ret[f"{name} result"] = _verdict(err)
+        if collect_perf_metrics:
+            ret[f"{name} out hash128"] = out_hash128
+            ret[f"{name} max_abs"] = max_abs
+            ret[f"{name} rel_l2"] = rel_l2
         if needTrace:
             ret[f"{name} trace"] = f"./aiter_logs/gpu_id_{torch.cuda.current_device()}"
     return ret
