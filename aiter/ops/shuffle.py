@@ -3,7 +3,6 @@
 
 import torch
 import torch.nn.functional as F
-
 from aiter.jit.utils.chip_info import get_gfx
 
 
@@ -122,7 +121,7 @@ def interleave_gate_up_rows(w: torch.Tensor) -> torch.Tensor:
 
 def moe_shuffle_weight(
     src: torch.Tensor,
-    experts_cnt: int | None = None,
+    experts_cnt: int = None,
     is_guinterleave: bool = False,
     gate_up: bool = False,
     layout=(16, 16),
@@ -239,7 +238,7 @@ def shuffle_weight_NK(
 
 def shuffle_scale_n32k4(
     src: torch.Tensor,
-    experts_cnt: int | None = None,
+    experts_cnt: int = None,
     is_guinterleave: bool = False,
     gate_up: bool = False,
 ) -> torch.Tensor:
@@ -251,7 +250,7 @@ def shuffle_scale_n32k4(
     Within a 32-row super-row the column is ``remain_k*128 + row32*4 + r`` so each
     lane reads its full WMMA scaleB operand (4 e8m0 of one WMMA-K=128 step) with
     one contiguous ds_load_b32.  Consumed by the gfx1250 grouped MoE GEMM
-    (see flydsl/batched_gemm_mxfp4.py).
+    (see kernels/gemm_mxscale_gfx1250.py).
 
     ``is_guinterleave`` selects the stage1 gate/up packing (``N == 2*inter_dim``):
 
@@ -338,7 +337,7 @@ def shuffle_weight_f4(src: torch.Tensor) -> torch.Tensor:
 
 def shuffle_scale(
     src: torch.Tensor,
-    experts_cnt: int | None = None,
+    experts_cnt: int = None,
     is_guinterleave: bool = False,
     gate_up: bool = False,
 ) -> torch.Tensor:
@@ -411,7 +410,7 @@ def shuffle_scale(
 
 def moe_shuffle_scale(
     src: torch.Tensor,
-    experts_cnt: int | None = None,
+    experts_cnt: int = None,
     is_guinterleave: bool = False,
     gate_up: bool = False,
 ) -> torch.Tensor:

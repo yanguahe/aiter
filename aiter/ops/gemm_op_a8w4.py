@@ -7,6 +7,7 @@
 # kernel variant is auto-selected by the .cu heuristic unless an explicit
 # kernelName is given. See csrc/py_itfs_cu/asm_mxfp8fp4gemm.cu.
 
+from typing import Optional
 
 import torch
 from torch import Tensor
@@ -26,7 +27,7 @@ def _mxfp8_mxfp4_gemm_asm(
     ScaleA: Tensor,  # ScaleA:[M, K/32] e8m0 (shuffled)
     ScaleB: Tensor,  # ScaleB:[N, K/32] e8m0 (shuffled)
     out: Tensor,  # Out:[M, N] bf16
-    kernelName: str | None = None,
+    kernelName: Optional[str] = None,
     a_preshuffle: int = 1,
 ) -> None: ...
 
