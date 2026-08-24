@@ -154,6 +154,9 @@ def test_gemm(
 ):
     assert K % MX_SCALE_BLOCK == 0, f"K must be a multiple of {MX_SCALE_BLOCK}"
 
+    # Re-seed every case so random data/scales do not depend on sweep order.
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     gen = bench_init.make_generator(seed)  # fixed seed -> bit-identical buffers
     inp, ref = _prep(intype, M, N, K, apre, data_init, scale_init, gen)
     needTrace = mode == "profile"

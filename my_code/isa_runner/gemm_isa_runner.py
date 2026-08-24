@@ -2,9 +2,10 @@
 r"""Compile and benchmark one dense gfx1250 MXFP4 GEMM assembly kernel.
 
 The input ``.s`` is treated as a complete AMDGPU assembly source.  This runner
-does not inspect, synthesize, or modify its kernel descriptor or metadata.  It
-assembles and links the source, loads the resulting code object once, and then
-launches the selected symbol on PyTorch's current HIP stream.
+reads its kernel-name directives but never synthesizes or modifies the kernel
+descriptor or metadata.  It assembles and links the source, loads the resulting
+code object once, and then launches the selected symbol on PyTorch's current
+HIP stream.
 
 The input/reference construction and numerical reporting deliberately reuse
 ``op_tests/test_f4gemm.py``.  The launch ABI and persistent 4x4-cluster geometry
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import os
+import re
 import shlex
 import shutil
 import struct
@@ -48,9 +50,22 @@ for _path in (_REPO, _REPO / "op_tests"):
 ARCH = "gfx1250"
 CODE_OBJECT_VERSION = 6
 DEFAULT_CLANG = Path("/opt/rocm/llvm/bin/clang")
-DEFAULT_SYMBOL = (
+DEFAULT_SYMBOL: str | None = None
+EXPECTED_KERNEL_PREFIX = "f4gemm_bf16_mxfp4_"
+EXPECTED_KERNEL_CONFIG = "256x256_4x4_ps"
+EXPECTED_KERNEL_BASENAME = (
+    "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
+)
+LEGACY_MANGLED_SYMBOL = (
     "_ZN5aiter45f4gemm_bf16_mxfp4_"
     "ABpreShuffle_256x256_4x4_psE"
+)
+_SYMBOL_TOKEN = r"[A-Za-z_][A-Za-z0-9_]*"
+_SYMBOL_RE = re.compile(rf"^{_SYMBOL_TOKEN}$")
+_METADATA_BLOCK_RE = re.compile(
+    r"(?ms)^[ \t]*\.amdgpu_metadata[ \t]*$"
+    r"(?P<body>.*?)"
+    r"^[ \t]*\.end_amdgpu_metadata[ \t]*$"
 )
 
 MXFP4_SCALE_BLOCK = 32
@@ -89,6 +104,7 @@ SUMMARY_COLUMNS = (
     "K",
     "apre",
     "init",
+    "seed",
     "dtype",
     "gfx",
     "ref hash128",
@@ -186,6 +202,209 @@ def _resolve_isa(path_text: str) -> Path:
     if path.suffix.lower() != ".s":
         raise GemmIsaRunnerError(f"--isa must name an AMDGPU .s source, got: {path}")
     return path
+
+
+def _validate_symbol_token(symbol: str, context: str) -> str:
+    """Accept ordinary C identifiers and Itanium-mangled symbol names."""
+
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise GemmIsaRunnerError(
+            f"{context} contains unsupported kernel symbol {symbol!r}; "
+            "expected a C identifier or Itanium-mangled name"
+        )
+    return symbol
+
+
+def _strip_asm_comment(text: str) -> str:
+    return re.split(r";|//|#", text, maxsplit=1)[0].strip()
+
+
+def _parse_asm_directive_symbols(
+    source: str,
+    directive: str,
+    *,
+    allow_many_per_line: bool,
+) -> tuple[str, ...]:
+    """Parse symbol operands from one GNU-style assembly directive."""
+
+    lines = re.findall(
+        rf"(?m)^\s*\.{re.escape(directive)}\b(?P<body>.*)$",
+        source,
+    )
+    symbols: list[str] = []
+    for body in lines:
+        operand_text = _strip_asm_comment(body)
+        operands = [
+            item
+            for item in re.split(r"[\s,]+", operand_text)
+            if item
+        ]
+        if not operands:
+            raise GemmIsaRunnerError(
+                f".{directive} directive has no symbol; pass --symbol explicitly"
+            )
+        if not allow_many_per_line and len(operands) != 1:
+            raise GemmIsaRunnerError(
+                f".{directive} directive must contain exactly one symbol, got "
+                f"{operands}; pass --symbol explicitly"
+            )
+        symbols.extend(
+            _validate_symbol_token(item, f".{directive} directive")
+            for item in operands
+        )
+    return tuple(symbols)
+
+
+def _parse_function_type_symbols(source: str) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for line in source.splitlines():
+        clean = _strip_asm_comment(line)
+        match = re.fullmatch(
+            rf"\s*\.type\s+({_SYMBOL_TOKEN})\s*,\s*[@%]function\s*",
+            clean,
+        )
+        if match:
+            symbols.append(match.group(1))
+    return tuple(symbols)
+
+
+def _parse_metadata_symbols(source: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return metadata (.name values, .symbol values without the .kd suffix)."""
+
+    names: list[str] = []
+    symbols: list[str] = []
+    for block_match in _METADATA_BLOCK_RE.finditer(source):
+        block = block_match.group("body")
+        for line in block.splitlines():
+            clean = line.split("#", maxsplit=1)[0].strip()
+            name_match = re.fullmatch(
+                rf"\.name:\s*['\"]?({_SYMBOL_TOKEN})['\"]?\s*",
+                clean,
+            )
+            if name_match:
+                names.append(name_match.group(1))
+                continue
+            symbol_match = re.fullmatch(
+                rf"\.symbol:\s*['\"]?({_SYMBOL_TOKEN})\.kd['\"]?\s*",
+                clean,
+            )
+            if symbol_match:
+                symbols.append(symbol_match.group(1))
+    return tuple(names), tuple(symbols)
+
+
+def _one_candidate(
+    candidates: Sequence[str],
+    source_kind: str,
+) -> str | None:
+    unique = tuple(dict.fromkeys(candidates))
+    if len(unique) > 1:
+        raise GemmIsaRunnerError(
+            f"multiple kernel candidates from {source_kind}: {list(unique)}; "
+            "pass --symbol explicitly"
+        )
+    return unique[0] if unique else None
+
+
+def detect_kernel_symbol_from_text(source: str) -> str:
+    """Safely detect one kernel symbol from complete AMDGPU assembly text.
+
+    ``.amdhsa_kernel`` is authoritative.  Metadata and global/function
+    directives are cross-checked when present, and are used as fallbacks only
+    when no kernel descriptor directive exists.
+    """
+
+    descriptor = _one_candidate(
+        _parse_asm_directive_symbols(
+            source,
+            "amdhsa_kernel",
+            allow_many_per_line=False,
+        ),
+        ".amdhsa_kernel",
+    )
+    globals_ = _parse_asm_directive_symbols(
+        source,
+        "globl",
+        allow_many_per_line=True,
+    )
+    function_types = _parse_function_type_symbols(source)
+    metadata_names, metadata_symbols = _parse_metadata_symbols(source)
+    metadata_name = _one_candidate(metadata_names, "metadata .name")
+    metadata_symbol = _one_candidate(metadata_symbols, "metadata .symbol")
+    if (
+        metadata_name is not None
+        and metadata_symbol is not None
+        and metadata_name != metadata_symbol
+    ):
+        raise GemmIsaRunnerError(
+            f"metadata .name {metadata_name!r} conflicts with metadata .symbol "
+            f"{metadata_symbol!r}.kd; pass --symbol explicitly"
+        )
+    metadata = metadata_name or metadata_symbol
+
+    if descriptor is not None:
+        if metadata is not None and metadata != descriptor:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} conflicts with metadata kernel "
+                f"{metadata!r}; pass --symbol explicitly"
+            )
+        if globals_ and descriptor not in globals_:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} is not declared by .globl "
+                f"{list(dict.fromkeys(globals_))}; pass --symbol explicitly"
+            )
+        if function_types and descriptor not in function_types:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} has no matching "
+                f".type <symbol>,@function directive; pass --symbol explicitly"
+            )
+        return descriptor
+
+    if metadata is not None:
+        if globals_ and metadata not in globals_:
+            raise GemmIsaRunnerError(
+                f"metadata kernel {metadata!r} conflicts with .globl candidates "
+                f"{list(dict.fromkeys(globals_))}; pass --symbol explicitly"
+            )
+        if function_types and metadata not in function_types:
+            raise GemmIsaRunnerError(
+                f"metadata kernel {metadata!r} has no matching "
+                f".type <symbol>,@function directive; pass --symbol explicitly"
+            )
+        return metadata
+
+    global_candidates = tuple(dict.fromkeys(globals_))
+    if function_types:
+        typed = set(function_types)
+        global_candidates = tuple(
+            symbol for symbol in global_candidates if symbol in typed
+        )
+    fallback = _one_candidate(global_candidates, ".globl/.type fallback")
+    if fallback is None:
+        raise GemmIsaRunnerError(
+            "could not detect a kernel symbol: no .amdhsa_kernel, metadata "
+            ".name/.symbol, or unique .globl function candidate; pass "
+            "--symbol explicitly"
+        )
+    return fallback
+
+
+def detect_kernel_symbol(isa: Path) -> str:
+    try:
+        source = isa.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise GemmIsaRunnerError(
+            f"failed to read ISA source for symbol detection: {isa}: {exc}"
+        ) from exc
+    return detect_kernel_symbol_from_text(source)
+
+
+def resolve_kernel_symbol(isa: Path, override: str | None) -> str:
+    """Return an explicit override unchanged, otherwise inspect the ISA."""
+
+    if override is not None:
+        return _validate_symbol_token(override, "--symbol")
+    return detect_kernel_symbol(isa)
 
 
 def _resolve_clang(override: str | None) -> Path:
@@ -485,6 +704,102 @@ _HIP_LAUNCH_PARAM_END = ctypes.c_void_p(3)
 
 def run_static_contract_checks() -> None:
     """CPU-only fixture for every ABI offset and the default launch geometry."""
+
+    def symbol_fixture(symbol: str) -> str:
+        return f"""
+        .text
+        .globl {symbol}
+        .type {symbol},@function
+        {symbol}:
+            s_endpgm
+        .amdhsa_kernel {symbol}
+        .end_amdhsa_kernel
+        .amdgpu_metadata
+        ---
+        amdhsa.kernels:
+          - .name: {symbol}
+            .symbol: {symbol}.kd
+        ...
+        .end_amdgpu_metadata
+        """
+
+    current_symbol = EXPECTED_KERNEL_BASENAME
+    detected = detect_kernel_symbol_from_text(symbol_fixture(current_symbol))
+    if detected != current_symbol:
+        raise AssertionError(
+            f"unmangled symbol fixture detected {detected!r}, "
+            f"expected {current_symbol!r}"
+        )
+    detected = detect_kernel_symbol_from_text(
+        symbol_fixture(LEGACY_MANGLED_SYMBOL)
+    )
+    if detected != LEGACY_MANGLED_SYMBOL:
+        raise AssertionError(
+            f"legacy mangled fixture detected {detected!r}, "
+            f"expected {LEGACY_MANGLED_SYMBOL!r}"
+        )
+    _validate_mode("mxfp4", 1, "bf16", current_symbol)
+    _validate_mode("mxfp4", 1, "bf16", LEGACY_MANGLED_SYMBOL)
+
+    metadata_fallback = f"""
+    .globl {current_symbol}
+    .type {current_symbol},@function
+    .amdgpu_metadata
+    ---
+    amdhsa.kernels:
+      - .name: {current_symbol}
+        .symbol: {current_symbol}.kd
+    ...
+    .end_amdgpu_metadata
+    """
+    if detect_kernel_symbol_from_text(metadata_fallback) != current_symbol:
+        raise AssertionError("metadata fallback did not select the kernel")
+    globl_fallback = (
+        f".globl {current_symbol}\n"
+        f".type {current_symbol},@function\n"
+    )
+    if detect_kernel_symbol_from_text(globl_fallback) != current_symbol:
+        raise AssertionError(".globl/.type fallback did not select the kernel")
+
+    explicit = resolve_kernel_symbol(
+        Path("this-file-must-not-be-read.s"),
+        "explicit_kernel_override",
+    )
+    if explicit != "explicit_kernel_override":
+        raise AssertionError(f"explicit --symbol override changed to {explicit!r}")
+
+    conflict_fixture = symbol_fixture(current_symbol).replace(
+        f".name: {current_symbol}",
+        ".name: conflicting_kernel",
+    ).replace(
+        f".symbol: {current_symbol}.kd",
+        ".symbol: conflicting_kernel.kd",
+    )
+    multi_fixture = (
+        symbol_fixture(current_symbol)
+        + "\n.amdhsa_kernel second_kernel\n.end_amdhsa_kernel\n"
+    )
+    for label, text, message_fragment in (
+        (
+            "conflicting directives",
+            conflict_fixture,
+            "conflicts with metadata kernel",
+        ),
+        (
+            "multiple kernels",
+            multi_fixture,
+            "multiple kernel candidates",
+        ),
+    ):
+        try:
+            detect_kernel_symbol_from_text(text)
+        except GemmIsaRunnerError as exc:
+            if message_fragment not in str(exc):
+                raise AssertionError(
+                    f"{label} fixture raised unexpected error: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(f"{label} fixture did not fail")
 
     fixture: dict[str, int] = {}
     for index, (name, _offset, kind) in enumerate(KERNARG_LAYOUT, start=1):
@@ -810,7 +1125,7 @@ def _load_dependencies(device: int) -> _Dependencies:
     """Import the repo implementation only after CLI parsing/build."""
 
     try:
-        import torch
+        import torch  # type: ignore[import-not-found]
     except ImportError as exc:
         raise GemmIsaRunnerError("PyTorch is required to run the GEMM") from exc
     if not torch.cuda.is_available():
@@ -827,7 +1142,7 @@ def _load_dependencies(device: int) -> _Dependencies:
         ) from exc
 
     try:
-        import test_f4gemm as f4_test
+        import test_f4gemm as f4_test  # type: ignore[import-not-found]
         from aiter.jit.utils.chip_info import get_gfx_runtime
         from aiter.test_common import checkAllclose, run_perftest
     except ImportError as exc:
@@ -859,14 +1174,24 @@ def _validate_mode(
         raise GemmIsaRunnerError(
             f"this kernel writes BF16 output only, not {dtype}"
         )
+    if (
+        EXPECTED_KERNEL_PREFIX not in symbol
+        or EXPECTED_KERNEL_CONFIG not in symbol
+    ):
+        raise GemmIsaRunnerError(
+            f"kernel symbol {symbol!r} is not an obvious match for the "
+            "BF16 MXFP4 256x256 4x4 persistent ABI used by this runner"
+        )
+    expected_shuffle = "ABpreShuffle" if apre else "BpreShuffle"
+    if expected_shuffle not in symbol:
+        raise GemmIsaRunnerError(
+            f"--apre {apre} requires a {expected_shuffle} kernel, got "
+            f"symbol {symbol!r}"
+        )
     if apre == 0 and "ABpreShuffle" in symbol:
         raise GemmIsaRunnerError(
             f"--apre 0 is incompatible with ABpreShuffle symbol {symbol!r}; "
             "pass the BpreShuffle ISA and its symbol via --symbol"
-        )
-    if apre == 1 and "_BpreShuffle_" in symbol and "ABpreShuffle" not in symbol:
-        raise GemmIsaRunnerError(
-            f"--apre 1 is incompatible with BpreShuffle symbol {symbol!r}"
         )
 
 
@@ -919,6 +1244,9 @@ def _run_gemm(
         symbol,
         args.device,
     ) as module:
+        # Re-seed every input preparation so results do not depend on run order.
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
         # This is the exact test_f4gemm.py path: one per_1x32 quantization,
         # one FP32 decoded reference matmul, and the same A/B/scale shuffles.
         inputs, reference = dependencies.f4_test._prep_mxfp4(
@@ -990,6 +1318,7 @@ def _run_gemm(
         "K": k,
         "apre": args.apre,
         "init": args.init,
+        "seed": args.seed,
         "dtype": args.dtype,
         "gfx": gfx,
         "ref hash128": reference_hash,
@@ -1020,7 +1349,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--symbol",
-        help=f"kernel symbol (default: {DEFAULT_SYMBOL})",
+        default=DEFAULT_SYMBOL,
+        help=(
+            "kernel symbol override (default: auto-detect from .amdhsa_kernel, "
+            "then safely fall back to metadata/.globl)"
+        ),
     )
     parser.add_argument(
         "--intype",
@@ -1040,6 +1373,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("constant", "random"),
         default="random",
         help="input initialization mode",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="random input seed, reapplied before each input preparation (default: 0)",
     )
     parser.add_argument(
         "-d",
@@ -1088,19 +1427,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.device < 0:
         parser.error("--device must be non-negative")
 
-    symbol = args.symbol or DEFAULT_SYMBOL
     try:
-        _validate_mode(args.intype, args.apre, args.dtype, symbol)
         run_static_contract_checks()
         # Validate geometry before invoking clang or allocating device memory.
         make_launch_geometry(*args.shape)
         isa = _resolve_isa(args.isa)
+        symbol = resolve_kernel_symbol(isa, args.symbol)
+        _validate_mode(args.intype, args.apre, args.dtype, symbol)
         clang = _resolve_clang(args.clang)
 
         with tempfile.TemporaryDirectory(prefix="gemm_isa_runner_") as temp:
             result = compile_isa(isa, clang, Path(temp))
             for command in result.commands:
                 print(f"[gemm_isa_runner] {_format_command(command)}")
+            print(f"[gemm_isa_runner] loading kernel symbol: {symbol}")
 
             if args.co_out or args.keep_co:
                 destination = (
@@ -1135,7 +1475,7 @@ def _load_pandas_from_row_context() -> Any:
     """Import the repository's existing pandas dependency for final rendering."""
 
     try:
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-not-found]
     except ImportError as exc:
         raise GemmIsaRunnerError(
             "pandas is required by test_f4gemm.py and for summary rendering"

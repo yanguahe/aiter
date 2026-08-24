@@ -145,8 +145,12 @@ def _prep_nvfp4(M, N, K, apre, dtype, init):
     return inp, ref
 
 
-@benchmark()  # (intype, M, N, K, apre, init, dtype) become the table's left columns
-def test_gemm(intype, M, N, K, apre, init, dtype=dtypes.bf16):
+@benchmark()  # intype, M, N, K, apre, init, seed, dtype -> table's left columns
+def test_gemm(intype, M, N, K, apre, init, seed=0, dtype=dtypes.bf16):
+    # Re-seed every case so random inputs do not depend on sweep order.
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
     block = MXFP4_SCALE_BLOCK if intype == "mxfp4" else NVFP4_SCALE_BLOCK
     assert K % block == 0, f"K must be a multiple of {block}"
     prep = _prep_mxfp4 if intype == "mxfp4" else _prep_nvfp4
@@ -265,6 +269,12 @@ def main():
         "  random   = varied fp4 matrices + random scales",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="random input seed for reproducibility; reapplied for every test case",
+    )
+    parser.add_argument(
         "-d",
         "--dtype",
         type=dtypes.str2Dtype,
@@ -287,7 +297,7 @@ def main():
 
     for dtype in args.dtype:  # one table per output dtype
         rows = [
-            test_gemm(intype, M, N, K, apre, init, dtype=dtype)
+            test_gemm(intype, M, N, K, apre, init, seed=args.seed, dtype=dtype)
             for intype, apre, init, (M, N, K) in itertools.product(
                 args.intype, args.apre, args.init, args.shape
             )
