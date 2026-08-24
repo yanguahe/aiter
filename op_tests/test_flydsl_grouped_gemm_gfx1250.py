@@ -98,10 +98,17 @@ _GEMM_SUMMARY_COLUMNS = (
     "gemm2 BF16 write",
     "gemm2 R+W",
 )
-_A4W4_TDM_KERNEL_RE = re.compile(
-    r"a8w4_tdm_fp4_t(?P<tile_m>\d+)x(?P<tile_n>\d+)x(?P<tile_k>\d+)"
+_TDM_KERNEL_RE = re.compile(
+    r"a8w4_tdm_(?P<a_format>fp4|fp8)"
+    r"_t(?P<tile_m>\d+)x(?P<tile_n>\d+)x(?P<tile_k>\d+)"
     r"_w(?P<m_warp>\d+)x(?P<n_warp>\d+)_b(?P<num_buffers>\d+)"
-    r"_K(?P<K>\d+)_e(?P<experts>\d+)(?P<suffix>[A-Za-z0-9_]*)"
+    r"_K(?P<K>\d+)_e(?P<experts>\d+)"
+    r"(?:_act(?P<stage1_act>\d+))?"
+    r"(?P<has_bias>_bias)?"
+    r"(?:_q\d+r\d+)?"
+    r"(?:_cn(?P<cluster_n>\d+))?"
+    r"(?:_prefetch)?"
+    r"(?:_wpt\d+)?"
 )
 
 VERIFY_TOL_A4W4 = 0.02
@@ -194,13 +201,11 @@ def _format_a4w4_tdm_stage_metrics(stage: dict[str, int | float]) -> tuple[str, 
     )
 
 
-def _parse_a4w4_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
-    match = _A4W4_TDM_KERNEL_RE.search(name)
+def _parse_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
+    """Parse the exact generated TDM symbol inside an optional trace prefix."""
+    match = _TDM_KERNEL_RE.search(name)
     if match is None:
         return None
-    suffix = match.group("suffix")
-    act_match = re.search(r"(?:^|_)act(\d+)(?:_|$)", suffix)
-    cluster_match = re.search(r"(?:^|_)cn(\d+)(?:_|$)", suffix)
     parsed: dict[str, int | str | bool] = {
         key: int(match.group(key))
         for key in (
@@ -217,45 +222,50 @@ def _parse_a4w4_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None
     parsed.update(
         {
             "name": match.group(0),
-            "stage1_act": int(act_match.group(1)) if act_match else 0,
-            "cluster_n": int(cluster_match.group(1)) if cluster_match else 1,
-            "has_bias": "_bias" in f"_{suffix}",
+            "a_format": match.group("a_format"),
+            "stage1_act": int(match.group("stage1_act") or 0),
+            "cluster_n": int(match.group("cluster_n") or 1),
+            "has_bias": match.group("has_bias") is not None,
         }
     )
     return parsed
 
 
-def _build_a4w4_tdm_summary(
+def _extract_profiled_gemm_timings(
     *,
     trace_df,
-    route_counts: list[int],
     data_format: str,
     activation: ActivationType,
-    use_bias: bool,
     experts: int,
-    tokens: int,
-    topk: int,
     model_dim: int,
     inter_dim: int,
-) -> tuple[dict[str, str], dict[str, float]]:
-    """Build exactly eight columns, or eight N/A values unless fully verified.
+) -> tuple[
+    dict[str, float | None],
+    dict[str, dict[str, int | float | str | bool]],
+    str | None,
+]:
+    """Extract unique GEMM stage timings from the post-processed profiler rows.
 
-    The strict guards intentionally exclude A8W4, bias reads, multicast
-    clusters, incomplete/ambiguous profiler rows, and non-integral tile shapes.
+    Kernel symbols are generated as ``a8w4_tdm_fp{4,8}_t..._K..._e...``.
+    Searching permits profiler namespace/mangling text around that exact symbol;
+    format, K, expert count, and stage activation must still all agree.
     """
-    empty = _empty_gemm_summary()
-    if data_format != "a4w4" or use_bias or trace_df is None:
-        return empty, {}
+    timings: dict[str, float | None] = {"gemm1_us": None, "gemm2_us": None}
+    if trace_df is None:
+        return timings, {}, "trace has no profiler table"
+    expected_a_format = {"a4w4": "fp4", "a8w4": "fp8"}.get(data_format)
     stage1_act = _STAGE1_ACT_ID.get(activation)
-    if stage1_act is None:
-        return empty, {}
-    if len(route_counts) != experts or sum(route_counts) != tokens * topk:
-        return empty, {}
+    if expected_a_format is None or stage1_act is None:
+        return timings, {}, f"unsupported format/activation: {data_format}"
 
     candidates = []
     for rec in trace_df.to_dict("records"):
-        parsed = _parse_a4w4_tdm_kernel_name(str(rec.get("name", "")))
-        if parsed is None or parsed["experts"] != experts:
+        parsed = _parse_tdm_kernel_name(str(rec.get("name", "")))
+        if (
+            parsed is None
+            or parsed["a_format"] != expected_a_format
+            or parsed["experts"] != experts
+        ):
             continue
         try:
             latency_us = float(rec.get("device_time_avg"))
@@ -266,56 +276,98 @@ def _build_a4w4_tdm_summary(
         parsed["latency_us"] = latency_us
         candidates.append(parsed)
 
-    gemm1 = [
-        cfg
-        for cfg in candidates
-        if cfg["K"] == model_dim and cfg["stage1_act"] == stage1_act
-    ]
-    gemm2 = [
-        cfg for cfg in candidates if cfg["K"] == inter_dim and cfg["stage1_act"] == 0
-    ]
-    if len(gemm1) != 1 or len(gemm2) != 1:
-        return empty, {}
-    if gemm1[0]["has_bias"] or gemm2[0]["has_bias"]:
-        return empty, {}
+    stage_matches = {
+        "gemm1": [
+            cfg
+            for cfg in candidates
+            if cfg["K"] == model_dim and cfg["stage1_act"] == stage1_act
+        ],
+        "gemm2": [
+            cfg
+            for cfg in candidates
+            if cfg["K"] == inter_dim and cfg["stage1_act"] == 0
+        ],
+    }
+    kernels = {}
+    debug = []
+    for stage, matches in stage_matches.items():
+        if len(matches) == 1:
+            kernels[stage] = matches[0]
+            timings[f"{stage}_us"] = float(matches[0]["latency_us"])
+        else:
+            state = "missing" if not matches else f"ambiguous ({len(matches)} matches)"
+            debug.append(f"{stage} {state}")
+    return timings, kernels, "; ".join(debug) or None
+
+
+def _build_a4w4_tdm_summary(
+    *,
+    profiled_kernels: dict[str, dict[str, int | float | str | bool]],
+    route_counts: list[int],
+    data_format: str,
+    use_bias: bool,
+    experts: int,
+    tokens: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+) -> dict[str, str]:
+    """Build eight A4W4 accounting columns, otherwise eight explicit N/A values.
+
+    Timing extraction is format-generic and happens before this strict guard.
+    A8W4, bias reads, multicast, incomplete profiler matches, and non-integral
+    tile shapes remain excluded from the A4W4 byte/FLOP formulas.
+    """
+    empty = _empty_gemm_summary()
+    if data_format != "a4w4" or use_bias:
+        return empty
+    if len(route_counts) != experts or sum(route_counts) != tokens * topk:
+        return empty
+    gemm1 = profiled_kernels.get("gemm1")
+    gemm2 = profiled_kernels.get("gemm2")
+    if gemm1 is None or gemm2 is None:
+        return empty
+    if (
+        gemm1["a_format"] != "fp4"
+        or gemm2["a_format"] != "fp4"
+        or gemm1["has_bias"]
+        or gemm2["has_bias"]
+    ):
+        return empty
 
     try:
         stage1 = _calculate_a4w4_tdm_stage_metrics(
             route_counts=route_counts,
-            tile_m=int(gemm1[0]["tile_m"]),
-            tile_n=int(gemm1[0]["tile_n"]),
-            tile_k=int(gemm1[0]["tile_k"]),
+            tile_m=int(gemm1["tile_m"]),
+            tile_n=int(gemm1["tile_n"]),
+            tile_k=int(gemm1["tile_k"]),
             n=2 * inter_dim,
             k=model_dim,
             output_n=inter_dim,
-            latency_us=float(gemm1[0]["latency_us"]),
-            cluster_n=int(gemm1[0]["cluster_n"]),
+            latency_us=float(gemm1["latency_us"]),
+            cluster_n=int(gemm1["cluster_n"]),
         )
         stage2 = _calculate_a4w4_tdm_stage_metrics(
             route_counts=route_counts,
-            tile_m=int(gemm2[0]["tile_m"]),
-            tile_n=int(gemm2[0]["tile_n"]),
-            tile_k=int(gemm2[0]["tile_k"]),
+            tile_m=int(gemm2["tile_m"]),
+            tile_n=int(gemm2["tile_n"]),
+            tile_k=int(gemm2["tile_k"]),
             n=model_dim,
             k=inter_dim,
             output_n=model_dim,
-            latency_us=float(gemm2[0]["latency_us"]),
-            cluster_n=int(gemm2[0]["cluster_n"]),
+            latency_us=float(gemm2["latency_us"]),
+            cluster_n=int(gemm2["cluster_n"]),
         )
     except (TypeError, ValueError):
-        return empty, {}
+        return empty
 
-    summary = dict(
+    return dict(
         zip(
             _GEMM_SUMMARY_COLUMNS,
             _format_a4w4_tdm_stage_metrics(stage1)
             + _format_a4w4_tdm_stage_metrics(stage2),
         )
     )
-    return summary, {
-        "gemm1_us": float(gemm1[0]["latency_us"]),
-        "gemm2_us": float(gemm2[0]["latency_us"]),
-    }
 
 
 def test_a4w4_tdm_stage_metrics_fixture():
@@ -360,6 +412,137 @@ def test_a4w4_tdm_stage_metrics_fixture():
         "44,040,192 B \u2192 0.579 TB/s",
         "1,315,700,736 B \u2192 17.289 TB/s",
     )
+
+
+def test_profiled_grouped_gemm_timing_extraction_fixture():
+    """CPU-only trace fixtures for A8W4/A4W4 matching and ambiguity guards."""
+
+    class TraceRecords:
+        def __init__(self, records):
+            self.records = records
+
+        def to_dict(self, orient):
+            assert orient == "records"
+            return self.records
+
+    a8_gemm1 = (
+        "void aiter::a8w4_tdm_fp8_t16x256x256_w1x4_b2_"
+        "K7168_e384_act1_bias(...)"
+    )
+    a8_gemm2 = (
+        "__mangled_prefix_a8w4_tdm_fp8_t16x512x128_w1x4_b2_"
+        "K768_e384_bias_wpt1.extra"
+    )
+    a8_records = [
+        {"name": a8_gemm1, "device_time_avg": 321.25},
+        {"name": a8_gemm2, "device_time_avg": 87.5},
+        # Strict stage filters must ignore all of these plausible distractors.
+        {
+            "name": "a8w4_tdm_fp8_t16x256x256_w1x4_b2_K7168_e383_act1",
+            "device_time_avg": 1.0,
+        },
+        {
+            "name": "a8w4_tdm_fp8_t16x256x256_w1x4_b2_K7168_e384_act2",
+            "device_time_avg": 2.0,
+        },
+        {
+            "name": "a8w4_tdm_fp8_t16x512x128_w1x4_b2_K769_e384",
+            "device_time_avg": 3.0,
+        },
+        {
+            "name": "a8w4_tdm_fp8_t16x512x128_w1x4_b2_K768_e384",
+            "device_time_avg": 0.0,
+        },
+    ]
+    a8_timings, a8_kernels, a8_debug = _extract_profiled_gemm_timings(
+        trace_df=TraceRecords(a8_records),
+        data_format="a8w4",
+        activation=ActivationType.Silu,
+        experts=384,
+        model_dim=7168,
+        inter_dim=768,
+    )
+    assert a8_timings == {"gemm1_us": 321.25, "gemm2_us": 87.5}
+    assert a8_kernels["gemm1"]["a_format"] == "fp8"
+    assert a8_kernels["gemm1"]["has_bias"] is True
+    assert a8_kernels["gemm2"]["stage1_act"] == 0
+    assert a8_debug is None
+    a8_summary = _build_a4w4_tdm_summary(
+        profiled_kernels=a8_kernels,
+        route_counts=[64] * 384,
+        data_format="a8w4",
+        use_bias=True,
+        experts=384,
+        tokens=4096,
+        topk=6,
+        model_dim=7168,
+        inter_dim=768,
+    )
+    assert set(a8_summary.values()) == {"N/A"}
+
+    a4_records = [
+        {
+            "name": "aiter::a8w4_tdm_fp4_t64x256x256_w1x4_b2_"
+            "K7168_e96_act1",
+            "device_time_avg": 144.7,
+        },
+        {
+            "name": "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K3072_e96",
+            "device_time_avg": 76.1,
+        },
+    ]
+    a4_timings, a4_kernels, a4_debug = _extract_profiled_gemm_timings(
+        trace_df=TraceRecords(a4_records),
+        data_format="a4w4",
+        activation=ActivationType.Silu,
+        experts=96,
+        model_dim=7168,
+        inter_dim=3072,
+    )
+    assert a4_timings == {"gemm1_us": 144.7, "gemm2_us": 76.1}
+    assert a4_debug is None
+    a4_summary = _build_a4w4_tdm_summary(
+        profiled_kernels=a4_kernels,
+        route_counts=[32] * 96,
+        data_format="a4w4",
+        use_bias=False,
+        experts=96,
+        tokens=512,
+        topk=6,
+        model_dim=7168,
+        inter_dim=3072,
+    )
+    assert tuple(a4_summary) == _GEMM_SUMMARY_COLUMNS
+    assert tuple(a4_summary.values()) == (
+        "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
+        "2,543,321,088 B \u2192 17.577 TB/s",
+        "18,874,368 B \u2192 0.130 TB/s",
+        "2,562,195,456 B \u2192 17.707 TB/s",
+        "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
+        "1,271,660,544 B \u2192 16.710 TB/s",
+        "44,040,192 B \u2192 0.579 TB/s",
+        "1,315,700,736 B \u2192 17.289 TB/s",
+    )
+
+    duplicate_records = a8_records + [
+        {
+            "name": "a8w4_tdm_fp8_t32x256x256_w1x4_b2_K7168_e384_act1_bias",
+            "device_time_avg": 999.0,
+        }
+    ]
+    duplicate_timings, duplicate_kernels, duplicate_debug = (
+        _extract_profiled_gemm_timings(
+            trace_df=TraceRecords(duplicate_records),
+            data_format="a8w4",
+            activation=ActivationType.Silu,
+            experts=384,
+            model_dim=7168,
+            inter_dim=768,
+        )
+    )
+    assert duplicate_timings == {"gemm1_us": None, "gemm2_us": 87.5}
+    assert "gemm1" not in duplicate_kernels
+    assert duplicate_debug == "gemm1 ambiguous (2 matches)"
 
 
 # ---------------------------------------------------------------------------
@@ -900,11 +1083,23 @@ def run_moe(
             flush=True,
         )
         metrics["us"] = us
-        gemm_summary, profiled_kernel_us = _build_a4w4_tdm_summary(
-            trace_df=trace_df,
+        profiled_kernel_us, profiled_kernels, timing_debug = (
+            _extract_profiled_gemm_timings(
+                trace_df=trace_df,
+                data_format=data_format,
+                activation=activation,
+                experts=experts,
+                model_dim=model_dim,
+                inter_dim=inter_dim,
+            )
+        )
+        metrics.update(profiled_kernel_us)
+        if timing_debug:
+            print(f"[bench kernel timing] {timing_debug}", flush=True)
+        gemm_summary = _build_a4w4_tdm_summary(
+            profiled_kernels=profiled_kernels,
             route_counts=route_counts,
             data_format=data_format,
-            activation=activation,
             use_bias=use_bias,
             experts=experts,
             tokens=tokens,
@@ -913,7 +1108,6 @@ def run_moe(
             inter_dim=inter_dim,
         )
         metrics.update(gemm_summary)
-        metrics.update(profiled_kernel_us)
     # --- perf (kernel-bench only): per-kernel gemm1/gemm2 timing (looped alone) ---
     if kernel_bench:
         kernel_us = kernel_us or {}
@@ -932,6 +1126,8 @@ def run_moe(
                 f"[kernel-bench {tag}] gemm1 us = {g1s} gemm2 us = {g2s}",
                 flush=True,
             )
+        # If both flags are ever passed programmatically, isolated kernel-bench
+        # timings intentionally take precedence over end-to-end trace averages.
         metrics["gemm1_us"] = g1
         metrics["gemm2_us"] = g2
     return metrics
