@@ -1004,14 +1004,15 @@ if [[ -n "${PRIMARY_OBJ}" ]] && (( LD_LLD_LAUNCHABLE )); then
         -shared \
         --no-undefined \
         -o "${lld_candidate}" \
-        "${PRIMARY_OBJ}" \
-        && validate_et_dyn_amdgpu \
+        "${PRIMARY_OBJ}"; then
+        if validate_et_dyn_amdgpu \
             "${lld_candidate}" "${OUT_DIR}/link_ld_lld.elf_type.txt"; then
-        LLD_LINK_OK=1
-        LLD_CO="${lld_candidate}"
-    else
-        echo "ERROR: ld.lld output is not an ET_DYN EM_AMDGPU code object." >&2
-        HARD_FAIL=1
+            LLD_LINK_OK=1
+            LLD_CO="${lld_candidate}"
+        else
+            echo "ERROR: ld.lld output is not an ET_DYN EM_AMDGPU code object." >&2
+            HARD_FAIL=1
+        fi
     fi
 elif (( LD_LLD_LAUNCHABLE == 0 )); then
     echo "WARNING: direct ld.lld link route skipped because ld.lld is missing or unlaunchable."
@@ -1019,6 +1020,9 @@ fi
 
 if [[ -n "${PRIMARY_OBJ}" ]] && (( CLANG_LAUNCHABLE )); then
     clang_co_candidate="${OUT_DIR}/target.clang.co"
+    # The pulled run proved that this AMDGPU clang ignored -shared while still
+    # emitting ET_DYN. Omit that redundant warning-producing flag, then verify
+    # the resulting e_type/e_machine directly before accepting the route.
     if attempt_elf_command \
         "link_clang_driver" \
         "${clang_co_candidate}" \
@@ -1030,14 +1034,15 @@ if [[ -n "${PRIMARY_OBJ}" ]] && (( CLANG_LAUNCHABLE )); then
         -nostdlib \
         -Wl,--no-undefined \
         "${PRIMARY_OBJ}" \
-        -o "${clang_co_candidate}" \
-        && validate_et_dyn_amdgpu \
+        -o "${clang_co_candidate}"; then
+        if validate_et_dyn_amdgpu \
             "${clang_co_candidate}" "${OUT_DIR}/link_clang_driver.elf_type.txt"; then
-        CLANG_LINK_OK=1
-        CLANG_CO="${clang_co_candidate}"
-    else
-        echo "ERROR: clang-driver output is not an ET_DYN EM_AMDGPU code object." >&2
-        HARD_FAIL=1
+            CLANG_LINK_OK=1
+            CLANG_CO="${clang_co_candidate}"
+        else
+            echo "ERROR: clang-driver output is not an ET_DYN EM_AMDGPU code object." >&2
+            HARD_FAIL=1
+        fi
     fi
 fi
 
@@ -2377,12 +2382,14 @@ else
 fi
 
 ANALYSIS_OUTPUTS_MISSING=0
-for analysis_output in "${analysis_outputs[@]}"; do
-    if [[ ! -s "${analysis_output}" ]]; then
-        echo "ERROR: required analysis artifact is missing or empty: ${analysis_output}" >&2
-        ((ANALYSIS_OUTPUTS_MISSING += 1))
-    fi
-done
+if (( static_audit_unavailable == 0 )); then
+    for analysis_output in "${analysis_outputs[@]}"; do
+        if [[ ! -s "${analysis_output}" ]]; then
+            echo "ERROR: required analysis artifact is missing or empty: ${analysis_output}" >&2
+            ((ANALYSIS_OUTPUTS_MISSING += 1))
+        fi
+    done
+fi
 ANALYSIS_INTERNAL_FAILURE=0
 if (( static_audit_unavailable == 0 )) \
     && (( static_audit_status != 0 || ANALYSIS_OUTPUTS_MISSING != 0 )); then
@@ -2390,6 +2397,7 @@ if (( static_audit_unavailable == 0 )) \
     HARD_FAIL=1
     echo "ERROR: required embedded analysis failed internally; validation cannot pass." >&2
 fi
+REQUIRED_ANALYSIS_FAILURE="${ANALYSIS_INTERNAL_FAILURE}"
 
 STATIC_WARNINGS=0
 DESIGN_WARNINGS=0
@@ -2431,6 +2439,7 @@ elif (( ANALYSIS_INTERNAL_FAILURE != 0 )); then
 elif (( METADATA_TOOL_FAILURES != 0 || METADATA_NOTE_DECODES == 0 )); then
     metadata_level="FAIL"
     metadata_detail="${METADATA_TOOL_FAILURES} required generic metadata command failure(s), ${METADATA_NOTE_DECODES} successful note decode(s)"
+    REQUIRED_ANALYSIS_FAILURE=1
     HARD_FAIL=1
 fi
 record_experiment "6. Metadata/resources" "${metadata_level}" "${metadata_detail}"
@@ -2491,6 +2500,7 @@ record_experiment \
 
 banner "10. Round-trip and cross-route sanity"
 if [[ -f "${OUT_DIR}/route_comparison.json" ]]; then
+    set +e
     "${PYTHON}" - "${OUT_DIR}/route_comparison.json" <<'PY' \
         | tee "${OUT_DIR}/route_comparison.txt"
 import json
@@ -2519,6 +2529,14 @@ for warning in data.get("warnings", []):
     print(f"WARNING: {warning}")
 print("NOTE: whole-ELF differences alone are non-semantic and are not a failure.")
 PY
+    route_render_status=${PIPESTATUS[0]}
+    set -e
+    if (( route_render_status != 0 )); then
+        echo "ERROR: route-comparison JSON could not be rendered." >&2
+        ROUTE_COMPARISON_AVAILABLE=0
+        REQUIRED_ANALYSIS_FAILURE=1
+        HARD_FAIL=1
+    fi
 fi
 
 roundtrip_level="PASS"
@@ -2529,6 +2547,11 @@ if (( VALID_OBJECT_COUNT == 0 )); then
 elif (( DISASM_INVALID_COUNT != 0 || ELF_HEADER_INVALID_COUNT != 0 || ELF_SUCCESS_INVALID != 0 )); then
     roundtrip_level="FAIL"
     roundtrip_detail="INVALID: a produced artifact failed ELF-header or disassembly validation"
+elif (( MC_OK && CLANG_OK && ROUTE_COMPARISON_AVAILABLE == 0 )); then
+    roundtrip_level="FAIL"
+    roundtrip_detail="ANALYSIS FAILURE: both assembly routes succeeded but route comparison was not generated"
+    REQUIRED_ANALYSIS_FAILURE=1
+    HARD_FAIL=1
 elif (( ROUTE_WARNINGS != 0 || UNRESOLVED_SYMBOL_FILES != 0 || UNRESOLVED_BRANCHES != 0 )); then
     roundtrip_level="WARN"
     roundtrip_detail="${ROUTE_WARNINGS} route comparison warning(s), ${UNRESOLVED_SYMBOL_FILES} ELF file(s) with undefined symbols"
@@ -2549,6 +2572,9 @@ printf 'experiment\tresult\tdetail\n' > "${SUMMARY_TSV}"
     printf 'Primary code object: %s\n' "${PRIMARY_CO:-none}"
     printf 'Valid disassembly count: %s\n' "${DISASM_VALID_COUNT}"
     printf 'Invalid disassembly count: %s\n' "${DISASM_INVALID_COUNT}"
+    printf 'Required analysis failure: %s\n' "${REQUIRED_ANALYSIS_FAILURE}"
+    printf 'Unchanged reference-copy target: %s\n' "${UNCHANGED_REFERENCE_COPY}"
+    printf 'Hard target-contract failures: %s\n' "${CONTRACT_FAILURES}"
     printf '\n'
     for index in "${!EXPERIMENT_NAMES[@]}"; do
         name="${EXPERIMENT_NAMES[${index}]}"
@@ -2580,7 +2606,7 @@ if (( HARD_FAIL != 0 )); then
 fi
 
 if (( final_status == 0 )); then
-    echo "FINAL RESULT: validation completed; warnings do not change the zero exit status." \
+    echo "FINAL RESULT: toolchain, assembly, ELF/disassembly, required analysis, and hard target-contract gates passed; heuristic warnings do not change the zero exit status." \
         | tee -a "${OUT_DIR}/final_summary.txt"
 elif (( VALID_OBJECT_COUNT == 0 )); then
     if [[ -n "${TOOLCHAIN_ROOT_CAUSE}" ]]; then
@@ -2590,8 +2616,20 @@ elif (( VALID_OBJECT_COUNT == 0 )); then
         echo "FINAL RESULT: hard failure: no valid object assembled; ELF/disassembly artifacts are unavailable (not observed invalid). See assembler logs." \
             | tee -a "${OUT_DIR}/final_summary.txt" >&2
     fi
-else
+elif (( REQUIRED_ANALYSIS_FAILURE != 0 )); then
+    echo "FINAL RESULT: INTERNAL HARNESS/ANALYSIS FAILURE after toolchain/assembly/ELF processing; required static, metadata, design, or route-comparison analysis did not complete." \
+        | tee -a "${OUT_DIR}/final_summary.txt" >&2
+elif (( DISASM_INVALID_COUNT != 0 || ELF_HEADER_INVALID_COUNT != 0 || ELF_SUCCESS_INVALID != 0 )); then
     echo "FINAL RESULT: hard failure: a produced ELF/disassembly artifact is invalid; see validation reports." \
+        | tee -a "${OUT_DIR}/final_summary.txt" >&2
+elif (( CONTRACT_FAILURES != 0 && UNCHANGED_REFERENCE_COPY != 0 )); then
+    echo "FINAL RESULT: toolchain, assembly, and ELF/disassembly succeeded, but DESIGN INCOMPLETE: target is an unchanged reference copy and ${CONTRACT_FAILURES} hard final-contract gate(s) failed." \
+        | tee -a "${OUT_DIR}/final_summary.txt" >&2
+elif (( CONTRACT_FAILURES != 0 )); then
+    echo "FINAL RESULT: toolchain, assembly, and ELF/disassembly succeeded, but HARD TARGET-CONTRACT FAILURE: ${CONTRACT_FAILURES} required gate(s) failed." \
+        | tee -a "${OUT_DIR}/final_summary.txt" >&2
+else
+    echo "FINAL RESULT: hard failure after toolchain/assembly processing; inspect experiment summary and artifacts." \
         | tee -a "${OUT_DIR}/final_summary.txt" >&2
 fi
 echo "Artifacts remain in: ${OUT_DIR}" | tee -a "${OUT_DIR}/final_summary.txt"
