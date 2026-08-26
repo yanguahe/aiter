@@ -10,4 +10,4 @@ Traceback (most recent call last):
   File "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py", line 199, in literal_counts
     counter[int(token, 0)] += 1
             ^^^^^^^^^^^^^
-ValueError: invalid literal for int() with base 0: '0000000000001900'
+ValueError: invalid literal for int() with base 0: '0000000000000328'

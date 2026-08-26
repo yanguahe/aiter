@@ -1,1 +1,0 @@
-clang: warning: argument unused during compilation: '-shared' [-Wunused-command-line-argument]

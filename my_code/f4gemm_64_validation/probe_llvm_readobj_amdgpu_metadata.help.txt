@@ -1,0 +1,130 @@
+OVERVIEW: LLVM Object Reader
+
+USAGE: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj [options] <input object files>
+
+OPTIONS:
+  --addrsig              Display address-significance table
+  --all                  Equivalent to setting: --file-header, --program-headers, --section-headers, --symbols, --relocations, --dynamic-table, --notes, --version-info, --unwind, --section-groups and --histogram
+  --arch-specific        Display architecture-specific information
+  -A                     Alias for --arch-specific
+  -a                     Alias for --all
+  --bb-addr-map          Display the BB address map section
+  --call-graph-info      Display call graph information
+  --cg-profile           Display call graph profile section
+  -C                     Alias for --demangle
+  --decompress           Dump decompressed section content when used with -x or -p
+  --demangle             Demangle symbol names
+  --dependent-libraries  Display the dependent libraries section
+  --dt                   Alias for --dyn-syms
+  --dyn-relocations      Display the dynamic relocation entries in the file
+  --dyn-symbols          Alias for --dyn-syms
+  --dyn-syms             Display the dynamic symbol table
+  --dynamic              Alias for --dynamic-table
+  --expand-relocs        Expand each shown relocation to multiple lines
+  --extra-sym-info       Display extra information when showing symbols
+  -e                     Alias for --headers
+  --file-header          Display file header
+  --headers              Equivalent to setting: --file-header, --program-headers, --section-headers
+  --help                 Display this help
+  --hex-dump=<name or index>
+                         Display the specified section(s) as hexadecimal bytes
+  -h                     Alias for --file-header
+  -l                     Alias for --program-headers
+  --no-demangle          Do not demangle symbol names (default)
+  -n                     Alias for --notes
+  --offloading           Display the content of the offloading section
+  --pretty-pgo-analysis-map
+                         Display PGO analysis values with formatting rather than raw numbers
+  --pretty-print         Pretty print JSON output
+  -p <name or index>     Alias for --string-dump
+  --relocations          Alias for --relocs
+  --relocs               Display the relocation entries in the file
+  -r                     Alias for --relocs
+  --sd                   Alias for --section-data
+  --section-data         Display section data for each section shown. This option has no effect for GNU style output
+  --section-details      Display the section details
+  --section-headers      Display section headers
+  --section-mapping      Display the section to segment mapping
+  --section-relocations  Display relocations for each section shown. This option has no effect for GNU style output
+  --section-symbols      Display symbols for each section shown. This option has no effect for GNU style output
+  --sections             Alias for --section-headers
+  --sort-symbols=<value> Specify the keys to sort the symbols before displaying symtab
+  --sr                   Alias for --section-relocations
+  --stack-sizes          Display contents of all stack sizes sections. This option has no effect for GNU style output
+  --stackmap             Display contents of stackmap section
+  --string-dump=<name or index>
+                         Display the specified section(s) as a list of strings
+  --string-table         Display the string table (only for XCOFF/COFF now)
+  --st                   Alias for --section-symbols
+  --symbols              Display the symbol table. Also display the dynamic symbol table when using GNU output style for ELF
+  --syms                 Alias for --symbols
+  -S                     Alias for --section-headers
+  -s                     Alias for --symbols
+  -t                     Alias for --section-details
+  --unwind               Display unwind information
+  -u                     Alias for --unwind
+  --version              Display the version
+  --wide                 Ignored for GNU readelf compatibility
+  -W                     Ignored for GNU readelf compatibility
+  -x <name or index>     Alias for --hex-dump
+  -z                     Alias for --decompress
+
+OPTIONS (ELF specific):
+  --dynamic-table      Display the dynamic section table
+  -d                   Alias for --dynamic-table
+  --elf-linker-options Display the .linker-options section
+  --elf-output-style=<value>
+                       Specify ELF dump style: LLVM, GNU, JSON
+  --gnu-hash-table     Display the GNU hash table for dynamic symbols
+  -g                   Alias for --section-groups
+  --hash-symbols       Display the dynamic symbols derived from the hash section
+  --hash-table         Display .hash section
+  --histogram          Display bucket list histogram for hash sections
+  -I                   Alias for --histogram
+  --memtag             Display memory tagging metadata (modes, Android notes, global descriptors)
+  --needed-libs        Display the needed libraries
+  --notes              Display notes
+  --program-headers    Display program headers
+  --section-groups     Display section groups
+  --segments           Alias for --program-headers
+  --sframe=<name>      Display SFrame section <name>
+  --sframe             Alias for --sframe=.sframe
+  --version-info       Display version sections
+  -V                   Alias for --version-info
+  -X                   Alias for --extra-sym-info
+
+OPTIONS (Mach-O specific):
+  --macho-data-in-code   Display Data in Code command
+  --macho-dysymtab       Display Dysymtab command
+  --macho-indirect-symbols
+                         Display indirect symbols
+  --macho-linker-options Display linker options
+  --macho-segment        Display Segment command
+  --macho-version-min    Display version min command
+
+OPTIONS (PE/COFF specific):
+  --codeview-ghash        Enable global hashing for CodeView type stream de-duplication
+  --codeview-merged-types Display the merged CodeView type stream
+  --codeview-subsection-bytes
+                          Dump raw contents of codeview debug sections and records
+  --codeview              Display CodeView debug information
+  --coff-basereloc        Display .reloc section
+  --coff-debug-directory  Display debug directory
+  --coff-directives       Display .drectve section
+  --coff-exports          Display export table
+  --coff-imports          Display import table
+  --coff-load-config      Display load config
+  --coff-pseudoreloc      Display runtime pseudo-relocations (Cygwin/MinGW specific)
+  --coff-resources        Display .rsrc section
+  --coff-tls-directory    Display TLS directory
+
+OPTIONS (XCOFF specific):
+  --auxiliary-header      Display the auxiliary header
+  --exception-section     Display the exception section entries
+  --loader-section-header Display the loader section header
+  --loader-section-relocations
+                          Display the loader section relocation entries
+  --loader-section-symbols
+                          Display the loader section symbol table
+
+Pass @FILE as argument to read options from FILE.

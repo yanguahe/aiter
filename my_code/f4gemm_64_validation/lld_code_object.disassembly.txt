@@ -11,7 +11,7 @@ Disassembly of section .text:
 	s_mov_b32 s45, s3                                          // 000000001918: BEAD0003
 	s_bfe_u32 s22, ttmp8, 0x50019                              // 00000000191C: 9316FF74 00050019
 	s_cmp_eq_u32 s22, 0                                        // 000000001924: BF068016
-	s_cbranch_scc0 12                                          // 000000001928: BFA1000C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5c>
+	s_cbranch_scc0 L0                                          // 000000001928: BFA1000C
 	s_getreg_b32 s24, hwreg(HW_REG_WAVE_MODE)                  // 00000000192C: B898F801
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 24, 1), 1       // 000000001930: B9800601 00000001
 	s_getreg_b32 s24, hwreg(HW_REG_WAVE_MODE)                  // 000000001938: B898F801
@@ -20,6 +20,8 @@ Disassembly of section .text:
 	s_prefetch_inst s[24:25], 0x7c00, s26, 0                   // 000000001944: F404800C 34007C00
 	s_prefetch_inst s[24:25], 0x8c00, s26, 0                   // 00000000194C: F404800C 34008C00
 	s_prefetch_inst s[24:25], 0x9c00, s26, 0                   // 000000001954: F404800C 34009C00
+
+000000000000195c <L0>:
 	s_wait_kmcnt 0x0                                           // 00000000195C: BFC70000
 	v_lshrrev_b32_e32 v1, 10, v0                               // 000000001960: 3202008A
 	v_lshrrev_b32_e32 v2, 10, v1                               // 000000001964: 3204028A
@@ -160,16 +162,18 @@ Disassembly of section .text:
 	s_set_vgpr_msb 0                                           // 000000001BF4: BF860000
 	s_mov_b32 s94, 1                                           // 000000001BF8: BEDE0081
 	s_cmp_lt_u32 s28, s29                                      // 000000001BFC: BF0A1D1C
-	s_cbranch_scc0 10135                                       // 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+	s_cbranch_scc0 L56                                         // 000000001C00: BFA12797
 	s_mov_b32 s24, s61                                         // 000000001C04: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   // 000000001C08: 80998118
 	s_and_b32 s26, s24, s25                                    // 000000001C0C: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        // 000000001C10: BF06801A
-	s_cbranch_scc0 4                                           // 000000001C14: BFA10004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x328>
+	s_cbranch_scc0 L1                                          // 000000001C14: BFA10004
 	s_ctz_i32_b32 s26, s24                                     // 000000001C18: BE9A0818
 	s_lshr_b32 s48, s28, s26                                   // 000000001C1C: 85301A1C
 	s_and_b32 s23, s28, s25                                    // 000000001C20: 8B17191C
-	s_branch 32                                                // 000000001C24: BFA00020 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3a8>
+	s_branch L2                                                // 000000001C24: BFA00020
+
+0000000000001c28 <L1>:
 	v_cvt_f32_u32_e32 v4, s24                                  // 000000001C28: 7E080C18
 	s_sub_co_i32 s27, 0, s24                                   // 000000001C2C: 819B1880
 	v_rcp_iflag_f32_e32 v4, v4                                 // 000000001C30: 7E085704
@@ -197,6 +201,8 @@ Disassembly of section .text:
 	s_nop 3                                                    // 000000001C9C: BF800003
 	s_mul_i32 s25, s48, s24                                    // 000000001CA0: 96191830
 	s_sub_co_u32 s23, s28, s25                                 // 000000001CA4: 8097191C
+
+0000000000001ca8 <L2>:
 	s_mul_i32 s24, s48, s52                                    // 000000001CA8: 96183430
 	s_add_co_u32 s55, s24, s50                                 // 000000001CAC: 80373218
 	s_mul_i32 s24, s23, s51                                    // 000000001CB0: 96183317
@@ -206,12 +212,12 @@ Disassembly of section .text:
 	s_add_co_u32 s28, s28, s24                                 // 000000001CC0: 801C181C
 	s_cmp_lt_u32 s28, s29                                      // 000000001CC4: BF0A1D1C
 	s_cselect_b32 s60, 0, 1                                    // 000000001CC8: 983C8180
-	s_cbranch_scc0 50                                          // 000000001CCC: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x498>
+	s_cbranch_scc0 L4                                          // 000000001CCC: BFA10032
 	s_mov_b32 s24, s61                                         // 000000001CD0: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   // 000000001CD4: 80998118
 	s_and_b32 s26, s24, s25                                    // 000000001CD8: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        // 000000001CDC: BF06801A
-	s_cbranch_scc0 8                                           // 000000001CE0: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x404>
+	s_cbranch_scc0 L3                                          // 000000001CE0: BFA10008
 	s_ctz_i32_b32 s26, s24                                     // 000000001CE4: BE9A0818
 	s_lshr_b32 s27, s28, s26                                   // 000000001CE8: 851B1A1C
 	s_and_b32 s24, s28, s25                                    // 000000001CEC: 8B18191C
@@ -219,7 +225,9 @@ Disassembly of section .text:
 	s_add_co_u32 s69, s25, s50                                 // 000000001CF4: 80453219
 	s_mul_i32 s25, s24, s51                                    // 000000001CF8: 96193318
 	s_add_co_u32 s68, s25, s49                                 // 000000001CFC: 80443119
-	s_branch 39                                                // 000000001D00: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+	s_branch L5                                                // 000000001D00: BFA00027
+
+0000000000001d04 <L3>:
 	v_cvt_f32_u32_e32 v4, s24                                  // 000000001D04: 7E080C18
 	s_sub_co_i32 s26, 0, s24                                   // 000000001D08: 819A1880
 	v_rcp_iflag_f32_e32 v4, v4                                 // 000000001D0C: 7E085704
@@ -251,9 +259,13 @@ Disassembly of section .text:
 	s_add_co_u32 s69, s25, s50                                 // 000000001D88: 80453219
 	s_mul_i32 s25, s24, s51                                    // 000000001D8C: 96193318
 	s_add_co_u32 s68, s25, s49                                 // 000000001D90: 80443119
-	s_branch 2                                                 // 000000001D94: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+	s_branch L5                                                // 000000001D94: BFA00002
+
+0000000000001d98 <L4>:
 	s_mov_b32 s68, s54                                         // 000000001D98: BEC40036
 	s_mov_b32 s69, s55                                         // 000000001D9C: BEC50037
+
+0000000000001da0 <L5>:
 	s_mul_i32 s24, s55, 0x100                                  // 000000001DA0: 9618FF37 00000100
 	s_mul_i32 s24, s24, s13                                    // 000000001DA8: 96180D18
 	s_add_co_u32 s72, s4, s24                                  // 000000001DAC: 80481804
@@ -319,13 +331,15 @@ Disassembly of section .text:
 	global_prefetch_b8 v4, s[24:25]                            // 000000001ED8: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      // 000000001EE4: BEFE00C1
 	s_cmp_eq_u32 s22, 0                                        // 000000001EE8: BF068016
-	s_cbranch_scc1 6                                           // 000000001EEC: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x608>
+	s_cbranch_scc1 L6                                          // 000000001EEC: BFA20006
 	s_cmp_eq_u32 s22, 1                                        // 000000001EF0: BF068116
-	s_cbranch_scc1 788                                         // 000000001EF4: BFA20314 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1248>
+	s_cbranch_scc1 L7                                          // 000000001EF4: BFA20314
 	s_cmp_eq_u32 s22, 2                                        // 000000001EF8: BF068216
-	s_cbranch_scc1 1579                                        // 000000001EFC: BFA2062B <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1eac>
+	s_cbranch_scc1 L9                                          // 000000001EFC: BFA2062B
 	s_cmp_eq_u32 s22, 3                                        // 000000001F00: BF068316
-	s_cbranch_scc1 2364                                        // 000000001F04: BFA2093C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2af8>
+	s_cbranch_scc1 L10                                         // 000000001F04: BFA2093C
+
+0000000000001f08 <L6>:
 	s_mov_b32 s95, 0                                           // 000000001F08: BEDF0080
 	s_mov_b32 s96, 0x8000                                      // 000000001F0C: BEE000FF 00008000
 	s_mov_b32 s97, 0x12000                                     // 000000001F14: BEE100FF 00012000
@@ -1027,7 +1041,9 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000002B38: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 000000002B3C: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000002B40: 98278027
-	s_branch 4484                                              // 000000002B44: BFA01184 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+	s_branch L33                                               // 000000002B44: BFA01184
+
+0000000000002b48 <L7>:
 	s_mov_b32 s95, 0x30000                                     // 000000002B48: BEDF00FF 00030000
 	s_mov_b32 s96, 0x38000                                     // 000000002B50: BEE000FF 00038000
 	s_mov_b32 s97, 0x40000                                     // 000000002B58: BEE100FF 00040000
@@ -1082,11 +1098,13 @@ Disassembly of section .text:
 	s_bfe_u32 s25, ttmp6, 0x4000c                              // 000000002C60: 9319FF72 0004000C
 	s_add_co_i32 s25, s25, 1                                   // 000000002C68: 81198119
 	s_mov_b32 s26, 0                                           // 000000002C6C: BE9A0080
+
+0000000000002c70 <L8>:
 	s_bitset1_b32 s53, s26                                     // 000000002C70: BEB5121A
 	s_add_co_i32 s26, s26, s25                                 // 000000002C74: 811A191A
 	s_sub_co_i32 s24, s24, 1                                   // 000000002C78: 81988118
 	s_cmp_gt_u32 s24, 0                                        // 000000002C7C: BF088018
-	s_cbranch_scc1 65531                                       // 000000002C80: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1370>
+	s_cbranch_scc1 L8                                          // 000000002C80: BFA2FFFB
 	s_bfe_u32 s24, ttmp6, 0x40000                              // 000000002C84: 9318FF72 00040000
 	s_lshl_b32 s53, s53, s24                                   // 000000002C8C: 84351835
 	s_and_b32 s36, s36, 0xffff0000                             // 000000002C90: 8B24FF24 FFFF0000
@@ -1734,7 +1752,9 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 00000000379C: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 0000000037A0: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 0000000037A4: 98278027
-	s_branch 5552                                              // 0000000037A8: BFA015B0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+	s_branch L42                                               // 0000000037A8: BFA015B0
+
+00000000000037ac <L9>:
 	s_mov_b32 s95, 0x10000                                     // 0000000037AC: BEDF00FF 00010000
 	s_mov_b32 s96, 0x10800                                     // 0000000037B4: BEE000FF 00010800
 	s_mov_b32 s97, 0x11000                                     // 0000000037BC: BEE100FF 00011000
@@ -2436,7 +2456,9 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 0000000043E8: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 0000000043EC: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 0000000043F0: 98278027
-	s_branch 2904                                              // 0000000043F4: BFA00B58 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+	s_branch L33                                               // 0000000043F4: BFA00B58
+
+00000000000043f8 <L10>:
 	s_mov_b32 s95, 0x22000                                     // 0000000043F8: BEDF00FF 00022000
 	s_mov_b32 s96, 0x22800                                     // 000000004400: BEE000FF 00022800
 	s_mov_b32 s97, 0x23000                                     // 000000004408: BEE100FF 00023000
@@ -2491,11 +2513,13 @@ Disassembly of section .text:
 	s_bfe_u32 s25, ttmp6, 0x4000c                              // 000000004510: 9319FF72 0004000C
 	s_add_co_i32 s25, s25, 1                                   // 000000004518: 81198119
 	s_mov_b32 s26, 0                                           // 00000000451C: BE9A0080
+
+0000000000004520 <L11>:
 	s_bitset1_b32 s53, s26                                     // 000000004520: BEB5121A
 	s_add_co_i32 s26, s26, s25                                 // 000000004524: 811A191A
 	s_sub_co_i32 s24, s24, 1                                   // 000000004528: 81988118
 	s_cmp_gt_u32 s24, 0                                        // 00000000452C: BF088018
-	s_cbranch_scc1 65531                                       // 000000004530: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2c20>
+	s_cbranch_scc1 L11                                         // 000000004530: BFA2FFFB
 	s_bfe_u32 s24, ttmp6, 0x40000                              // 000000004534: 9318FF72 00040000
 	s_lshl_b32 s53, s53, s24                                   // 00000000453C: 84351835
 	s_and_b32 s36, s36, 0xffff0000                             // 000000004540: 8B24FF24 FFFF0000
@@ -3144,7 +3168,9 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000005050: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 000000005054: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000005058: 98278027
-	s_branch 3971                                              // 00000000505C: BFA00F83 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+	s_branch L42                                               // 00000000505C: BFA00F83
+
+0000000000005060 <L12>:
 	s_mul_i32 s24, s69, 0x100                                  // 000000005060: 9618FF45 00000100
 	s_mul_hi_u32 s63, s24, s13                                 // 000000005068: 96BF0D18
 	s_mul_i32 s24, s24, s13                                    // 00000000506C: 96180D18
@@ -3202,10 +3228,10 @@ Disassembly of section .text:
 	s_mov_b32 exec_lo, 0xffff                                  // 000000005170: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            // 000000005178: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      // 000000005184: BEFE00C1
-	s_call_i64 s[100:101], 1518                                // 000000005188: BA6405EE
+	s_call_i64 s[100:101], L32                                 // 000000005188: BA6405EE
 	s_wait_tensorcnt 0x0                                       // 00000000518C: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        // 000000005190: BF06815E
-	s_cbranch_scc0 236                                         // 000000005194: BFA100EC <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c48>
+	s_cbranch_scc0 L13                                         // 000000005194: BFA100EC
 	s_mov_b32 s94, 0                                           // 000000005198: BEDE0080
 	s_mov_b32 s32, 1                                           // 00000000519C: BEA00081
 	s_mov_b32 s33, 0                                           // 0000000051A0: BEA10080
@@ -3368,8 +3394,12 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000005538: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 00000000553C: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000005540: 98278027
-	s_branch 1796                                              // 000000005544: BFA00704 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
-	s_branch 962                                               // 000000005548: BFA003C2 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+	s_branch L33                                               // 000000005544: BFA00704
+
+0000000000005548 <L13>:
+	s_branch L22                                               // 000000005548: BFA003C2
+
+000000000000554c <L14>:
 	s_mul_i32 s24, s68, 0x100                                  // 00000000554C: 9618FF44 00000100
 	s_mul_hi_u32 s63, s24, s14                                 // 000000005554: 96BF0E18
 	s_mul_i32 s24, s24, s14                                    // 000000005558: 96180E18
@@ -3426,10 +3456,10 @@ Disassembly of section .text:
 	s_mov_b32 exec_lo, 0xffff                                  // 000000005658: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            // 000000005660: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      // 00000000566C: BEFE00C1
-	s_call_i64 s[100:101], 1204                                // 000000005670: BA6404B4
+	s_call_i64 s[100:101], L32                                 // 000000005670: BA6404B4
 	s_wait_tensorcnt 0x0                                       // 000000005674: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        // 000000005678: BF06815E
-	s_cbranch_scc0 245                                         // 00000000567C: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4154>
+	s_cbranch_scc0 L16                                         // 00000000567C: BFA100F5
 	s_mov_b32 s94, 0                                           // 000000005680: BEDE0080
 	s_mov_b32 s32, 1                                           // 000000005684: BEA00081
 	s_mov_b32 s33, 0                                           // 000000005688: BEA10080
@@ -3481,11 +3511,13 @@ Disassembly of section .text:
 	s_bfe_u32 s25, ttmp6, 0x4000c                              // 00000000577C: 9319FF72 0004000C
 	s_add_co_i32 s25, s25, 1                                   // 000000005784: 81198119
 	s_mov_b32 s26, 0                                           // 000000005788: BE9A0080
+
+000000000000578c <L15>:
 	s_bitset1_b32 s53, s26                                     // 00000000578C: BEB5121A
 	s_add_co_i32 s26, s26, s25                                 // 000000005790: 811A191A
 	s_sub_co_i32 s24, s24, 1                                   // 000000005794: 81988118
 	s_cmp_gt_u32 s24, 0                                        // 000000005798: BF088018
-	s_cbranch_scc1 65531                                       // 00000000579C: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3e8c>
+	s_cbranch_scc1 L15                                         // 00000000579C: BFA2FFFB
 	s_bfe_u32 s24, ttmp6, 0x40000                              // 0000000057A0: 9318FF72 00040000
 	s_lshl_b32 s53, s53, s24                                   // 0000000057A8: 84351835
 	s_and_b32 s36, s36, 0xffff0000                             // 0000000057AC: 8B24FF24 FFFF0000
@@ -3598,8 +3630,12 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000005A44: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 000000005A48: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000005A4C: 98278027
-	s_branch 3334                                              // 000000005A50: BFA00D06 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
-	s_branch 797                                               // 000000005A54: BFA0031D <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+	s_branch L42                                               // 000000005A50: BFA00D06
+
+0000000000005a54 <L16>:
+	s_branch L27                                               // 000000005A54: BFA0031D
+
+0000000000005a58 <L17>:
 	s_mul_i32 s24, s69, 0x100                                  // 000000005A58: 9618FF45 00000100
 	s_mul_hi_u32 s63, s24, s15                                 // 000000005A60: 96BF0F18
 	s_mul_i32 s24, s24, s15                                    // 000000005A64: 96180F18
@@ -3656,10 +3692,10 @@ Disassembly of section .text:
 	s_mov_b32 exec_lo, 0xffff                                  // 000000005B64: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            // 000000005B6C: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      // 000000005B78: BEFE00C1
-	s_call_i64 s[100:101], 881                                 // 000000005B7C: BA640371
+	s_call_i64 s[100:101], L32                                 // 000000005B7C: BA640371
 	s_wait_tensorcnt 0x0                                       // 000000005B80: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        // 000000005B84: BF06815E
-	s_cbranch_scc0 238                                         // 000000005B88: BFA100EE <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4644>
+	s_cbranch_scc0 L18                                         // 000000005B88: BFA100EE
 	s_mov_b32 s94, 0                                           // 000000005B8C: BEDE0080
 	s_mov_b32 s32, 1                                           // 000000005B90: BEA00081
 	s_mov_b32 s33, 0                                           // 000000005B94: BEA10080
@@ -3822,8 +3858,12 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000005F34: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 000000005F38: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000005F3C: 98278027
-	s_branch 1157                                              // 000000005F40: BFA00485 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
-	s_branch 323                                               // 000000005F44: BFA00143 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+	s_branch L33                                               // 000000005F40: BFA00485
+
+0000000000005f44 <L18>:
+	s_branch L22                                               // 000000005F44: BFA00143
+
+0000000000005f48 <L19>:
 	s_mul_i32 s24, s68, 0x100                                  // 000000005F48: 9618FF44 00000100
 	s_mul_hi_u32 s63, s24, s16                                 // 000000005F50: 96BF1018
 	s_mul_i32 s24, s24, s16                                    // 000000005F54: 96181018
@@ -3880,10 +3920,10 @@ Disassembly of section .text:
 	s_mov_b32 exec_lo, 0xffff                                  // 000000006054: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            // 00000000605C: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      // 000000006068: BEFE00C1
-	s_call_i64 s[100:101], 565                                 // 00000000606C: BA640235
+	s_call_i64 s[100:101], L32                                 // 00000000606C: BA640235
 	s_wait_tensorcnt 0x0                                       // 000000006070: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        // 000000006074: BF06815E
-	s_cbranch_scc0 245                                         // 000000006078: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b50>
+	s_cbranch_scc0 L21                                         // 000000006078: BFA100F5
 	s_mov_b32 s94, 0                                           // 00000000607C: BEDE0080
 	s_mov_b32 s32, 1                                           // 000000006080: BEA00081
 	s_mov_b32 s33, 0                                           // 000000006084: BEA10080
@@ -3935,11 +3975,13 @@ Disassembly of section .text:
 	s_bfe_u32 s25, ttmp6, 0x4000c                              // 000000006178: 9319FF72 0004000C
 	s_add_co_i32 s25, s25, 1                                   // 000000006180: 81198119
 	s_mov_b32 s26, 0                                           // 000000006184: BE9A0080
+
+0000000000006188 <L20>:
 	s_bitset1_b32 s53, s26                                     // 000000006188: BEB5121A
 	s_add_co_i32 s26, s26, s25                                 // 00000000618C: 811A191A
 	s_sub_co_i32 s24, s24, 1                                   // 000000006190: 81988118
 	s_cmp_gt_u32 s24, 0                                        // 000000006194: BF088018
-	s_cbranch_scc1 65531                                       // 000000006198: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4888>
+	s_cbranch_scc1 L20                                         // 000000006198: BFA2FFFB
 	s_bfe_u32 s24, ttmp6, 0x40000                              // 00000000619C: 9318FF72 00040000
 	s_lshl_b32 s53, s53, s24                                   // 0000000061A4: 84351835
 	s_and_b32 s36, s36, 0xffff0000                             // 0000000061A8: 8B24FF24 FFFF0000
@@ -4052,18 +4094,24 @@ Disassembly of section .text:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  // 000000006440: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      // 000000006444: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  // 000000006448: 98278027
-	s_branch 2695                                              // 00000000644C: BFA00A87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
-	s_branch 158                                               // 000000006450: BFA0009E <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+	s_branch L42                                               // 00000000644C: BFA00A87
+
+0000000000006450 <L21>:
+	s_branch L27                                               // 000000006450: BFA0009E
+
+0000000000006454 <L22>:
 	s_nop 0                                                    // 000000006454: BF800000
 	s_set_vgpr_msb 0                                           // 000000006458: BF860000
 	s_cmp_eq_u32 s92, 0                                        // 00000000645C: BF06805C
-	s_cbranch_scc1 6                                           // 000000006460: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b7c>
+	s_cbranch_scc1 L23                                         // 000000006460: BFA20006
 	s_cmp_eq_u32 s92, 1                                        // 000000006464: BF06815C
-	s_cbranch_scc1 41                                          // 000000006468: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4c10>
+	s_cbranch_scc1 L24                                         // 000000006468: BFA20029
 	s_cmp_eq_u32 s92, 2                                        // 00000000646C: BF06825C
-	s_cbranch_scc1 76                                          // 000000006470: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4ca4>
+	s_cbranch_scc1 L25                                         // 000000006470: BFA2004C
 	s_cmp_eq_u32 s92, 3                                        // 000000006474: BF06835C
-	s_cbranch_scc1 111                                         // 000000006478: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4d38>
+	s_cbranch_scc1 L26                                         // 000000006478: BFA2006F
+
+000000000000647c <L23>:
 	s_mov_b32 s33, s98                                         // 00000000647C: BEA10062
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        // 000000006480: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 00000000648C: 8018FF3A 00000300
@@ -4094,7 +4142,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 000000006500: 98278027
 	s_barrier_signal -1                                        // 000000006504: BE804EC1
 	s_barrier_wait 0xffff                                      // 000000006508: BF94FFFF
-	s_branch 1248                                              // 00000000650C: BFA004E0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5f90>
+	s_branch L34                                               // 00000000650C: BFA004E0
+
+0000000000006510 <L24>:
 	s_mov_b32 s33, s95                                         // 000000006510: BEA1005F
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        // 000000006514: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 000000006520: 8018FF3A 00000300
@@ -4125,7 +4175,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 000000006594: 98278027
 	s_barrier_signal -1                                        // 000000006598: BE804EC1
 	s_barrier_wait 0xffff                                      // 00000000659C: BF94FFFF
-	s_branch 1673                                              // 0000000065A0: BFA00689 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x66c8>
+	s_branch L35                                               // 0000000065A0: BFA00689
+
+00000000000065a4 <L25>:
 	s_mov_b32 s33, s96                                         // 0000000065A4: BEA10060
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        // 0000000065A8: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 0000000065B4: 8018FF3A 00000300
@@ -4156,7 +4208,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 000000006628: 98278027
 	s_barrier_signal -1                                        // 00000000662C: BE804EC1
 	s_barrier_wait 0xffff                                      // 000000006630: BF94FFFF
-	s_branch 2098                                              // 000000006634: BFA00832 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x6e00>
+	s_branch L36                                               // 000000006634: BFA00832
+
+0000000000006638 <L26>:
 	s_mov_b32 s33, s97                                         // 000000006638: BEA10061
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        // 00000000663C: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 000000006648: 8018FF3A 00000300
@@ -4187,17 +4241,21 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 0000000066BC: 98278027
 	s_barrier_signal -1                                        // 0000000066C0: BE804EC1
 	s_barrier_wait 0xffff                                      // 0000000066C4: BF94FFFF
-	s_branch 675                                               // 0000000066C8: BFA002A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+	s_branch L33                                               // 0000000066C8: BFA002A3
+
+00000000000066cc <L27>:
 	s_nop 0                                                    // 0000000066CC: BF800000
 	s_set_vgpr_msb 0                                           // 0000000066D0: BF860000
 	s_cmp_eq_u32 s92, 0                                        // 0000000066D4: BF06805C
-	s_cbranch_scc1 6                                           // 0000000066D8: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4df4>
+	s_cbranch_scc1 L28                                         // 0000000066D8: BFA20006
 	s_cmp_eq_u32 s92, 1                                        // 0000000066DC: BF06815C
-	s_cbranch_scc1 41                                          // 0000000066E0: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4e88>
+	s_cbranch_scc1 L29                                         // 0000000066E0: BFA20029
 	s_cmp_eq_u32 s92, 2                                        // 0000000066E4: BF06825C
-	s_cbranch_scc1 76                                          // 0000000066E8: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4f1c>
+	s_cbranch_scc1 L30                                         // 0000000066E8: BFA2004C
 	s_cmp_eq_u32 s92, 3                                        // 0000000066EC: BF06835C
-	s_cbranch_scc1 111                                         // 0000000066F0: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4fb0>
+	s_cbranch_scc1 L31                                         // 0000000066F0: BFA2006F
+
+00000000000066f4 <L28>:
 	s_mov_b32 s33, s98                                         // 0000000066F4: BEA10062
 	tensor_load_to_lds s[32:35], s[36:43]                      // 0000000066F8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 000000006704: 8018FF3A 00000300
@@ -4228,7 +4286,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 000000006778: 98278027
 	s_barrier_signal -1                                        // 00000000677C: BE804EC1
 	s_barrier_wait 0xffff                                      // 000000006780: BF94FFFF
-	s_branch 2951                                              // 000000006784: BFA00B87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7ca4>
+	s_branch L43                                               // 000000006784: BFA00B87
+
+0000000000006788 <L29>:
 	s_mov_b32 s33, s95                                         // 000000006788: BEA1005F
 	tensor_load_to_lds s[32:35], s[36:43]                      // 00000000678C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 000000006798: 8018FF3A 00000300
@@ -4259,7 +4319,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 00000000680C: 98278027
 	s_barrier_signal -1                                        // 000000006810: BE804EC1
 	s_barrier_wait 0xffff                                      // 000000006814: BF94FFFF
-	s_branch 3376                                              // 000000006818: BFA00D30 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x83dc>
+	s_branch L44                                               // 000000006818: BFA00D30
+
+000000000000681c <L30>:
 	s_mov_b32 s33, s96                                         // 00000000681C: BEA10060
 	tensor_load_to_lds s[32:35], s[36:43]                      // 000000006820: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 00000000682C: 8018FF3A 00000300
@@ -4290,7 +4352,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 0000000068A0: 98278027
 	s_barrier_signal -1                                        // 0000000068A4: BE804EC1
 	s_barrier_wait 0xffff                                      // 0000000068A8: BF94FFFF
-	s_branch 3801                                              // 0000000068AC: BFA00ED9 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x8b14>
+	s_branch L45                                               // 0000000068AC: BFA00ED9
+
+00000000000068b0 <L31>:
 	s_mov_b32 s33, s97                                         // 0000000068B0: BEA10061
 	tensor_load_to_lds s[32:35], s[36:43]                      // 0000000068B4: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               // 0000000068C0: 8018FF3A 00000300
@@ -4321,7 +4385,9 @@ Disassembly of section .text:
 	s_cselect_b32 s39, s39, 0                                  // 000000006934: 98278027
 	s_barrier_signal -1                                        // 000000006938: BE804EC1
 	s_barrier_wait 0xffff                                      // 00000000693C: BF94FFFF
-	s_branch 2378                                              // 000000006940: BFA0094A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+	s_branch L42                                               // 000000006940: BFA0094A
+
+0000000000006944 <L32>:
 	s_set_vgpr_msb 0xc000                                      // 000000006944: BF86C000
 	v_mov_b32_e32 v100, 0                                      // 000000006948: 7EC80280
 	v_mov_b32_e32 v101, 0                                      // 00000000694C: 7ECA0280
@@ -4839,6 +4905,8 @@ Disassembly of section .text:
 	v_mov_b32_e32 v226 /*v994*/, 0                             // 00000000714C: 7FC40280
 	v_mov_b32_e32 v227 /*v995*/, 0                             // 000000007150: 7FC60280
 	s_set_pc_i64 s[100:101]                                    // 000000007154: BE804864
+
+0000000000007158 <L33>:
 	s_nop 0                                                    // 000000007158: BF800000
 	s_set_vgpr_msb 0                                           // 00000000715C: BF860000
 	s_wait_dscnt 0x8                                           // 000000007160: BFC60008
@@ -5025,7 +5093,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55], v[56:63] /*v[312:319]*/, v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 00000000785C: CC352000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[196:211] /*v[964:979]*/, v[24:39], v[64:71] /*v[320:327]*/, v[196:211] /*v[964:979]*/, v97, v89 matrix_b_scale:MATRIX_SCALE_ROW1// 00000000786C: CC350000 0A02B361 CC8840C4 1F128118
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71], v[64:71] /*v[320:327]*/, v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 00000000787C: CC352000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 1391                                        // 00000000788C: BFA1056F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x754c>
+	s_cbranch_scc0 L38                                         // 00000000788C: BFA1056F
+
+0000000000007890 <L34>:
 	s_nop 0                                                    // 000000007890: BF800000
 	s_set_vgpr_msb 0                                           // 000000007894: BF860000
 	s_wait_dscnt 0x8                                           // 000000007898: BFC60008
@@ -5212,7 +5282,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55], v[56:63] /*v[312:319]*/, v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 000000007F94: CC352000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[196:211] /*v[964:979]*/, v[24:39], v[64:71] /*v[320:327]*/, v[196:211] /*v[964:979]*/, v97, v89 matrix_b_scale:MATRIX_SCALE_ROW1// 000000007FA4: CC350000 0A02B361 CC8840C4 1F128118
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71], v[64:71] /*v[320:327]*/, v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 000000007FB4: CC352000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 931                                         // 000000007FC4: BFA103A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7554>
+	s_cbranch_scc0 L39                                         // 000000007FC4: BFA103A3
+
+0000000000007fc8 <L35>:
 	s_nop 0                                                    // 000000007FC8: BF800000
 	s_set_vgpr_msb 0                                           // 000000007FCC: BF860000
 	s_wait_dscnt 0x8                                           // 000000007FD0: BFC60008
@@ -5399,7 +5471,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55], v[56:63] /*v[312:319]*/, v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 0000000086CC: CC352000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[196:211] /*v[964:979]*/, v[24:39], v[64:71] /*v[320:327]*/, v[196:211] /*v[964:979]*/, v97, v89 matrix_b_scale:MATRIX_SCALE_ROW1// 0000000086DC: CC350000 0A02B361 CC8840C4 1F128118
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71], v[64:71] /*v[320:327]*/, v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 0000000086EC: CC352000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 471                                         // 0000000086FC: BFA101D7 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x755c>
+	s_cbranch_scc0 L40                                         // 0000000086FC: BFA101D7
+
+0000000000008700 <L36>:
 	s_nop 0                                                    // 000000008700: BF800000
 	s_set_vgpr_msb 0                                           // 000000008704: BF860000
 	s_wait_dscnt 0x8                                           // 000000008708: BFC60008
@@ -5533,8 +5607,10 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[196:211] /*v[708:723]*/, v[24:39] /*v[792:807]*/, v[64:71] /*v[320:327]*/, v[196:211] /*v[708:723]*/, v93, v89 matrix_b_scale:MATRIX_SCALE_ROW1// 000000008C28: CC350000 0A02B35D CC8840C4 1F128118
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[724:739]*/, v[56:71] /*v[824:839]*/, v[64:71] /*v[320:327]*/, v[212:227] /*v[724:739]*/, v95, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 000000008C38: CC352000 0A02B35F CC8840D4 1F528138
 	s_cmp_eq_u32 s22, 0                                        // 000000008C48: BF068016
-	s_cbranch_scc0 1                                           // 000000008C4C: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7354>
+	s_cbranch_scc0 L37                                         // 000000008C4C: BFA10001
 	s_barrier_signal -3                                        // 000000008C50: BE804EC3
+
+0000000000008c54 <L37>:
 	s_set_vgpr_msb 0xa7f4                                      // 000000008C54: BF86A7F4
 	v_wmma_scale_f32_32x16x128_f4 v[100:115] /*v[868:883]*/, v[8:23], v[8:15] /*v[264:271]*/, v[100:115] /*v[868:883]*/, v96, v86// 000000008C58: CC350000 0202AD60 CC884064 1D921108
 	s_set_vgpr_msb 0xf434                                      // 000000008C68: BF86F434
@@ -5589,17 +5665,27 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55], v[56:63] /*v[312:319]*/, v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 000000008E10: CC352000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[196:211] /*v[964:979]*/, v[24:39], v[64:71] /*v[320:327]*/, v[196:211] /*v[964:979]*/, v97, v89 matrix_b_scale:MATRIX_SCALE_ROW1// 000000008E20: CC350000 0A02B361 CC8840C4 1F128118
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71], v[64:71] /*v[320:327]*/, v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse// 000000008E30: CC352000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 8                                           // 000000008E40: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7564>
+	s_cbranch_scc0 L41                                         // 000000008E40: BFA10008
 	s_barrier_wait 0xfffd                                      // 000000008E44: BF94FFFD
-	s_branch 63683                                             // 000000008E48: BFA0F8C3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+	s_branch L33                                               // 000000008E48: BFA0F8C3
+
+0000000000008e4c <L38>:
 	s_mov_b32 s92, 0                                           // 000000008E4C: BEDC0080
-	s_branch 1864                                              // 000000008E50: BFA00748 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 000000008E50: BFA00748
+
+0000000000008e54 <L39>:
 	s_mov_b32 s92, 1                                           // 000000008E54: BEDC0081
-	s_branch 1862                                              // 000000008E58: BFA00746 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 000000008E58: BFA00746
+
+0000000000008e5c <L40>:
 	s_mov_b32 s92, 2                                           // 000000008E5C: BEDC0082
-	s_branch 1860                                              // 000000008E60: BFA00744 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 000000008E60: BFA00744
+
+0000000000008e64 <L41>:
 	s_mov_b32 s92, 3                                           // 000000008E64: BEDC0083
-	s_branch 1858                                              // 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 000000008E68: BFA00742
+
+0000000000008e6c <L42>:
 	s_nop 0                                                    // 000000008E6C: BF800000
 	s_set_vgpr_msb 0                                           // 000000008E70: BF860000
 	s_wait_dscnt 0x8                                           // 000000008E74: BFC60008
@@ -5786,7 +5872,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55] /*v[552:567]*/, v[56:63], v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 000000009570: CC354000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[180:195] /*v[948:963]*/, v[56:71] /*v[568:583]*/, v[48:55], v[180:195] /*v[948:963]*/, v99, v89// 000000009580: CC350000 0202B363 CC8840B4 1ED26138
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71] /*v[568:583]*/, v[64:71], v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 000000009590: CC354000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 1388                                        // 0000000095A0: BFA1056C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9254>
+	s_cbranch_scc0 L46                                         // 0000000095A0: BFA1056C
+
+00000000000095a4 <L43>:
 	s_nop 0                                                    // 0000000095A4: BF800000
 	s_set_vgpr_msb 0                                           // 0000000095A8: BF860000
 	s_wait_dscnt 0x8                                           // 0000000095AC: BFC60008
@@ -5973,7 +6061,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55] /*v[552:567]*/, v[56:63], v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 000000009CA8: CC354000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[180:195] /*v[948:963]*/, v[56:71] /*v[568:583]*/, v[48:55], v[180:195] /*v[948:963]*/, v99, v89// 000000009CB8: CC350000 0202B363 CC8840B4 1ED26138
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71] /*v[568:583]*/, v[64:71], v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 000000009CC8: CC354000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 928                                         // 000000009CD8: BFA103A0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x925c>
+	s_cbranch_scc0 L47                                         // 000000009CD8: BFA103A0
+
+0000000000009cdc <L44>:
 	s_nop 0                                                    // 000000009CDC: BF800000
 	s_set_vgpr_msb 0                                           // 000000009CE0: BF860000
 	s_wait_dscnt 0x8                                           // 000000009CE4: BFC60008
@@ -6160,7 +6250,9 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55] /*v[552:567]*/, v[56:63], v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 00000000A3E0: CC354000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[180:195] /*v[948:963]*/, v[56:71] /*v[568:583]*/, v[48:55], v[180:195] /*v[948:963]*/, v99, v89// 00000000A3F0: CC350000 0202B363 CC8840B4 1ED26138
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71] /*v[568:583]*/, v[64:71], v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 00000000A400: CC354000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 468                                         // 00000000A410: BFA101D4 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9264>
+	s_cbranch_scc0 L48                                         // 00000000A410: BFA101D4
+
+000000000000a414 <L45>:
 	s_nop 0                                                    // 00000000A414: BF800000
 	s_set_vgpr_msb 0                                           // 00000000A418: BF860000
 	s_wait_dscnt 0x8                                           // 00000000A41C: BFC60008
@@ -6347,20 +6439,32 @@ Disassembly of section .text:
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[40:55] /*v[552:567]*/, v[56:63], v[212:227] /*v[980:995]*/, v98, v88 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 00000000AB18: CC354000 0A02B162 CC8840D4 1F527128
 	v_wmma_scale_f32_32x16x128_f4 v[180:195] /*v[948:963]*/, v[56:71] /*v[568:583]*/, v[48:55], v[180:195] /*v[948:963]*/, v99, v89// 00000000AB28: CC350000 0202B363 CC8840B4 1ED26138
 	v_wmma_scale_f32_32x16x128_f4 v[212:227] /*v[980:995]*/, v[56:71] /*v[568:583]*/, v[64:71], v[212:227] /*v[980:995]*/, v99, v89 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse// 00000000AB38: CC354000 0A02B363 CC8840D4 1F528138
-	s_cbranch_scc0 8                                           // 00000000AB48: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x926c>
+	s_cbranch_scc0 L49                                         // 00000000AB48: BFA10008
 	s_barrier_wait 0xfffd                                      // 00000000AB4C: BF94FFFD
-	s_branch 63686                                             // 00000000AB50: BFA0F8C6 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+	s_branch L42                                               // 00000000AB50: BFA0F8C6
+
+000000000000ab54 <L46>:
 	s_mov_b32 s92, 0                                           // 00000000AB54: BEDC0080
-	s_branch 6                                                 // 00000000AB58: BFA00006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 00000000AB58: BFA00006
+
+000000000000ab5c <L47>:
 	s_mov_b32 s92, 1                                           // 00000000AB5C: BEDC0081
-	s_branch 4                                                 // 00000000AB60: BFA00004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 00000000AB60: BFA00004
+
+000000000000ab64 <L48>:
 	s_mov_b32 s92, 2                                           // 00000000AB64: BEDC0082
-	s_branch 2                                                 // 00000000AB68: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 00000000AB68: BFA00002
+
+000000000000ab6c <L49>:
 	s_mov_b32 s92, 3                                           // 00000000AB6C: BEDC0083
-	s_branch 0                                                 // 00000000AB70: BFA00000 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+	s_branch L50                                               // 00000000AB70: BFA00000
+
+000000000000ab74 <L50>:
 	s_cmp_eq_u32 s92, 3                                        // 00000000AB74: BF06835C
-	s_cbranch_scc0 1                                           // 00000000AB78: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9280>
+	s_cbranch_scc0 L51                                         // 00000000AB78: BFA10001
 	s_barrier_wait 0xfffd                                      // 00000000AB7C: BF94FFFD
+
+000000000000ab80 <L51>:
 	s_set_vgpr_msb 0                                           // 00000000AB80: BF860000
 	s_wait_idle                                                // 00000000AB84: BF8A0000
 	s_add_co_u32 s26, s92, 3                                   // 00000000AB88: 801A835C
@@ -6442,7 +6546,7 @@ Disassembly of section .text:
 	v_add_nc_u32_e32 v91 /*v859*/, s93, v91 /*v859*/           // 00000000AD10: 4AB6B65D
 	s_set_vgpr_msb 0xcc00                                      // 00000000AD14: BF86CC00
 	s_cmp_eq_u32 s22, 0                                        // 00000000AD18: BF068016
-	s_cbranch_scc0 18                                          // 00000000AD1C: BFA10012 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9468>
+	s_cbranch_scc0 L52                                         // 00000000AD1C: BFA10012
 	s_set_vgpr_msb 0                                           // 00000000AD20: BF860000
 	s_mul_i32 s24, s55, 0x100                                  // 00000000AD24: 9618FF37 00000100
 	s_sub_co_u32 s24, s17, s24                                 // 00000000AD2C: 80981811
@@ -6455,6 +6559,8 @@ Disassembly of section .text:
 	v_mov_b32_e32 v5, 0                                        // 00000000AD54: 7E0A0280
 	global_prefetch_b8 v4, s[44:45]                            // 00000000AD58: EE17402C 00000000 00000004
 	s_set_vgpr_msb 0                                           // 00000000AD64: BF860000
+
+000000000000ad68 <L52>:
 	v_cvt_pk_bf16_f32 v100, v100, v101                         // 00000000AD68: D76D0064 0202CB64
 	v_cvt_pk_bf16_f32 v101, v102, v103                         // 00000000AD70: D76D0065 0202CF66
 	v_cvt_pk_bf16_f32 v102, v104, v105                         // 00000000AD78: D76D0066 0202D368
@@ -6832,7 +6938,7 @@ Disassembly of section .text:
 	s_sub_co_u32 s44, s44, s26                                 // 00000000B880: 80AC1A2C
 	s_sub_co_ci_u32 s45, s45, 0                                // 00000000B884: 82AD802D
 	s_cmp_eq_u32 s60, 1                                        // 00000000B888: BF06813C
-	s_cbranch_scc1 116                                         // 00000000B88C: BFA20074 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+	s_cbranch_scc1 L56                                         // 00000000B88C: BFA20074
 	s_set_vgpr_msb 0                                           // 00000000B890: BF860000
 	s_mov_b32 s54, s68                                         // 00000000B894: BEB60044
 	s_mov_b32 s55, s69                                         // 00000000B898: BEB70045
@@ -6874,12 +6980,12 @@ Disassembly of section .text:
 	s_add_co_u32 s28, s28, s24                                 // 00000000B948: 801C181C
 	s_cmp_lt_u32 s28, s29                                      // 00000000B94C: BF0A1D1C
 	s_cselect_b32 s60, 0, 1                                    // 00000000B950: 983C8180
-	s_cbranch_scc0 50                                          // 00000000B954: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa120>
+	s_cbranch_scc0 L54                                         // 00000000B954: BFA10032
 	s_mov_b32 s24, s61                                         // 00000000B958: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   // 00000000B95C: 80998118
 	s_and_b32 s26, s24, s25                                    // 00000000B960: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        // 00000000B964: BF06801A
-	s_cbranch_scc0 8                                           // 00000000B968: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa08c>
+	s_cbranch_scc0 L53                                         // 00000000B968: BFA10008
 	s_ctz_i32_b32 s26, s24                                     // 00000000B96C: BE9A0818
 	s_lshr_b32 s27, s28, s26                                   // 00000000B970: 851B1A1C
 	s_and_b32 s24, s28, s25                                    // 00000000B974: 8B18191C
@@ -6887,7 +6993,9 @@ Disassembly of section .text:
 	s_add_co_u32 s69, s25, s50                                 // 00000000B97C: 80453219
 	s_mul_i32 s25, s24, s51                                    // 00000000B980: 96193318
 	s_add_co_u32 s68, s25, s49                                 // 00000000B984: 80443119
-	s_branch 39                                                // 00000000B988: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+	s_branch L55                                               // 00000000B988: BFA00027
+
+000000000000b98c <L53>:
 	v_cvt_f32_u32_e32 v4, s24                                  // 00000000B98C: 7E080C18
 	s_sub_co_i32 s26, 0, s24                                   // 00000000B990: 819A1880
 	v_rcp_iflag_f32_e32 v4, v4                                 // 00000000B994: 7E085704
@@ -6919,9 +7027,13 @@ Disassembly of section .text:
 	s_add_co_u32 s69, s25, s50                                 // 00000000BA10: 80453219
 	s_mul_i32 s25, s24, s51                                    // 00000000BA14: 96193318
 	s_add_co_u32 s68, s25, s49                                 // 00000000BA18: 80443119
-	s_branch 2                                                 // 00000000BA1C: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+	s_branch L55                                               // 00000000BA1C: BFA00002
+
+000000000000ba20 <L54>:
 	s_mov_b32 s68, s54                                         // 00000000BA20: BEC40036
 	s_mov_b32 s69, s55                                         // 00000000BA24: BEC50037
+
+000000000000ba28 <L55>:
 	s_add_nc_u64 s[34:35], s[34:35], s[56:57]                  // 00000000BA28: A9A23822
 	s_add_nc_u64 s[34:35], s[34:35], s[56:57]                  // 00000000BA2C: A9A23822
 	s_mov_b32 s36, s64                                         // 00000000BA30: BEA40040
@@ -6929,13 +7041,15 @@ Disassembly of section .text:
 	s_mov_b32 s38, s66                                         // 00000000BA38: BEA60042
 	s_mov_b32 s39, s67                                         // 00000000BA3C: BEA70043
 	s_cmp_eq_u32 s22, 0                                        // 00000000BA40: BF068016
-	s_cbranch_scc1 58758                                       // 00000000BA44: BFA2E586 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3760>
+	s_cbranch_scc1 L12                                         // 00000000BA44: BFA2E586
 	s_cmp_eq_u32 s22, 1                                        // 00000000BA48: BF068116
-	s_cbranch_scc1 59071                                       // 00000000BA4C: BFA2E6BF <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c4c>
+	s_cbranch_scc1 L14                                         // 00000000BA4C: BFA2E6BF
 	s_cmp_eq_u32 s22, 2                                        // 00000000BA50: BF068216
-	s_cbranch_scc1 59392                                       // 00000000BA54: BFA2E800 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4158>
+	s_cbranch_scc1 L17                                         // 00000000BA54: BFA2E800
 	s_cmp_eq_u32 s22, 3                                        // 00000000BA58: BF068316
-	s_cbranch_scc1 59706                                       // 00000000BA5C: BFA2E93A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4648>
+	s_cbranch_scc1 L19                                         // 00000000BA5C: BFA2E93A
+
+000000000000ba60 <L56>:
 	s_wait_idle                                                // 00000000BA60: BF8A0000
 	s_endpgm                                                   // 00000000BA64: BFB00000
 	s_code_end                                                 // 00000000BA68: BF9F0000
