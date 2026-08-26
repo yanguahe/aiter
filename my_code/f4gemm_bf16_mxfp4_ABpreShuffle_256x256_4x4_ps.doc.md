@@ -848,87 +848,87 @@ entry: A/SA/B/SB-current 前半 40 DS 已发出  # 此处不声称 40 条全部 
 s_wait_dscnt 8                         # wait1；最老 32 条 ready，B b8..b15 可未完成
 
 SB-current 后半 # 4 ds_load_b32/wave
-    wmma0 (0_8)  # K0
+    wmma0 (0_0)  # K0
     ds_ld32_bs4..bs5 (1_0..1_1)  # current
-    wmma1 (0_8)  # K0
+    wmma1 (0_1)  # K0
     ds_ld32_bs6..bs7 (1_2..1_3)  # current
 
 B-current 后半 # 16 ds_load_b128/wave
-    wmma2..wmma3 (0_8; K1,K1)
+    wmma2..wmma3 (0_2..0_3; K1,K1)
     ds_ld128_b16..b21 (1_0..1_5)  # current
-    wmma4..wmma5 (0_8; K0,K0)
+    wmma4..wmma5 (0_4..0_5; K0,K0)
     ds_ld128_b22..b27 (1_6..1_11)  # current
-    wmma6..wmma7 (0_8; K1,K1)
+    wmma6..wmma7 (0_6..0_7; K1,K1)
     ds_ld128_b28..b31 (1_12..1_15)  # current
     s_wait_dscnt 20                  # wait2
-    wmma8..wmma15 (1_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    wmma8..wmma15 (1_0..1_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 SA-current 后半 # 4 ds_load_b32/wave
     s_wait_dscnt 8                   # wait3
-    wmma16 (2_8)  # K0
+    wmma16 (2_0)  # K0
     ds_ld32_as4..as5 (1_0..1_1)  # current
-    wmma17 (2_8)  # K0
+    wmma17 (2_1)  # K0
     ds_ld32_as6..as7 (1_2..1_3)  # current
 
 A-current 后半 # 16 ds_load_b128/wave
-    wmma18..wmma19 (2_8; K1,K1)
+    wmma18..wmma19 (2_2..2_3; K1,K1)
     ds_ld128_a16..a21 (1_0..1_5)  # current
-    wmma20..wmma21 (2_8; K0,K0)
+    wmma20..wmma21 (2_4..2_5; K0,K0)
     ds_ld128_a22..a27 (1_6..1_11)  # current
-    wmma22..wmma23 (2_8; K1,K1)
+    wmma22..wmma23 (2_6..2_7; K1,K1)
     ds_ld128_a28..a31 (1_12..1_15)  # current
     s_wait_dscnt 20                  # wait4
-    wmma24..wmma31 (3_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    wmma24..wmma31 (3_0..3_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 同步
     s_wait_dscnt 8                   # wait5
     s_wait_tensorcnt 2
     WG barrier signal
-    wmma32..wmma35 (4_4; K0,K0,K1,K1)
+    wmma32..wmma35 (4_0..4_3; K0,K0,K1,K1)
     WG barrier wait
 
 SA-next 前半 # 4 ds_load_b32/wave
-    wmma36 (5_4)  # K0
+    wmma36 (5_0)  # K0
     issue TDM A/SA slot0/body4        # 1 TDM/wave；本 wave 组共 2 条
-    wmma37 (5_4)  # K0
+    wmma37 (5_1)  # K0
     ds_ld32_as0..as1 (0_0..0_1)  # next
-    wmma38 (5_4)  # K1
+    wmma38 (5_2)  # K1
     ds_ld32_as2..as3 (0_2..0_3)  # next
 
 A-next 前半 # 16 ds_load_b128/wave
-    wmma39 (5_4)  # K1
+    wmma39 (5_3)  # K1
     ds_ld128_a0..a5 (0_0..0_5)  # next
     s_wait_dscnt 10                  # wait6；A-next 在 a5/a6 之间切分
-    wmma40..wmma41 (6_8; K0,K0)
+    wmma40..wmma41 (6_0..6_1; K0,K0)
     ds_ld128_a6..a11 (0_6..0_11)  # next
-    wmma42..wmma43 (6_8; K1,K1)
+    wmma42..wmma43 (6_2..6_3; K1,K1)
     ds_ld128_a12..a15 (0_12..0_15)  # next
-    wmma44..wmma47 (6_8; K0,K0,K1,K1)
+    wmma44..wmma47 (6_4..6_7; K0,K0,K1,K1)
 
 SB-next 前半 # 4 ds_load_b32/wave
-    wmma48 (7_8)  # K0
+    wmma48 (7_0)  # K0
     ds_ld32_bs0..bs1 (0_0..0_1)  # next
-    wmma49 (7_8)  # K0
+    wmma49 (7_1)  # K0
     ds_ld32_bs2..bs3 (0_2..0_3)  # next
 
 B-next 前半 # 16 ds_load_b128/wave
-    wmma50..wmma51 (7_8; K1,K1)
+    wmma50..wmma51 (7_2..7_3; K1,K1)
     ds_ld128_b0..b5 (0_0..0_5)  # next
-    wmma52..wmma53 (7_8; K0,K0)
+    wmma52..wmma53 (7_4..7_5; K0,K0)
     ds_ld128_b6..b11 (0_6..0_11)  # next
-    wmma54..wmma55 (7_8; K1,K1)
+    wmma54..wmma55 (7_6..7_7; K1,K1)
     ds_ld128_b12..b15 (0_12..0_15)  # next
 
 finish
-    wmma56 (8_8)  # K0
+    wmma56 (8_0)  # K0
     loop control SALU  # ISA L5008–L5011
-    wmma57 (8_8)  # K0
+    wmma57 (8_1)  # K0
     loop control SALU  # ISA L5013–L5016
-    wmma58 (8_8)  # K1
+    wmma58 (8_2)  # K1
     loop control SALU  # ISA L5018–L5021
-    wmma59 (8_8)  # K1
+    wmma59 (8_3)  # K1
     loop control compare  # ISA L5023
-    wmma60..wmma63 (8_8; K0,K0,K1,K1)
+    wmma60..wmma63 (8_4..8_7; K0,K0,K1,K1)
     loop control branch  # ISA L5028
                                         # steady 合计 80 DS/wave；本 wave 组 2 TDM
 phase advance: slot1/body1 的 next 前半成为 P1 current 前半
@@ -942,37 +942,37 @@ P1 / body1 current 后半                 # p1_wmmaN 为 P1-local 编号；ISA L
 s_wait_dscnt 8                         # P1 wait1；只保证 DScnt≤8
 
 SB-current 后半 # 4 ds_load_b32/wave
-    p1_wmma0 (0_8)  # K0
+    p1_wmma0 (0_0)  # K0
     ds_ld32_bs4..bs5 (1_0..1_1)  # current；slot1/body1
-    p1_wmma1 (0_8)  # K0
+    p1_wmma1 (0_1)  # K0
     ds_ld32_bs6..bs7 (1_2..1_3)  # current；slot1/body1
 
 B-current 后半 # 16 ds_load_b128/wave
-    p1_wmma2..p1_wmma3 (0_8; K1,K1)
+    p1_wmma2..p1_wmma3 (0_2..0_3; K1,K1)
     ds_ld128_b16..b21 (1_0..1_5)  # current；slot1/body1
-    p1_wmma4..p1_wmma5 (0_8; K0,K0)
+    p1_wmma4..p1_wmma5 (0_4..0_5; K0,K0)
     ds_ld128_b22..b27 (1_6..1_11)  # current；slot1/body1
-    p1_wmma6..p1_wmma7 (0_8; K1,K1)
+    p1_wmma6..p1_wmma7 (0_6..0_7; K1,K1)
     ds_ld128_b28..b31 (1_12..1_15)  # current；slot1/body1
     s_wait_dscnt 20                  # P1 wait2
-    p1_wmma8..p1_wmma15 (1_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    p1_wmma8..p1_wmma15 (1_0..1_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 SA-current 后半 # 4 ds_load_b32/wave
     s_wait_dscnt 8                   # P1 wait3
-    p1_wmma16 (2_8)  # K0
+    p1_wmma16 (2_0)  # K0
     ds_ld32_as4..as5 (1_0..1_1)  # current；slot1/body1
-    p1_wmma17 (2_8)  # K0
+    p1_wmma17 (2_1)  # K0
     ds_ld32_as6..as7 (1_2..1_3)  # current；slot1/body1
 
 A-current 后半 # 16 ds_load_b128/wave
-    p1_wmma18..p1_wmma19 (2_8; K1,K1)
+    p1_wmma18..p1_wmma19 (2_2..2_3; K1,K1)
     ds_ld128_a16..a21 (1_0..1_5)  # current；slot1/body1
-    p1_wmma20..p1_wmma21 (2_8; K0,K0)
+    p1_wmma20..p1_wmma21 (2_4..2_5; K0,K0)
     ds_ld128_a22..a27 (1_6..1_11)  # current；slot1/body1
-    p1_wmma22..p1_wmma23 (2_8; K1,K1)
+    p1_wmma22..p1_wmma23 (2_6..2_7; K1,K1)
     ds_ld128_a28..a31 (1_12..1_15)  # current；slot1/body1
     s_wait_dscnt 20                  # P1 wait4
-    p1_wmma24..p1_wmma31 (3_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    p1_wmma24..p1_wmma31 (3_0..3_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 P1 current 后半完成                    # 下一条 L5113 进入 P1 同步段
 ```
@@ -1014,100 +1014,100 @@ s_wait_dscnt 8                         # wait1；仅保证 DScnt≤8，即至少
                                         # Prologue 顺序 SB4、SA4、B16、A16；最新 A a8..a15 可未完成
 
 SA-current 后半 # 4 ds_load_b32/wave
-    wmma0 (0_8)  # K0
+    wmma0 (0_0)  # K0
     ds_ld32_as4..as5 (1_0..1_1)  # current
-    wmma1 (0_8)  # K0
+    wmma1 (0_1)  # K0
     ds_ld32_as6..as7 (1_2..1_3)  # current
 
 A-current 后半 # 16 ds_load_b128/wave
-    wmma2 (0_8)  # K1
+    wmma2 (0_2)  # K1
     ds_ld128_a16..a21 (1_0..1_5)  # current
-    wmma3..wmma4 (0_8; K1,K0)
+    wmma3..wmma4 (0_3..0_4; K1,K0)
     ds_ld128_a22..a27 (1_6..1_11)  # current
-    wmma5..wmma6 (0_8; K0,K1)
+    wmma5..wmma6 (0_5..0_6; K0,K1)
     ds_ld128_a28..a31 (1_12..1_15)  # current
-    wmma7 (0_8)  # K1
+    wmma7 (0_7)  # K1
     s_wait_dscnt 20                  # wait2；仅保证 DScnt≤20
-    wmma8..wmma15 (1_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    wmma8..wmma15 (1_0..1_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 SB-current 后半 # 4 ds_load_b32/wave
     s_wait_dscnt 8                   # wait3；仅保证 DScnt≤8
-    wmma16 (2_8)  # K0
+    wmma16 (2_0)  # K0
     ds_ld32_bs4..bs5 (1_0..1_1)  # current
-    wmma17 (2_8)  # K0
+    wmma17 (2_1)  # K0
     ds_ld32_bs6..bs7 (1_2..1_3)  # current
 
 B-current 后半 # 16 ds_load_b128/wave
-    wmma18 (2_8)  # K1
+    wmma18 (2_2)  # K1
     ds_ld128_b16..b21 (1_0..1_5)  # current；ID 按 ISA 动态 occurrence
-    wmma19..wmma20 (2_8; K1,K0)
+    wmma19..wmma20 (2_3..2_4; K1,K0)
     ds_ld128_b22..b27 (1_6..1_11)  # current
-    wmma21..wmma22 (2_8; K0,K1)
+    wmma21..wmma22 (2_5..2_6; K0,K1)
     ds_ld128_b28..b31 (1_12..1_15)  # current
-    wmma23 (2_8)  # K1
+    wmma23 (2_7)  # K1
     s_wait_dscnt 20                  # wait4；仅保证 DScnt≤20
-    wmma24..wmma31 (3_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    wmma24..wmma31 (3_0..3_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 同步
     s_wait_dscnt 8                   # wait5；仅保证 DScnt≤8
     s_wait_tensorcnt 2               # 仅保证 TENSORcnt≤2，不是 tensor 排空
     s_barrier_signal -1              # signal 只表示本 wave 到达
-    wmma32..wmma35 (4_4; K0,K0,K1,K1)
+    wmma32..wmma35 (4_0..4_3; K0,K0,K1,K1)
     s_barrier_wait 0xffff            # 等全部 workgroup waves signal
 
 SB-next 前半 # 4 ds_load_b32/wave
-    wmma36 (5_4)  # K0
+    wmma36 (5_0)  # K0
     issue TDM B/SB slot0/body4        # 1 TDM/wave；本 wave 组共 2 条；ISA L5698
-    wmma37 (5_4)  # K0
+    wmma37 (5_1)  # K0
     ds_ld32_bs0..bs1 (0_0..0_1)  # next
-    wmma38 (5_4)  # K1
+    wmma38 (5_2)  # K1
     ds_ld32_bs2..bs3 (0_2..0_3)  # next
-    wmma39 (5_4)  # K1
+    wmma39 (5_3)  # K1
 
 B-next 前半 # 16 ds_load_b128/wave
     s_wait_dscnt 4                   # wait6；仅保证 DScnt≤4；ISA L5710
-    wmma40 (6_8)  # K0
+    wmma40 (6_0)  # K0
     ds_ld128_b0..b5 (0_0..0_5)  # next；ID 按 ISA 动态 occurrence
-    wmma41..wmma42 (6_8; K0,K1)
+    wmma41..wmma42 (6_1..6_2; K0,K1)
     ds_ld128_b6..b11 (0_6..0_11)  # next
-    wmma43..wmma44 (6_8; K1,K0)
+    wmma43..wmma44 (6_3..6_4; K1,K0)
     ds_ld128_b12..b15 (0_12..0_15)  # next
-    wmma45..wmma47 (6_8; K0,K1,K1)
+    wmma45..wmma47 (6_5..6_7; K0,K1,K1)
 
 SA-next 前半 # 4 ds_load_b32/wave
-    wmma48 (7_8)  # K0
+    wmma48 (7_0)  # K0
     ds_ld32_as0..as1 (0_0..0_1)  # next
-    wmma49 (7_8)  # K0
+    wmma49 (7_1)  # K0
     ds_ld32_as2..as3 (0_2..0_3)  # next
 
 A-next 前半 # 16 ds_load_b128/wave
-    wmma50 (7_8)  # K1
+    wmma50 (7_2)  # K1
     ds_ld128_a0..a5 (0_0..0_5)  # next
-    wmma51..wmma52 (7_8; K1,K0)
+    wmma51..wmma52 (7_3..7_4; K1,K0)
     ds_ld128_a6..a11 (0_6..0_11)  # next
-    wmma53..wmma54 (7_8; K0,K1)
+    wmma53..wmma54 (7_5..7_6; K0,K1)
     ds_ld128_a12..a15 (0_12..0_15)  # next
-    wmma55 (7_8)  # K1
+    wmma55 (7_7)  # K1
 
 finish
     s_add_co_u32 s24, s58, 0x500  # ISA L5768
     s_cmp_lt_u32 s24, s70  # ISA L5769
     s_cselect_b64 s[34:35], s[34:35], s[62:63]  # ISA L5770
     s_cselect_b32 s36, s36, s64  # ISA L5771
-    wmma56 (8_8)  # K0；ISA L5772
+    wmma56 (8_0)  # K0；ISA L5772
     s_cselect_b32 s37, s37, s65  # ISA L5773
     s_cselect_b32 s38, s38, s66  # ISA L5774
     s_cselect_b32 s70, s70, s71  # ISA L5775
     s_cselect_b64 s[26:27], s[56:57], 0  # ISA L5776
-    wmma57 (8_8)  # K0；ISA L5777
+    wmma57 (8_1)  # K0；ISA L5777
     s_add_nc_u64 s[34:35], s[34:35], s[26:27]  # ISA L5778
     s_cmp_lt_u32 s24, s71  # ISA L5779
     s_cselect_b32 s39, s39, 0  # ISA L5780
     s_addk_co_i32 s58, 0x100  # ISA L5781
-    wmma58 (8_8)  # K1；ISA L5782
+    wmma58 (8_2)  # K1；ISA L5782
     s_cmp_lt_i32 s58, s59  # ISA L5783
-    wmma59 (8_8)  # K1；ISA L5784
-    wmma60..wmma63 (8_8; K0,K0,K1,K1)
+    wmma59 (8_3)  # K1；ISA L5784
+    wmma60..wmma63 (8_4..8_7; K0,K0,K1,K1)
     s_cbranch_scc0 1388  # ISA L5789；本 shape P0 不跳转
                                         # steady 合计 80 DS/wave；本 wave 组 2 TDM
 phase advance: slot1/body1 的 next 前半成为 P1 current 前半
@@ -1123,39 +1123,39 @@ s_wait_dscnt 8                         # P1 wait1；仅保证 DScnt≤8，即至
                                         # P0 next 顺序下，最新 A a8..a15 可未完成
 
 SA-current 后半 # 4 ds_load_b32/wave
-    p1_wmma0 (0_8)  # K0
+    p1_wmma0 (0_0)  # K0
     ds_ld32_as4..as5 (1_0..1_1)  # current；slot1/body1
-    p1_wmma1 (0_8)  # K0
+    p1_wmma1 (0_1)  # K0
     ds_ld32_as6..as7 (1_2..1_3)  # current；slot1/body1
 
 A-current 后半 # 16 ds_load_b128/wave
-    p1_wmma2 (0_8)  # K1
+    p1_wmma2 (0_2)  # K1
     ds_ld128_a16..a21 (1_0..1_5)  # current；slot1/body1
-    p1_wmma3..p1_wmma4 (0_8; K1,K0)
+    p1_wmma3..p1_wmma4 (0_3..0_4; K1,K0)
     ds_ld128_a22..a27 (1_6..1_11)  # current；slot1/body1
-    p1_wmma5..p1_wmma6 (0_8; K0,K1)
+    p1_wmma5..p1_wmma6 (0_5..0_6; K0,K1)
     ds_ld128_a28..a31 (1_12..1_15)  # current；slot1/body1
-    p1_wmma7 (0_8)  # K1
+    p1_wmma7 (0_7)  # K1
     s_wait_dscnt 20                  # P1 wait2；仅保证 DScnt≤20
-    p1_wmma8..p1_wmma15 (1_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    p1_wmma8..p1_wmma15 (1_0..1_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 SB-current 后半 # 4 ds_load_b32/wave
     s_wait_dscnt 8                   # P1 wait3；仅保证 DScnt≤8
-    p1_wmma16 (2_8)  # K0
+    p1_wmma16 (2_0)  # K0
     ds_ld32_bs4..bs5 (1_0..1_1)  # current；slot1/body1
-    p1_wmma17 (2_8)  # K0
+    p1_wmma17 (2_1)  # K0
     ds_ld32_bs6..bs7 (1_2..1_3)  # current；slot1/body1
 
 B-current 后半 # 16 ds_load_b128/wave
-    p1_wmma18 (2_8)  # K1
+    p1_wmma18 (2_2)  # K1
     ds_ld128_b16..b21 (1_0..1_5)  # current；slot1/body1；动态 occurrence
-    p1_wmma19..p1_wmma20 (2_8; K1,K0)
+    p1_wmma19..p1_wmma20 (2_3..2_4; K1,K0)
     ds_ld128_b22..b27 (1_6..1_11)  # current；slot1/body1
-    p1_wmma21..p1_wmma22 (2_8; K0,K1)
+    p1_wmma21..p1_wmma22 (2_5..2_6; K0,K1)
     ds_ld128_b28..b31 (1_12..1_15)  # current；slot1/body1
-    p1_wmma23 (2_8)  # K1
+    p1_wmma23 (2_7)  # K1
     s_wait_dscnt 20                  # P1 wait4；仅保证 DScnt≤20
-    p1_wmma24..p1_wmma31 (3_8; K0,K0,K1,K1,K0,K0,K1,K1)
+    p1_wmma24..p1_wmma31 (3_0..3_7; K0,K0,K1,K1,K0,K0,K1,K1)
 
 P1 current 后半完成                    # 下一条 L5874 进入 P1 同步段
 
@@ -1163,10 +1163,10 @@ slot1/body5 回填锚点
     s_wait_dscnt 8                   # ISA L5874
     s_wait_tensorcnt 2               # ISA L5875；仅保证 TENSORcnt≤2
     s_barrier_signal -1              # ISA L5876
-    p1_wmma32..p1_wmma35 (4_4; K0,K0,K1,K1)  # ISA L5878–L5881
+    p1_wmma32..p1_wmma35 (4_0..4_3; K0,K0,K1,K1)  # ISA L5878–L5881
     s_mov_b32 s33, s96               # ISA L5882；选择 slot1 LDS base
     s_barrier_wait 0xffff            # ISA L5883
-    p1_wmma36 (5_4)  # K0；ISA L5884
+    p1_wmma36 (5_0)  # K0；ISA L5884
     issue TDM B/SB slot1/body5        # 1 TDM/wave；本 wave 组共 2 条；ISA L5885
 ```
 
@@ -1176,7 +1176,7 @@ L5789 对本 shape 不跳转并落入 P1 L5792；slot1/body1 的 next 前半转�
 
 ### 5.1 wave0/2：B-current → A-current → A-next → B-next
 
-以下伪流保持 P0 ISA L4844–L5028 的动态顺序：`wmmaID (g_n)` 中 `g/n` 表示 0-based pipeline 组及该组 WMMA 数，DS 的 `(h_i)` 表示前/后半组及组内动态 occurrence，`# current/# next` 标明 body 归属；所有 ID 均按动态出现顺序，DS/TENSOR wait 阈值仅是计数上界；本 shape 的 L5028 不跳转并落入 P1。
+以下伪流保持 P0 ISA L4844–L5028 的动态顺序：`wmmaID (g_n)` 中 `g` 是 0-based pipeline group ID，`n` 是该 group 内 0-based 动态 occurrence ID；DS 的 `(h_i)` 表示前/后半组及组内动态 occurrence，`# current/# next` 标明 body 归属；所有 ID 均按动态出现顺序，DS/TENSOR wait 阈值仅是计数上界；本 shape 的 L5028 不跳转并落入 P1。
 
 #### Prologue：首次进入 P0 前
 
@@ -1338,30 +1338,30 @@ s_set_vgpr_msb 0  # ISA L4843 / 0x715C
 ```text
 s_wait_dscnt 0x8  # ISA L4844 / 0x7160
 s_set_vgpr_msb 11  # ISA L4845 / 0x7164
-wmma0 (0_8)  # K0; ISA L4846 / 0x7168
+wmma0 (0_0)  # K0; ISA L4846 / 0x7168
 ds_ld32_bs4 (1_0)  # current; ISA L4847 / 0x7178; ds_load_b32 v96, v81 /*v849*/ offset:512
 ds_ld32_bs5 (1_1)  # current; ISA L4848 / 0x7180; ds_load_b32 v97, v81 /*v849*/ offset:640
-wmma1 (0_8)  # K0; ISA L4849 / 0x7188
+wmma1 (0_1)  # K0; ISA L4849 / 0x7188
 ds_ld32_bs6 (1_2)  # current; ISA L4850 / 0x7198; ds_load_b32 v98, v81 /*v849*/ offset:768
 ds_ld32_bs7 (1_3)  # current; ISA L4851 / 0x71A0; ds_load_b32 v99, v81 /*v849*/ offset:896
-wmma2 (0_8)  # K1; ISA L4852 / 0x71A8
-wmma3 (0_8)  # K1; ISA L4853 / 0x71B8
+wmma2 (0_2)  # K1; ISA L4852 / 0x71A8
+wmma3 (0_3)  # K1; ISA L4853 / 0x71B8
 ds_ld128_b16 (1_0)  # current; ISA L4854 / 0x71C8; ds_load_b128 v[8:11], v76 /*v844*/ offset:8192
 ds_ld128_b17 (1_1)  # current; ISA L4855 / 0x71D0; ds_load_b128 v[12:15], v76 /*v844*/ offset:8704
 ds_ld128_b18 (1_2)  # current; ISA L4856 / 0x71D8; ds_load_b128 v[16:19], v76 /*v844*/ offset:10240
 ds_ld128_b19 (1_3)  # current; ISA L4857 / 0x71E0; ds_load_b128 v[20:23], v76 /*v844*/ offset:10752
 ds_ld128_b20 (1_4)  # current; ISA L4858 / 0x71E8; ds_load_b128 v[24:27], v76 /*v844*/ offset:9216
 ds_ld128_b21 (1_5)  # current; ISA L4859 / 0x71F0; ds_load_b128 v[28:31], v76 /*v844*/ offset:9728
-wmma4 (0_8)  # K0; ISA L4860 / 0x71F8
-wmma5 (0_8)  # K0; ISA L4861 / 0x7208
+wmma4 (0_4)  # K0; ISA L4860 / 0x71F8
+wmma5 (0_5)  # K0; ISA L4861 / 0x7208
 ds_ld128_b22 (1_6)  # current; ISA L4862 / 0x7218; ds_load_b128 v[32:35], v76 /*v844*/ offset:11264
 ds_ld128_b23 (1_7)  # current; ISA L4863 / 0x7220; ds_load_b128 v[36:39], v76 /*v844*/ offset:11776
 ds_ld128_b24 (1_8)  # current; ISA L4864 / 0x7228; ds_load_b128 v[40:43], v76 /*v844*/ offset:12288
 ds_ld128_b25 (1_9)  # current; ISA L4865 / 0x7230; ds_load_b128 v[44:47], v76 /*v844*/ offset:12800
 ds_ld128_b26 (1_10)  # current; ISA L4866 / 0x7238; ds_load_b128 v[48:51], v76 /*v844*/ offset:14336
 ds_ld128_b27 (1_11)  # current; ISA L4867 / 0x7240; ds_load_b128 v[52:55], v76 /*v844*/ offset:14848
-wmma6 (0_8)  # K1; ISA L4868 / 0x7248
-wmma7 (0_8)  # K1; ISA L4869 / 0x7258
+wmma6 (0_6)  # K1; ISA L4868 / 0x7248
+wmma7 (0_7)  # K1; ISA L4869 / 0x7258
 ds_ld128_b28 (1_12)  # current; ISA L4870 / 0x7268; ds_load_b128 v[56:59], v76 /*v844*/ offset:13312
 ds_ld128_b29 (1_13)  # current; ISA L4871 / 0x7270; ds_load_b128 v[60:63], v76 /*v844*/ offset:13824
 ds_ld128_b30 (1_14)  # current; ISA L4872 / 0x7278; ds_load_b128 v[64:67], v76 /*v844*/ offset:15360
@@ -1374,14 +1374,14 @@ ds_ld128_b31 (1_15)  # current; ISA L4873 / 0x7280; ds_load_b128 v[68:71], v76 /
 
 ```text
 s_wait_dscnt 0x14  # ISA L4874 / 0x7288
-wmma8 (1_8)  # K0; ISA L4875 / 0x728C
-wmma9 (1_8)  # K0; ISA L4876 / 0x729C
-wmma10 (1_8)  # K1; ISA L4877 / 0x72AC
-wmma11 (1_8)  # K1; ISA L4878 / 0x72BC
-wmma12 (1_8)  # K0; ISA L4879 / 0x72CC
-wmma13 (1_8)  # K0; ISA L4880 / 0x72DC
-wmma14 (1_8)  # K1; ISA L4881 / 0x72EC
-wmma15 (1_8)  # K1; ISA L4882 / 0x72FC
+wmma8 (1_0)  # K0; ISA L4875 / 0x728C
+wmma9 (1_1)  # K0; ISA L4876 / 0x729C
+wmma10 (1_2)  # K1; ISA L4877 / 0x72AC
+wmma11 (1_3)  # K1; ISA L4878 / 0x72BC
+wmma12 (1_4)  # K0; ISA L4879 / 0x72CC
+wmma13 (1_5)  # K0; ISA L4880 / 0x72DC
+wmma14 (1_6)  # K1; ISA L4881 / 0x72EC
+wmma15 (1_7)  # K1; ISA L4882 / 0x72FC
 ```
 
 `# count: source=9; WMMA=8; DS=0 (b128=0, b32=0); DS-wait=1`
@@ -1391,34 +1391,34 @@ wmma15 (1_8)  # K1; ISA L4882 / 0x72FC
 ```text
 s_wait_dscnt 0x8  # ISA L4883 / 0x730C
 s_set_vgpr_msb 0xb58  # ISA L4884 / 0x7310
-wmma16 (2_8)  # K0; ISA L4885 / 0x7314
+wmma16 (2_0)  # K0; ISA L4885 / 0x7314
 s_set_vgpr_msb 0x5818  # ISA L4886 / 0x7324
 ds_ld32_as4 (1_0)  # current; ISA L4887 / 0x7328; ds_load_b32 v86, v80 offset:512
 ds_ld32_as5 (1_1)  # current; ISA L4888 / 0x7330; ds_load_b32 v87, v80 offset:640
 s_set_vgpr_msb 0x1858  # ISA L4889 / 0x7338
-wmma17 (2_8)  # K0; ISA L4890 / 0x733C
+wmma17 (2_1)  # K0; ISA L4890 / 0x733C
 s_set_vgpr_msb 0x5818  # ISA L4891 / 0x734C
 ds_ld32_as6 (1_2)  # current; ISA L4892 / 0x7350; ds_load_b32 v88, v80 offset:768
 ds_ld32_as7 (1_3)  # current; ISA L4893 / 0x7358; ds_load_b32 v89, v80 offset:896
 s_set_vgpr_msb 0x1858  # ISA L4894 / 0x7360
-wmma18 (2_8)  # K1; ISA L4895 / 0x7364
-wmma19 (2_8)  # K1; ISA L4896 / 0x7374
+wmma18 (2_2)  # K1; ISA L4895 / 0x7364
+wmma19 (2_3)  # K1; ISA L4896 / 0x7374
 ds_ld128_a16 (1_0)  # current; ISA L4897 / 0x7384; ds_load_b128 v[8:11] /*v[264:267]*/, v72 offset:8192
 ds_ld128_a17 (1_1)  # current; ISA L4898 / 0x738C; ds_load_b128 v[12:15] /*v[268:271]*/, v72 offset:8704
 ds_ld128_a18 (1_2)  # current; ISA L4899 / 0x7394; ds_load_b128 v[16:19] /*v[272:275]*/, v72 offset:9216
 ds_ld128_a19 (1_3)  # current; ISA L4900 / 0x739C; ds_load_b128 v[20:23] /*v[276:279]*/, v72 offset:9728
 ds_ld128_a20 (1_4)  # current; ISA L4901 / 0x73A4; ds_load_b128 v[24:27] /*v[280:283]*/, v72 offset:10240
 ds_ld128_a21 (1_5)  # current; ISA L4902 / 0x73AC; ds_load_b128 v[28:31] /*v[284:287]*/, v72 offset:10752
-wmma20 (2_8)  # K0; ISA L4903 / 0x73B4
-wmma21 (2_8)  # K0; ISA L4904 / 0x73C4
+wmma20 (2_4)  # K0; ISA L4903 / 0x73B4
+wmma21 (2_5)  # K0; ISA L4904 / 0x73C4
 ds_ld128_a22 (1_6)  # current; ISA L4905 / 0x73D4; ds_load_b128 v[32:35] /*v[288:291]*/, v72 offset:11264
 ds_ld128_a23 (1_7)  # current; ISA L4906 / 0x73DC; ds_load_b128 v[36:39] /*v[292:295]*/, v72 offset:11776
 ds_ld128_a24 (1_8)  # current; ISA L4907 / 0x73E4; ds_load_b128 v[40:43] /*v[296:299]*/, v72 offset:12288
 ds_ld128_a25 (1_9)  # current; ISA L4908 / 0x73EC; ds_load_b128 v[44:47] /*v[300:303]*/, v72 offset:12800
 ds_ld128_a26 (1_10)  # current; ISA L4909 / 0x73F4; ds_load_b128 v[48:51] /*v[304:307]*/, v72 offset:13312
 ds_ld128_a27 (1_11)  # current; ISA L4910 / 0x73FC; ds_load_b128 v[52:55] /*v[308:311]*/, v72 offset:13824
-wmma22 (2_8)  # K1; ISA L4911 / 0x7404
-wmma23 (2_8)  # K1; ISA L4912 / 0x7414
+wmma22 (2_6)  # K1; ISA L4911 / 0x7404
+wmma23 (2_7)  # K1; ISA L4912 / 0x7414
 ds_ld128_a28 (1_12)  # current; ISA L4913 / 0x7424; ds_load_b128 v[56:59] /*v[312:315]*/, v72 offset:14336
 ds_ld128_a29 (1_13)  # current; ISA L4914 / 0x742C; ds_load_b128 v[60:63] /*v[316:319]*/, v72 offset:14848
 ds_ld128_a30 (1_14)  # current; ISA L4915 / 0x7434; ds_load_b128 v[64:67] /*v[320:323]*/, v72 offset:15360
@@ -1431,14 +1431,14 @@ ds_ld128_a31 (1_15)  # current; ISA L4916 / 0x743C; ds_load_b128 v[68:71] /*v[32
 
 ```text
 s_wait_dscnt 0x14  # ISA L4917 / 0x7444
-wmma24 (3_8)  # K0; ISA L4918 / 0x7448
-wmma25 (3_8)  # K0; ISA L4919 / 0x7458
-wmma26 (3_8)  # K1; ISA L4920 / 0x7468
-wmma27 (3_8)  # K1; ISA L4921 / 0x7478
-wmma28 (3_8)  # K0; ISA L4922 / 0x7488
-wmma29 (3_8)  # K0; ISA L4923 / 0x7498
-wmma30 (3_8)  # K1; ISA L4924 / 0x74A8
-wmma31 (3_8)  # K1; ISA L4925 / 0x74B8
+wmma24 (3_0)  # K0; ISA L4918 / 0x7448
+wmma25 (3_1)  # K0; ISA L4919 / 0x7458
+wmma26 (3_2)  # K1; ISA L4920 / 0x7468
+wmma27 (3_3)  # K1; ISA L4921 / 0x7478
+wmma28 (3_4)  # K0; ISA L4922 / 0x7488
+wmma29 (3_5)  # K0; ISA L4923 / 0x7498
+wmma30 (3_6)  # K1; ISA L4924 / 0x74A8
+wmma31 (3_7)  # K1; ISA L4925 / 0x74B8
 ```
 
 `# count: source=9; WMMA=8; DS=0 (b128=0, b32=0); DS-wait=1`
@@ -1450,10 +1450,10 @@ s_wait_dscnt 0x8  # ISA L4926 / 0x74C8
 s_wait_tensorcnt 0x2  # ISA L4927 / 0x74CC
 s_barrier_signal -1  # ISA L4928 / 0x74D0
 s_set_vgpr_msb 0x58a7  # ISA L4929 / 0x74D4
-wmma32 (4_4)  # K0; ISA L4930 / 0x74D8
-wmma33 (4_4)  # K0; ISA L4931 / 0x74E8
-wmma34 (4_4)  # K1; ISA L4932 / 0x74F8
-wmma35 (4_4)  # K1; ISA L4933 / 0x7508
+wmma32 (4_0)  # K0; ISA L4930 / 0x74D8
+wmma33 (4_1)  # K0; ISA L4931 / 0x74E8
+wmma34 (4_2)  # K1; ISA L4932 / 0x74F8
+wmma35 (4_3)  # K1; ISA L4933 / 0x7508
 s_mov_b32 s33, s95  # ISA L4934 / 0x7518
 s_barrier_wait 0xffff  # ISA L4935 / 0x751C
 ```
@@ -1463,19 +1463,19 @@ s_barrier_wait 0xffff  # ISA L4935 / 0x751C
 6. **4 条 WMMA、1 TDM 与 A-next 起始**（ISA L4936–L4954 / `0x7520–0x75C4`）
 
 ```text
-wmma36 (5_4)  # K0; ISA L4936 / 0x7520
+wmma36 (5_0)  # K0; ISA L4936 / 0x7520
 tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT  # ISA L4937 / 0x7530
-wmma37 (5_4)  # K0; ISA L4938 / 0x753C
+wmma37 (5_1)  # K0; ISA L4938 / 0x753C
 s_set_vgpr_msb 0xa727  # ISA L4939 / 0x754C
 ds_ld32_as0 (0_0)  # next; ISA L4940 / 0x7550; ds_load_b32 v82, v80 /*v848*/ offset:2048
 ds_ld32_as1 (0_1)  # next; ISA L4941 / 0x7558; ds_load_b32 v83, v80 /*v848*/ offset:2176
 s_set_vgpr_msb 0x27a7  # ISA L4942 / 0x7560
-wmma38 (5_4)  # K1; ISA L4943 / 0x7564
+wmma38 (5_2)  # K1; ISA L4943 / 0x7564
 s_set_vgpr_msb 0xa727  # ISA L4944 / 0x7574
 ds_ld32_as2 (0_2)  # next; ISA L4945 / 0x7578; ds_load_b32 v84, v80 /*v848*/ offset:2304
 ds_ld32_as3 (0_3)  # next; ISA L4946 / 0x7580; ds_load_b32 v85, v80 /*v848*/ offset:2432
 s_set_vgpr_msb 0x27a7  # ISA L4947 / 0x7588
-wmma39 (5_4)  # K1; ISA L4948 / 0x758C
+wmma39 (5_3)  # K1; ISA L4948 / 0x758C
 ds_ld128_a0 (0_0)  # next; ISA L4949 / 0x759C; ds_load_b128 v[8:11] /*v[520:523]*/, v73 /*v841*/
 ds_ld128_a1 (0_1)  # next; ISA L4950 / 0x75A4; ds_load_b128 v[12:15] /*v[524:527]*/, v73 /*v841*/ offset:512
 ds_ld128_a2 (0_2)  # next; ISA L4951 / 0x75AC; ds_load_b128 v[16:19] /*v[528:531]*/, v73 /*v841*/ offset:1024
@@ -1490,24 +1490,24 @@ ds_ld128_a5 (0_5)  # next; ISA L4954 / 0x75C4; ds_load_b128 v[28:31] /*v[540:543
 
 ```text
 s_wait_dscnt 0xa  # ISA L4955 / 0x75CC
-wmma40 (6_8)  # K0; ISA L4956 / 0x75D0
-wmma41 (6_8)  # K0; ISA L4957 / 0x75E0
+wmma40 (6_0)  # K0; ISA L4956 / 0x75D0
+wmma41 (6_1)  # K0; ISA L4957 / 0x75E0
 ds_ld128_a6 (0_6)  # next; ISA L4958 / 0x75F0; ds_load_b128 v[32:35] /*v[544:547]*/, v73 /*v841*/ offset:3072
 ds_ld128_a7 (0_7)  # next; ISA L4959 / 0x75F8; ds_load_b128 v[36:39] /*v[548:551]*/, v73 /*v841*/ offset:3584
 ds_ld128_a8 (0_8)  # next; ISA L4960 / 0x7600; ds_load_b128 v[40:43] /*v[552:555]*/, v73 /*v841*/ offset:4096
 ds_ld128_a9 (0_9)  # next; ISA L4961 / 0x7608; ds_load_b128 v[44:47] /*v[556:559]*/, v73 /*v841*/ offset:4608
 ds_ld128_a10 (0_10)  # next; ISA L4962 / 0x7610; ds_load_b128 v[48:51] /*v[560:563]*/, v73 /*v841*/ offset:5120
 ds_ld128_a11 (0_11)  # next; ISA L4963 / 0x7618; ds_load_b128 v[52:55] /*v[564:567]*/, v73 /*v841*/ offset:5632
-wmma42 (6_8)  # K1; ISA L4964 / 0x7620
-wmma43 (6_8)  # K1; ISA L4965 / 0x7630
+wmma42 (6_2)  # K1; ISA L4964 / 0x7620
+wmma43 (6_3)  # K1; ISA L4965 / 0x7630
 ds_ld128_a12 (0_12)  # next; ISA L4966 / 0x7640; ds_load_b128 v[56:59] /*v[568:571]*/, v73 /*v841*/ offset:6144
 ds_ld128_a13 (0_13)  # next; ISA L4967 / 0x7648; ds_load_b128 v[60:63] /*v[572:575]*/, v73 /*v841*/ offset:6656
 ds_ld128_a14 (0_14)  # next; ISA L4968 / 0x7650; ds_load_b128 v[64:67] /*v[576:579]*/, v73 /*v841*/ offset:7168
 ds_ld128_a15 (0_15)  # next; ISA L4969 / 0x7658; ds_load_b128 v[68:71] /*v[580:583]*/, v73 /*v841*/ offset:7680
-wmma44 (6_8)  # K0; ISA L4970 / 0x7660
-wmma45 (6_8)  # K0; ISA L4971 / 0x7670
-wmma46 (6_8)  # K1; ISA L4972 / 0x7680
-wmma47 (6_8)  # K1; ISA L4973 / 0x7690
+wmma44 (6_4)  # K0; ISA L4970 / 0x7660
+wmma45 (6_5)  # K0; ISA L4971 / 0x7670
+wmma46 (6_6)  # K1; ISA L4972 / 0x7680
+wmma47 (6_7)  # K1; ISA L4973 / 0x7690
 ```
 
 `# count: source=19; WMMA=8; DS=10 (b128=10, b32=0); DS-wait=1`
@@ -1516,34 +1516,34 @@ wmma47 (6_8)  # K1; ISA L4973 / 0x7690
 
 ```text
 s_set_vgpr_msb 0xa7f4  # ISA L4974 / 0x76A0
-wmma48 (7_8)  # K0; ISA L4975 / 0x76A4
+wmma48 (7_0)  # K0; ISA L4975 / 0x76A4
 s_set_vgpr_msb 0xf434  # ISA L4976 / 0x76B4
 ds_ld32_bs0 (0_0)  # next; ISA L4977 / 0x76B8; ds_load_b32 v92, v81 offset:2048
 ds_ld32_bs1 (0_1)  # next; ISA L4978 / 0x76C0; ds_load_b32 v93, v81 offset:2176
 s_set_vgpr_msb 0x34f4  # ISA L4979 / 0x76C8
-wmma49 (7_8)  # K0; ISA L4980 / 0x76CC
+wmma49 (7_1)  # K0; ISA L4980 / 0x76CC
 s_set_vgpr_msb 0xf434  # ISA L4981 / 0x76DC
 ds_ld32_bs2 (0_2)  # next; ISA L4982 / 0x76E0; ds_load_b32 v94, v81 offset:2304
 ds_ld32_bs3 (0_3)  # next; ISA L4983 / 0x76E8; ds_load_b32 v95, v81 offset:2432
 s_set_vgpr_msb 0x34f4  # ISA L4984 / 0x76F0
-wmma50 (7_8)  # K1; ISA L4985 / 0x76F4
-wmma51 (7_8)  # K1; ISA L4986 / 0x7704
+wmma50 (7_2)  # K1; ISA L4985 / 0x76F4
+wmma51 (7_3)  # K1; ISA L4986 / 0x7704
 ds_ld128_b0 (0_0)  # next; ISA L4987 / 0x7714; ds_load_b128 v[8:11] /*v[776:779]*/, v77
 ds_ld128_b1 (0_1)  # next; ISA L4988 / 0x771C; ds_load_b128 v[12:15] /*v[780:783]*/, v77 offset:512
 ds_ld128_b2 (0_2)  # next; ISA L4989 / 0x7724; ds_load_b128 v[16:19] /*v[784:787]*/, v77 offset:2048
 ds_ld128_b3 (0_3)  # next; ISA L4990 / 0x772C; ds_load_b128 v[20:23] /*v[788:791]*/, v77 offset:2560
 ds_ld128_b4 (0_4)  # next; ISA L4991 / 0x7734; ds_load_b128 v[24:27] /*v[792:795]*/, v77 offset:1024
 ds_ld128_b5 (0_5)  # next; ISA L4992 / 0x773C; ds_load_b128 v[28:31] /*v[796:799]*/, v77 offset:1536
-wmma52 (7_8)  # K0; ISA L4993 / 0x7744
-wmma53 (7_8)  # K0; ISA L4994 / 0x7754
+wmma52 (7_4)  # K0; ISA L4993 / 0x7744
+wmma53 (7_5)  # K0; ISA L4994 / 0x7754
 ds_ld128_b6 (0_6)  # next; ISA L4995 / 0x7764; ds_load_b128 v[32:35] /*v[800:803]*/, v77 offset:3072
 ds_ld128_b7 (0_7)  # next; ISA L4996 / 0x776C; ds_load_b128 v[36:39] /*v[804:807]*/, v77 offset:3584
 ds_ld128_b8 (0_8)  # next; ISA L4997 / 0x7774; ds_load_b128 v[40:43] /*v[808:811]*/, v77 offset:4096
 ds_ld128_b9 (0_9)  # next; ISA L4998 / 0x777C; ds_load_b128 v[44:47] /*v[812:815]*/, v77 offset:4608
 ds_ld128_b10 (0_10)  # next; ISA L4999 / 0x7784; ds_load_b128 v[48:51] /*v[816:819]*/, v77 offset:6144
 ds_ld128_b11 (0_11)  # next; ISA L5000 / 0x778C; ds_load_b128 v[52:55] /*v[820:823]*/, v77 offset:6656
-wmma54 (7_8)  # K1; ISA L5001 / 0x7794
-wmma55 (7_8)  # K1; ISA L5002 / 0x77A4
+wmma54 (7_6)  # K1; ISA L5001 / 0x7794
+wmma55 (7_7)  # K1; ISA L5002 / 0x77A4
 ds_ld128_b12 (0_12)  # next; ISA L5003 / 0x77B4; ds_load_b128 v[56:59] /*v[824:827]*/, v77 offset:5120
 ds_ld128_b13 (0_13)  # next; ISA L5004 / 0x77BC; ds_load_b128 v[60:63] /*v[828:831]*/, v77 offset:5632
 ds_ld128_b14 (0_14)  # next; ISA L5005 / 0x77C4; ds_load_b128 v[64:67] /*v[832:835]*/, v77 offset:7168
@@ -1555,27 +1555,27 @@ ds_ld128_b15 (0_15)  # next; ISA L5006 / 0x77CC; ds_load_b128 v[68:71] /*v[836:8
 9. **最后 8 条 WMMA 与 loop control**（ISA L5007–L5028 / `0x77D4–0x788C`）
 
 ```text
-wmma56 (8_8)  # K0; ISA L5007 / 0x77D4
+wmma56 (8_0)  # K0; ISA L5007 / 0x77D4
 s_add_co_u32 s24, s58, 0x500  # ISA L5008 / 0x77E4
 s_cmp_lt_u32 s24, s70  # ISA L5009 / 0x77EC; sets SCC=(s24 < s70)
 s_cselect_b64 s[34:35], s[34:35], s[62:63]  # ISA L5010 / 0x77F0; select predicate from L5009: s24 < s70
 s_cselect_b32 s36, s36, s64  # ISA L5011 / 0x77F4; select predicate from L5009: s24 < s70
-wmma57 (8_8)  # K0; ISA L5012 / 0x77F8
+wmma57 (8_1)  # K0; ISA L5012 / 0x77F8
 s_cselect_b32 s37, s37, s65  # ISA L5013 / 0x7808; select predicate from L5009: s24 < s70
 s_cselect_b32 s38, s38, s66  # ISA L5014 / 0x780C; select predicate from L5009: s24 < s70
 s_cselect_b32 s70, s70, s71  # ISA L5015 / 0x7810; select predicate from L5009: s24 < s70
 s_cselect_b64 s[26:27], s[56:57], 0  # ISA L5016 / 0x7814; select predicate from L5009: s24 < s70
-wmma58 (8_8)  # K1; ISA L5017 / 0x7818
+wmma58 (8_2)  # K1; ISA L5017 / 0x7818
 s_add_nc_u64 s[34:35], s[34:35], s[26:27]  # ISA L5018 / 0x7828
 s_cmp_lt_u32 s24, s71  # ISA L5019 / 0x782C; sets SCC=(s24 < s71)
 s_cselect_b32 s39, s39, 0  # ISA L5020 / 0x7830; select predicate from L5019: s24 < s71
 s_addk_co_i32 s58, 0x100  # ISA L5021 / 0x7834
-wmma59 (8_8)  # K1; ISA L5022 / 0x7838
+wmma59 (8_3)  # K1; ISA L5022 / 0x7838
 s_cmp_lt_i32 s58, s59  # ISA L5023 / 0x7848; sets SCC=(s58 < s59)
-wmma60 (8_8)  # K0; ISA L5024 / 0x784C
-wmma61 (8_8)  # K0; ISA L5025 / 0x785C
-wmma62 (8_8)  # K1; ISA L5026 / 0x786C
-wmma63 (8_8)  # K1; ISA L5027 / 0x787C
+wmma60 (8_4)  # K0; ISA L5024 / 0x784C
+wmma61 (8_5)  # K0; ISA L5025 / 0x785C
+wmma62 (8_6)  # K1; ISA L5026 / 0x786C
+wmma63 (8_7)  # K1; ISA L5027 / 0x787C
 s_cbranch_scc0 1391  # ISA L5028 / 0x788C; branch predicate from L5023: s58 >= s59; K=7168 steady P0: not taken, fall through to P1; tail target excluded
 ```
 
@@ -1644,34 +1644,34 @@ group0/1 仅切非 K 维：group0=`A M[0:63] / B N[0:63]`，group1=`A M[64:127] 
 
 A data 前/后半为 `v520:583`/`v264:327`，SA 为 `v82:85`/`v86:89`，B data 为 `v776:839`/`v8:71`，SB 为 `v92:95`/`v96:99`；B 坐标须结合 physical dst、WMMA src 与动态 offset `0,512,2048,2560,1024,1536,3072,3584,4096,4608,6144,6656,5120,5632,7168,7680` 判定，ID 按 occurrence 而非 offset/坐标排序，故会出现 `b0,b1,b4,b5` 等非单调坐标排列。
 下表坐标是 wave-local `M128×N128×K256`，不是全局下标；host A（M×K）对应硬件 Matrix B，host B（N×K）对应硬件 Matrix A，K0/K1 分列为两张 M×N 表。
-`wmma0..wmma63` 严格按 P0 ISA L4844–L5028 动态顺序编号；`(g_n)` 的 `g/n` 是 0-based 九步 pipeline 组及组内 WMMA 数（group4/5 为 4，其余为 8）；代表性校正映射为 `wmma4=L4860=M2N0K0`、`wmma32=L4930=M4N0K0`、`wmma48=L4975=M4N2K0`。
+`wmma0..wmma63` 严格按 P0 ISA L4844–L5028 动态顺序编号；`(g_n)` 的 `g` 是 0-based pipeline group ID，`n` 是该 group 内 0-based 动态 occurrence ID（group0/1/2/3/6/7/8 各 8 条，group4/5 各 4 条）；代表性校正映射为 `wmma4=L4860=M2N0K0`、`wmma32=L4930=M4N0K0`、`wmma48=L4975=M4N2K0`。
 
 K0 表的每个格子计算 `M16×N32×K128`，K 范围为 `[0,127]`：
 
 | K0 [0,127] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] | N2 [64,95] | N3 [96,127] |
 |---|---:|---:|---:|---:|
-| M0 [0,15] | `wmma0` (`0_8`) | `wmma8` (`1_8`) | `wmma16` (`2_8`) | `wmma24` (`3_8`) |
-| M1 [16,31] | `wmma1` (`0_8`) | `wmma9` (`1_8`) | `wmma17` (`2_8`) | `wmma25` (`3_8`) |
-| M2 [32,47] | `wmma4` (`0_8`) | `wmma12` (`1_8`) | `wmma20` (`2_8`) | `wmma28` (`3_8`) |
-| M3 [48,63] | `wmma5` (`0_8`) | `wmma13` (`1_8`) | `wmma21` (`2_8`) | `wmma29` (`3_8`) |
-| M4 [64,79] | `wmma32` (`4_4`) | `wmma33` (`4_4`) | `wmma48` (`7_8`) | `wmma49` (`7_8`) |
-| M5 [80,95] | `wmma36` (`5_4`) | `wmma37` (`5_4`) | `wmma52` (`7_8`) | `wmma53` (`7_8`) |
-| M6 [96,111] | `wmma40` (`6_8`) | `wmma41` (`6_8`) | `wmma56` (`8_8`) | `wmma57` (`8_8`) |
-| M7 [112,127] | `wmma44` (`6_8`) | `wmma45` (`6_8`) | `wmma60` (`8_8`) | `wmma61` (`8_8`) |
+| M0 [0,15] | `wmma0` (`0_0`) | `wmma8` (`1_0`) | `wmma16` (`2_0`) | `wmma24` (`3_0`) |
+| M1 [16,31] | `wmma1` (`0_1`) | `wmma9` (`1_1`) | `wmma17` (`2_1`) | `wmma25` (`3_1`) |
+| M2 [32,47] | `wmma4` (`0_4`) | `wmma12` (`1_4`) | `wmma20` (`2_4`) | `wmma28` (`3_4`) |
+| M3 [48,63] | `wmma5` (`0_5`) | `wmma13` (`1_5`) | `wmma21` (`2_5`) | `wmma29` (`3_5`) |
+| M4 [64,79] | `wmma32` (`4_0`) | `wmma33` (`4_1`) | `wmma48` (`7_0`) | `wmma49` (`7_1`) |
+| M5 [80,95] | `wmma36` (`5_0`) | `wmma37` (`5_1`) | `wmma52` (`7_4`) | `wmma53` (`7_5`) |
+| M6 [96,111] | `wmma40` (`6_0`) | `wmma41` (`6_1`) | `wmma56` (`8_0`) | `wmma57` (`8_1`) |
+| M7 [112,127] | `wmma44` (`6_4`) | `wmma45` (`6_5`) | `wmma60` (`8_4`) | `wmma61` (`8_5`) |
 
 K1 表的每个格子计算同一个 M×N output fragment 在 `[128,255]` 上的第二次
 K128 累加：
 
 | K1 [128,255] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] | N2 [64,95] | N3 [96,127] |
 |---|---:|---:|---:|---:|
-| M0 [0,15] | `wmma2` (`0_8`) | `wmma10` (`1_8`) | `wmma18` (`2_8`) | `wmma26` (`3_8`) |
-| M1 [16,31] | `wmma3` (`0_8`) | `wmma11` (`1_8`) | `wmma19` (`2_8`) | `wmma27` (`3_8`) |
-| M2 [32,47] | `wmma6` (`0_8`) | `wmma14` (`1_8`) | `wmma22` (`2_8`) | `wmma30` (`3_8`) |
-| M3 [48,63] | `wmma7` (`0_8`) | `wmma15` (`1_8`) | `wmma23` (`2_8`) | `wmma31` (`3_8`) |
-| M4 [64,79] | `wmma34` (`4_4`) | `wmma35` (`4_4`) | `wmma50` (`7_8`) | `wmma51` (`7_8`) |
-| M5 [80,95] | `wmma38` (`5_4`) | `wmma39` (`5_4`) | `wmma54` (`7_8`) | `wmma55` (`7_8`) |
-| M6 [96,111] | `wmma42` (`6_8`) | `wmma43` (`6_8`) | `wmma58` (`8_8`) | `wmma59` (`8_8`) |
-| M7 [112,127] | `wmma46` (`6_8`) | `wmma47` (`6_8`) | `wmma62` (`8_8`) | `wmma63` (`8_8`) |
+| M0 [0,15] | `wmma2` (`0_2`) | `wmma10` (`1_2`) | `wmma18` (`2_2`) | `wmma26` (`3_2`) |
+| M1 [16,31] | `wmma3` (`0_3`) | `wmma11` (`1_3`) | `wmma19` (`2_3`) | `wmma27` (`3_3`) |
+| M2 [32,47] | `wmma6` (`0_6`) | `wmma14` (`1_6`) | `wmma22` (`2_6`) | `wmma30` (`3_6`) |
+| M3 [48,63] | `wmma7` (`0_7`) | `wmma15` (`1_7`) | `wmma23` (`2_7`) | `wmma31` (`3_7`) |
+| M4 [64,79] | `wmma34` (`4_2`) | `wmma35` (`4_3`) | `wmma50` (`7_2`) | `wmma51` (`7_3`) |
+| M5 [80,95] | `wmma38` (`5_2`) | `wmma39` (`5_3`) | `wmma54` (`7_6`) | `wmma55` (`7_7`) |
+| M6 [96,111] | `wmma42` (`6_2`) | `wmma43` (`6_3`) | `wmma58` (`8_2`) | `wmma59` (`8_3`) |
+| M7 [112,127] | `wmma46` (`6_6`) | `wmma47` (`6_7`) | `wmma62` (`8_6`) | `wmma63` (`8_7`) |
 
 完整性检查：每张表都是 `8×4=32` 个格子；K0/K1 各覆盖全部
 `M128×N128` output tile。两表合计64条，`wmma0..wmma63` 各出现一次；
@@ -1680,7 +1680,7 @@ K128 累加：
 
 ### 5.2 wave1/3：A-current → B-current → B-next → A-next
 
-以下伪流保持 wave1/3 P0 ISA L5605–L5789 的 185 条动态文本顺序：`wmmaID (g_n)` 中 `g/n` 表示 0-based pipeline 组及组内 WMMA 数，DS 的 `(h_i)` 表示前/后半组及组内动态 occurrence，`# current/# next` 标明 body 归属；A/SA/B/SB 各自编号，尤其 B data 不按 offset 或逻辑坐标重排。
+以下伪流保持 wave1/3 P0 ISA L5605–L5789 的 185 条动态文本顺序：`wmmaID (g_n)` 中 `g` 是 0-based pipeline group ID，`n` 是该 group 内 0-based 动态 occurrence ID；DS 的 `(h_i)` 表示前/后半组及组内动态 occurrence，`# current/# next` 标明 body 归属；A/SA/B/SB 各自编号，尤其 B data 不按 offset 或逻辑坐标重排。
 
 硬件文档只保证 `S_WAIT_DSCNT n`/`S_WAIT_TENSORCNT n` 返回时对应计数 `≤n`（CDNA5 ISA L20007–L20043），同 wave LDS 与 Tensor 指令分别有序完成（CDNA5 ISA L3575–L3586、L10147–L10156；MI400 Guide L5792–L5805、L14097–L14104），WG barrier 则由 signal/arrive 与 wait 两段组成（CDNA5 ISA L3044–L3052）；MI400 Guide 的 XNACK 讨论 L18451 另称 LDS 可乱序完成且附近 L18454 标有 `FIXME`，与前述章节冲突，所以下文的 oldest-first 推断明确采用目标 gfx1250 的 CDNA5 ISA 顺序模型，不把阈值写成精确 outstanding，也不从静态 ISA 推断实测时延。
 
@@ -1843,34 +1843,34 @@ s_set_vgpr_msb 0  # ISA L5604 / 0x8E70
 ```text
 s_wait_dscnt 0x8  # ISA L5605 / 0x8E74; return guarantees DScnt<=8
 s_set_vgpr_msb 13  # ISA L5606 / 0x8E78
-wmma0 (0_8)  # K0; ISA L5607 / 0x8E7C
+wmma0 (0_0)  # K0; ISA L5607 / 0x8E7C
 ds_ld32_as4 (1_0)  # current; ISA L5608 / 0x8E8C; ds_load_b32 v86, v80 /*v336*/ offset:512
 ds_ld32_as5 (1_1)  # current; ISA L5609 / 0x8E94; ds_load_b32 v87, v80 /*v336*/ offset:640
-wmma1 (0_8)  # K0; ISA L5610 / 0x8E9C
+wmma1 (0_1)  # K0; ISA L5610 / 0x8E9C
 ds_ld32_as6 (1_2)  # current; ISA L5611 / 0x8EAC; ds_load_b32 v88, v80 /*v336*/ offset:768
 ds_ld32_as7 (1_3)  # current; ISA L5612 / 0x8EB4; ds_load_b32 v89, v80 /*v336*/ offset:896
-wmma2 (0_8)  # K1; ISA L5613 / 0x8EBC
+wmma2 (0_2)  # K1; ISA L5613 / 0x8EBC
 ds_ld128_a16 (1_0)  # current; ISA L5614 / 0x8ECC; ds_load_b128 v[8:11], v72 /*v328*/ offset:8192
 ds_ld128_a17 (1_1)  # current; ISA L5615 / 0x8ED4; ds_load_b128 v[12:15], v72 /*v328*/ offset:8704
 ds_ld128_a18 (1_2)  # current; ISA L5616 / 0x8EDC; ds_load_b128 v[16:19], v72 /*v328*/ offset:9216
 ds_ld128_a19 (1_3)  # current; ISA L5617 / 0x8EE4; ds_load_b128 v[20:23], v72 /*v328*/ offset:9728
 ds_ld128_a20 (1_4)  # current; ISA L5618 / 0x8EEC; ds_load_b128 v[24:27], v72 /*v328*/ offset:10240
 ds_ld128_a21 (1_5)  # current; ISA L5619 / 0x8EF4; ds_load_b128 v[28:31], v72 /*v328*/ offset:10752
-wmma3 (0_8)  # K1; ISA L5620 / 0x8EFC
-wmma4 (0_8)  # K0; ISA L5621 / 0x8F0C
+wmma3 (0_3)  # K1; ISA L5620 / 0x8EFC
+wmma4 (0_4)  # K0; ISA L5621 / 0x8F0C
 ds_ld128_a22 (1_6)  # current; ISA L5622 / 0x8F1C; ds_load_b128 v[32:35], v72 /*v328*/ offset:11264
 ds_ld128_a23 (1_7)  # current; ISA L5623 / 0x8F24; ds_load_b128 v[36:39], v72 /*v328*/ offset:11776
 ds_ld128_a24 (1_8)  # current; ISA L5624 / 0x8F2C; ds_load_b128 v[40:43], v72 /*v328*/ offset:12288
 ds_ld128_a25 (1_9)  # current; ISA L5625 / 0x8F34; ds_load_b128 v[44:47], v72 /*v328*/ offset:12800
 ds_ld128_a26 (1_10)  # current; ISA L5626 / 0x8F3C; ds_load_b128 v[48:51], v72 /*v328*/ offset:13312
 ds_ld128_a27 (1_11)  # current; ISA L5627 / 0x8F44; ds_load_b128 v[52:55], v72 /*v328*/ offset:13824
-wmma5 (0_8)  # K0; ISA L5628 / 0x8F4C
-wmma6 (0_8)  # K1; ISA L5629 / 0x8F5C
+wmma5 (0_5)  # K0; ISA L5628 / 0x8F4C
+wmma6 (0_6)  # K1; ISA L5629 / 0x8F5C
 ds_ld128_a28 (1_12)  # current; ISA L5630 / 0x8F6C; ds_load_b128 v[56:59], v72 /*v328*/ offset:14336
 ds_ld128_a29 (1_13)  # current; ISA L5631 / 0x8F74; ds_load_b128 v[60:63], v72 /*v328*/ offset:14848
 ds_ld128_a30 (1_14)  # current; ISA L5632 / 0x8F7C; ds_load_b128 v[64:67], v72 /*v328*/ offset:15360
 ds_ld128_a31 (1_15)  # current; ISA L5633 / 0x8F84; ds_load_b128 v[68:71], v72 /*v328*/ offset:15872
-wmma7 (0_8)  # K1; ISA L5634 / 0x8F8C
+wmma7 (0_7)  # K1; ISA L5634 / 0x8F8C
 ```
 
 `# count: source=30; WMMA=8; DS=20 (b128=16, b32=4); DS-wait=1`
@@ -1879,14 +1879,14 @@ wmma7 (0_8)  # K1; ISA L5634 / 0x8F8C
 
 ```text
 s_wait_dscnt 0x14  # ISA L5635 / 0x8F9C; return guarantees DScnt<=20
-wmma8 (1_8)  # K0; ISA L5636 / 0x8FA0
-wmma9 (1_8)  # K0; ISA L5637 / 0x8FB0
-wmma10 (1_8)  # K1; ISA L5638 / 0x8FC0
-wmma11 (1_8)  # K1; ISA L5639 / 0x8FD0
-wmma12 (1_8)  # K0; ISA L5640 / 0x8FE0
-wmma13 (1_8)  # K0; ISA L5641 / 0x8FF0
-wmma14 (1_8)  # K1; ISA L5642 / 0x9000
-wmma15 (1_8)  # K1; ISA L5643 / 0x9010
+wmma8 (1_0)  # K0; ISA L5636 / 0x8FA0
+wmma9 (1_1)  # K0; ISA L5637 / 0x8FB0
+wmma10 (1_2)  # K1; ISA L5638 / 0x8FC0
+wmma11 (1_3)  # K1; ISA L5639 / 0x8FD0
+wmma12 (1_4)  # K0; ISA L5640 / 0x8FE0
+wmma13 (1_5)  # K0; ISA L5641 / 0x8FF0
+wmma14 (1_6)  # K1; ISA L5642 / 0x9000
+wmma15 (1_7)  # K1; ISA L5643 / 0x9010
 ```
 
 `# count: source=9; WMMA=8; DS=0 (b128=0, b32=0); DS-wait=1`
@@ -1896,38 +1896,38 @@ wmma15 (1_8)  # K1; ISA L5643 / 0x9010
 ```text
 s_wait_dscnt 0x8  # ISA L5644 / 0x9020; return guarantees DScnt<=8
 s_set_vgpr_msb 0xda1  # ISA L5645 / 0x9024
-wmma16 (2_8)  # K0; ISA L5646 / 0x9028
+wmma16 (2_0)  # K0; ISA L5646 / 0x9028
 s_set_vgpr_msb 0xa121  # ISA L5647 / 0x9038
 ds_ld32_bs4 (1_0)  # current; ISA L5648 / 0x903C; ds_load_b32 v96, v81 /*v337*/ offset:512
 ds_ld32_bs5 (1_1)  # current; ISA L5649 / 0x9044; ds_load_b32 v97, v81 /*v337*/ offset:640
 s_set_vgpr_msb 0x21a1  # ISA L5650 / 0x904C
-wmma17 (2_8)  # K0; ISA L5651 / 0x9050
+wmma17 (2_1)  # K0; ISA L5651 / 0x9050
 s_set_vgpr_msb 0xa121  # ISA L5652 / 0x9060
 ds_ld32_bs6 (1_2)  # current; ISA L5653 / 0x9064; ds_load_b32 v98, v81 /*v337*/ offset:768
 ds_ld32_bs7 (1_3)  # current; ISA L5654 / 0x906C; ds_load_b32 v99, v81 /*v337*/ offset:896
 s_set_vgpr_msb 0x21a1  # ISA L5655 / 0x9074
-wmma18 (2_8)  # K1; ISA L5656 / 0x9078
+wmma18 (2_2)  # K1; ISA L5656 / 0x9078
 ds_ld128_b16 (1_0)  # current; ISA L5657 / 0x9088; ds_load_b128 v[8:11] /*v[520:523]*/, v76 /*v332*/ offset:8192
 ds_ld128_b17 (1_1)  # current; ISA L5658 / 0x9090; ds_load_b128 v[12:15] /*v[524:527]*/, v76 /*v332*/ offset:8704
 ds_ld128_b18 (1_2)  # current; ISA L5659 / 0x9098; ds_load_b128 v[16:19] /*v[528:531]*/, v76 /*v332*/ offset:10240
 ds_ld128_b19 (1_3)  # current; ISA L5660 / 0x90A0; ds_load_b128 v[20:23] /*v[532:535]*/, v76 /*v332*/ offset:10752
 ds_ld128_b20 (1_4)  # current; ISA L5661 / 0x90A8; ds_load_b128 v[24:27] /*v[536:539]*/, v76 /*v332*/ offset:9216
 ds_ld128_b21 (1_5)  # current; ISA L5662 / 0x90B0; ds_load_b128 v[28:31] /*v[540:543]*/, v76 /*v332*/ offset:9728
-wmma19 (2_8)  # K1; ISA L5663 / 0x90B8
-wmma20 (2_8)  # K0; ISA L5664 / 0x90C8
+wmma19 (2_3)  # K1; ISA L5663 / 0x90B8
+wmma20 (2_4)  # K0; ISA L5664 / 0x90C8
 ds_ld128_b22 (1_6)  # current; ISA L5665 / 0x90D8; ds_load_b128 v[32:35] /*v[544:547]*/, v76 /*v332*/ offset:11264
 ds_ld128_b23 (1_7)  # current; ISA L5666 / 0x90E0; ds_load_b128 v[36:39] /*v[548:551]*/, v76 /*v332*/ offset:11776
 ds_ld128_b24 (1_8)  # current; ISA L5667 / 0x90E8; ds_load_b128 v[40:43] /*v[552:555]*/, v76 /*v332*/ offset:12288
 ds_ld128_b25 (1_9)  # current; ISA L5668 / 0x90F0; ds_load_b128 v[44:47] /*v[556:559]*/, v76 /*v332*/ offset:12800
 ds_ld128_b26 (1_10)  # current; ISA L5669 / 0x90F8; ds_load_b128 v[48:51] /*v[560:563]*/, v76 /*v332*/ offset:14336
 ds_ld128_b27 (1_11)  # current; ISA L5670 / 0x9100; ds_load_b128 v[52:55] /*v[564:567]*/, v76 /*v332*/ offset:14848
-wmma21 (2_8)  # K0; ISA L5671 / 0x9108
-wmma22 (2_8)  # K1; ISA L5672 / 0x9118
+wmma21 (2_5)  # K0; ISA L5671 / 0x9108
+wmma22 (2_6)  # K1; ISA L5672 / 0x9118
 ds_ld128_b28 (1_12)  # current; ISA L5673 / 0x9128; ds_load_b128 v[56:59] /*v[568:571]*/, v76 /*v332*/ offset:13312
 ds_ld128_b29 (1_13)  # current; ISA L5674 / 0x9130; ds_load_b128 v[60:63] /*v[572:575]*/, v76 /*v332*/ offset:13824
 ds_ld128_b30 (1_14)  # current; ISA L5675 / 0x9138; ds_load_b128 v[64:67] /*v[576:579]*/, v76 /*v332*/ offset:15360
 ds_ld128_b31 (1_15)  # current; ISA L5676 / 0x9140; ds_load_b128 v[68:71] /*v[580:583]*/, v76 /*v332*/ offset:15872
-wmma23 (2_8)  # K1; ISA L5677 / 0x9148
+wmma23 (2_7)  # K1; ISA L5677 / 0x9148
 ```
 
 `# count: source=34; WMMA=8; DS=20 (b128=16, b32=4); DS-wait=1`
@@ -1936,14 +1936,14 @@ wmma23 (2_8)  # K1; ISA L5677 / 0x9148
 
 ```text
 s_wait_dscnt 0x14  # ISA L5678 / 0x9158; return guarantees DScnt<=20
-wmma24 (3_8)  # K0; ISA L5679 / 0x915C
-wmma25 (3_8)  # K0; ISA L5680 / 0x916C
-wmma26 (3_8)  # K1; ISA L5681 / 0x917C
-wmma27 (3_8)  # K1; ISA L5682 / 0x918C
-wmma28 (3_8)  # K0; ISA L5683 / 0x919C
-wmma29 (3_8)  # K0; ISA L5684 / 0x91AC
-wmma30 (3_8)  # K1; ISA L5685 / 0x91BC
-wmma31 (3_8)  # K1; ISA L5686 / 0x91CC
+wmma24 (3_0)  # K0; ISA L5679 / 0x915C
+wmma25 (3_1)  # K0; ISA L5680 / 0x916C
+wmma26 (3_2)  # K1; ISA L5681 / 0x917C
+wmma27 (3_3)  # K1; ISA L5682 / 0x918C
+wmma28 (3_4)  # K0; ISA L5683 / 0x919C
+wmma29 (3_5)  # K0; ISA L5684 / 0x91AC
+wmma30 (3_6)  # K1; ISA L5685 / 0x91BC
+wmma31 (3_7)  # K1; ISA L5686 / 0x91CC
 ```
 
 `# count: source=9; WMMA=8; DS=0 (b128=0, b32=0); DS-wait=1`
@@ -1955,10 +1955,10 @@ s_wait_dscnt 0x8  # ISA L5687 / 0x91DC; return guarantees DScnt<=8
 s_wait_tensorcnt 0x2  # ISA L5688 / 0x91E0; return guarantees TENSORcnt<=2
 s_barrier_signal -1  # ISA L5689 / 0x91E4
 s_set_vgpr_msb 0xa15e  # ISA L5690 / 0x91E8
-wmma32 (4_4)  # K0; ISA L5691 / 0x91EC
-wmma33 (4_4)  # K0; ISA L5692 / 0x91FC
-wmma34 (4_4)  # K1; ISA L5693 / 0x920C
-wmma35 (4_4)  # K1; ISA L5694 / 0x921C
+wmma32 (4_0)  # K0; ISA L5691 / 0x91EC
+wmma33 (4_1)  # K0; ISA L5692 / 0x91FC
+wmma34 (4_2)  # K1; ISA L5693 / 0x920C
+wmma35 (4_3)  # K1; ISA L5694 / 0x921C
 s_mov_b32 s33, s95  # ISA L5695 / 0x922C; select slot0 destination for this specialist
 s_barrier_wait 0xffff  # ISA L5696 / 0x9230
 ```
@@ -1968,19 +1968,19 @@ s_barrier_wait 0xffff  # ISA L5696 / 0x9230
 6. **4 条 WMMA、1 TDM 与 B-next scale**（ISA L5697–L5709 / `0x9234–0x92A0`）
 
 ```text
-wmma36 (5_4)  # K0; ISA L5697 / 0x9234
+wmma36 (5_0)  # K0; ISA L5697 / 0x9234
 tensor_load_to_lds s[32:35], s[36:43]  # ISA L5698 / 0x9244; wave1=B slot0/body4; wave3=SB slot0/body4
-wmma37 (5_4)  # K0; ISA L5699 / 0x9250
+wmma37 (5_1)  # K0; ISA L5699 / 0x9250
 s_set_vgpr_msb 0x5e1e  # ISA L5700 / 0x9260
 ds_ld32_bs0 (0_0)  # next; ISA L5701 / 0x9264; ds_load_b32 v92, v81 /*v593*/ offset:2048
 ds_ld32_bs1 (0_1)  # next; ISA L5702 / 0x926C; ds_load_b32 v93, v81 /*v593*/ offset:2176
 s_set_vgpr_msb 0x1e5e  # ISA L5703 / 0x9274
-wmma38 (5_4)  # K1; ISA L5704 / 0x9278
+wmma38 (5_2)  # K1; ISA L5704 / 0x9278
 s_set_vgpr_msb 0x5e1e  # ISA L5705 / 0x9288
 ds_ld32_bs2 (0_2)  # next; ISA L5706 / 0x928C; ds_load_b32 v94, v81 /*v593*/ offset:2304
 ds_ld32_bs3 (0_3)  # next; ISA L5707 / 0x9294; ds_load_b32 v95, v81 /*v593*/ offset:2432
 s_set_vgpr_msb 0x1e5e  # ISA L5708 / 0x929C
-wmma39 (5_4)  # K1; ISA L5709 / 0x92A0
+wmma39 (5_3)  # K1; ISA L5709 / 0x92A0
 ```
 
 `# count: source=13; WMMA=4; DS=4 (b128=0, b32=4); TDM=1`
@@ -1991,30 +1991,30 @@ L5698 是每条动态 wave 路径仅一条 TDM：wave1 的 descriptor 令其生�
 
 ```text
 s_wait_dscnt 0x4  # ISA L5710 / 0x92B0; return guarantees DScnt<=4
-wmma40 (6_8)  # K0; ISA L5711 / 0x92B4
+wmma40 (6_0)  # K0; ISA L5711 / 0x92B4
 ds_ld128_b0 (0_0)  # next; ISA L5712 / 0x92C4; ds_load_b128 v[8:11] /*v[264:267]*/, v77 /*v589*/
 ds_ld128_b1 (0_1)  # next; ISA L5713 / 0x92CC; ds_load_b128 v[12:15] /*v[268:271]*/, v77 /*v589*/ offset:512
 ds_ld128_b2 (0_2)  # next; ISA L5714 / 0x92D4; ds_load_b128 v[16:19] /*v[272:275]*/, v77 /*v589*/ offset:2048
 ds_ld128_b3 (0_3)  # next; ISA L5715 / 0x92DC; ds_load_b128 v[20:23] /*v[276:279]*/, v77 /*v589*/ offset:2560
 ds_ld128_b4 (0_4)  # next; ISA L5716 / 0x92E4; ds_load_b128 v[24:27] /*v[280:283]*/, v77 /*v589*/ offset:1024
 ds_ld128_b5 (0_5)  # next; ISA L5717 / 0x92EC; ds_load_b128 v[28:31] /*v[284:287]*/, v77 /*v589*/ offset:1536
-wmma41 (6_8)  # K0; ISA L5718 / 0x92F4
-wmma42 (6_8)  # K1; ISA L5719 / 0x9304
+wmma41 (6_1)  # K0; ISA L5718 / 0x92F4
+wmma42 (6_2)  # K1; ISA L5719 / 0x9304
 ds_ld128_b6 (0_6)  # next; ISA L5720 / 0x9314; ds_load_b128 v[32:35] /*v[288:291]*/, v77 /*v589*/ offset:3072
 ds_ld128_b7 (0_7)  # next; ISA L5721 / 0x931C; ds_load_b128 v[36:39] /*v[292:295]*/, v77 /*v589*/ offset:3584
 ds_ld128_b8 (0_8)  # next; ISA L5722 / 0x9324; ds_load_b128 v[40:43] /*v[296:299]*/, v77 /*v589*/ offset:4096
 ds_ld128_b9 (0_9)  # next; ISA L5723 / 0x932C; ds_load_b128 v[44:47] /*v[300:303]*/, v77 /*v589*/ offset:4608
 ds_ld128_b10 (0_10)  # next; ISA L5724 / 0x9334; ds_load_b128 v[48:51] /*v[304:307]*/, v77 /*v589*/ offset:6144
 ds_ld128_b11 (0_11)  # next; ISA L5725 / 0x933C; ds_load_b128 v[52:55] /*v[308:311]*/, v77 /*v589*/ offset:6656
-wmma43 (6_8)  # K1; ISA L5726 / 0x9344
-wmma44 (6_8)  # K0; ISA L5727 / 0x9354
+wmma43 (6_3)  # K1; ISA L5726 / 0x9344
+wmma44 (6_4)  # K0; ISA L5727 / 0x9354
 ds_ld128_b12 (0_12)  # next; ISA L5728 / 0x9364; ds_load_b128 v[56:59] /*v[312:315]*/, v77 /*v589*/ offset:5120
 ds_ld128_b13 (0_13)  # next; ISA L5729 / 0x936C; ds_load_b128 v[60:63] /*v[316:319]*/, v77 /*v589*/ offset:5632
 ds_ld128_b14 (0_14)  # next; ISA L5730 / 0x9374; ds_load_b128 v[64:67] /*v[320:323]*/, v77 /*v589*/ offset:7168
 ds_ld128_b15 (0_15)  # next; ISA L5731 / 0x937C; ds_load_b128 v[68:71] /*v[324:327]*/, v77 /*v589*/ offset:7680
-wmma45 (6_8)  # K0; ISA L5732 / 0x9384
-wmma46 (6_8)  # K1; ISA L5733 / 0x9394
-wmma47 (6_8)  # K1; ISA L5734 / 0x93A4
+wmma45 (6_5)  # K0; ISA L5732 / 0x9384
+wmma46 (6_6)  # K1; ISA L5733 / 0x9394
+wmma47 (6_7)  # K1; ISA L5734 / 0x93A4
 ```
 
 `# count: source=25; WMMA=8; DS=16 (b128=16, b32=0); DS-wait=1`
@@ -2025,38 +2025,38 @@ wmma47 (6_8)  # K1; ISA L5734 / 0x93A4
 
 ```text
 s_set_vgpr_msb 0x5ef2  # ISA L5735 / 0x93B4
-wmma48 (7_8)  # K0; ISA L5736 / 0x93B8
+wmma48 (7_0)  # K0; ISA L5736 / 0x93B8
 s_set_vgpr_msb 0xf232  # ISA L5737 / 0x93C8
 ds_ld32_as0 (0_0)  # next; ISA L5738 / 0x93CC; ds_load_b32 v82, v80 /*v592*/ offset:2048
 ds_ld32_as1 (0_1)  # next; ISA L5739 / 0x93D4; ds_load_b32 v83, v80 /*v592*/ offset:2176
 s_set_vgpr_msb 0x32f2  # ISA L5740 / 0x93DC
-wmma49 (7_8)  # K0; ISA L5741 / 0x93E0
+wmma49 (7_1)  # K0; ISA L5741 / 0x93E0
 s_set_vgpr_msb 0xf232  # ISA L5742 / 0x93F0
 ds_ld32_as2 (0_2)  # next; ISA L5743 / 0x93F4; ds_load_b32 v84, v80 /*v592*/ offset:2304
 ds_ld32_as3 (0_3)  # next; ISA L5744 / 0x93FC; ds_load_b32 v85, v80 /*v592*/ offset:2432
 s_set_vgpr_msb 0x32f2  # ISA L5745 / 0x9404
-wmma50 (7_8)  # K1; ISA L5746 / 0x9408
+wmma50 (7_2)  # K1; ISA L5746 / 0x9408
 ds_ld128_a0 (0_0)  # next; ISA L5747 / 0x9418; ds_load_b128 v[8:11] /*v[776:779]*/, v73 /*v585*/
 ds_ld128_a1 (0_1)  # next; ISA L5748 / 0x9420; ds_load_b128 v[12:15] /*v[780:783]*/, v73 /*v585*/ offset:512
 ds_ld128_a2 (0_2)  # next; ISA L5749 / 0x9428; ds_load_b128 v[16:19] /*v[784:787]*/, v73 /*v585*/ offset:1024
 ds_ld128_a3 (0_3)  # next; ISA L5750 / 0x9430; ds_load_b128 v[20:23] /*v[788:791]*/, v73 /*v585*/ offset:1536
 ds_ld128_a4 (0_4)  # next; ISA L5751 / 0x9438; ds_load_b128 v[24:27] /*v[792:795]*/, v73 /*v585*/ offset:2048
 ds_ld128_a5 (0_5)  # next; ISA L5752 / 0x9440; ds_load_b128 v[28:31] /*v[796:799]*/, v73 /*v585*/ offset:2560
-wmma51 (7_8)  # K1; ISA L5753 / 0x9448
-wmma52 (7_8)  # K0; ISA L5754 / 0x9458
+wmma51 (7_3)  # K1; ISA L5753 / 0x9448
+wmma52 (7_4)  # K0; ISA L5754 / 0x9458
 ds_ld128_a6 (0_6)  # next; ISA L5755 / 0x9468; ds_load_b128 v[32:35] /*v[800:803]*/, v73 /*v585*/ offset:3072
 ds_ld128_a7 (0_7)  # next; ISA L5756 / 0x9470; ds_load_b128 v[36:39] /*v[804:807]*/, v73 /*v585*/ offset:3584
 ds_ld128_a8 (0_8)  # next; ISA L5757 / 0x9478; ds_load_b128 v[40:43] /*v[808:811]*/, v73 /*v585*/ offset:4096
 ds_ld128_a9 (0_9)  # next; ISA L5758 / 0x9480; ds_load_b128 v[44:47] /*v[812:815]*/, v73 /*v585*/ offset:4608
 ds_ld128_a10 (0_10)  # next; ISA L5759 / 0x9488; ds_load_b128 v[48:51] /*v[816:819]*/, v73 /*v585*/ offset:5120
 ds_ld128_a11 (0_11)  # next; ISA L5760 / 0x9490; ds_load_b128 v[52:55] /*v[820:823]*/, v73 /*v585*/ offset:5632
-wmma53 (7_8)  # K0; ISA L5761 / 0x9498
-wmma54 (7_8)  # K1; ISA L5762 / 0x94A8
+wmma53 (7_5)  # K0; ISA L5761 / 0x9498
+wmma54 (7_6)  # K1; ISA L5762 / 0x94A8
 ds_ld128_a12 (0_12)  # next; ISA L5763 / 0x94B8; ds_load_b128 v[56:59] /*v[824:827]*/, v73 /*v585*/ offset:6144
 ds_ld128_a13 (0_13)  # next; ISA L5764 / 0x94C0; ds_load_b128 v[60:63] /*v[828:831]*/, v73 /*v585*/ offset:6656
 ds_ld128_a14 (0_14)  # next; ISA L5765 / 0x94C8; ds_load_b128 v[64:67] /*v[832:835]*/, v73 /*v585*/ offset:7168
 ds_ld128_a15 (0_15)  # next; ISA L5766 / 0x94D0; ds_load_b128 v[68:71] /*v[836:839]*/, v73 /*v585*/ offset:7680
-wmma55 (7_8)  # K1; ISA L5767 / 0x94D8
+wmma55 (7_7)  # K1; ISA L5767 / 0x94D8
 ```
 
 `# count: source=33; WMMA=8; DS=20 (b128=16, b32=4)`
@@ -2068,23 +2068,23 @@ s_add_co_u32 s24, s58, 0x500  # ISA L5768 / 0x94E8
 s_cmp_lt_u32 s24, s70  # ISA L5769 / 0x94F0; sets SCC=(s24 < s70)
 s_cselect_b64 s[34:35], s[34:35], s[62:63]  # ISA L5770 / 0x94F4; predicate from L5769
 s_cselect_b32 s36, s36, s64  # ISA L5771 / 0x94F8; predicate from L5769
-wmma56 (8_8)  # K0; ISA L5772 / 0x94FC
+wmma56 (8_0)  # K0; ISA L5772 / 0x94FC
 s_cselect_b32 s37, s37, s65  # ISA L5773 / 0x950C; predicate from L5769
 s_cselect_b32 s38, s38, s66  # ISA L5774 / 0x9510; predicate from L5769
 s_cselect_b32 s70, s70, s71  # ISA L5775 / 0x9514; predicate from L5769
 s_cselect_b64 s[26:27], s[56:57], 0  # ISA L5776 / 0x9518; predicate from L5769
-wmma57 (8_8)  # K0; ISA L5777 / 0x951C
+wmma57 (8_1)  # K0; ISA L5777 / 0x951C
 s_add_nc_u64 s[34:35], s[34:35], s[26:27]  # ISA L5778 / 0x952C
 s_cmp_lt_u32 s24, s71  # ISA L5779 / 0x9530; sets SCC=(s24 < s71)
 s_cselect_b32 s39, s39, 0  # ISA L5780 / 0x9534; predicate from L5779
 s_addk_co_i32 s58, 0x100  # ISA L5781 / 0x9538; K offset += 256
-wmma58 (8_8)  # K1; ISA L5782 / 0x953C
+wmma58 (8_2)  # K1; ISA L5782 / 0x953C
 s_cmp_lt_i32 s58, s59  # ISA L5783 / 0x954C; sets SCC=(s58 < s59)
-wmma59 (8_8)  # K1; ISA L5784 / 0x9550
-wmma60 (8_8)  # K0; ISA L5785 / 0x9560
-wmma61 (8_8)  # K0; ISA L5786 / 0x9570
-wmma62 (8_8)  # K1; ISA L5787 / 0x9580
-wmma63 (8_8)  # K1; ISA L5788 / 0x9590
+wmma59 (8_3)  # K1; ISA L5784 / 0x9550
+wmma60 (8_4)  # K0; ISA L5785 / 0x9560
+wmma61 (8_5)  # K0; ISA L5786 / 0x9570
+wmma62 (8_6)  # K1; ISA L5787 / 0x9580
+wmma63 (8_7)  # K1; ISA L5788 / 0x9590
 s_cbranch_scc0 1388  # ISA L5789 / 0x95A0; predicate from L5783: s58 >= s59; this shape falls through to P1
 ```
 
@@ -2164,27 +2164,27 @@ K0 表的每个格子计算 `M16×N32×K128`，K 范围为 `[0,127]`：
 
 | K0 [0,127] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] | N2 [64,95] | N3 [96,127] |
 |---|---:|---:|---:|---:|
-| M0 [0,15] | `wmma0` (`0_8`) | `wmma1` (`0_8`) | `wmma32` (`4_4`) | `wmma40` (`6_8`) |
-| M1 [16,31] | `wmma4` (`0_8`) | `wmma5` (`0_8`) | `wmma33` (`4_4`) | `wmma41` (`6_8`) |
-| M2 [32,47] | `wmma8` (`1_8`) | `wmma9` (`1_8`) | `wmma36` (`5_4`) | `wmma44` (`6_8`) |
-| M3 [48,63] | `wmma12` (`1_8`) | `wmma13` (`1_8`) | `wmma37` (`5_4`) | `wmma45` (`6_8`) |
-| M4 [64,79] | `wmma16` (`2_8`) | `wmma17` (`2_8`) | `wmma48` (`7_8`) | `wmma56` (`8_8`) |
-| M5 [80,95] | `wmma20` (`2_8`) | `wmma21` (`2_8`) | `wmma49` (`7_8`) | `wmma57` (`8_8`) |
-| M6 [96,111] | `wmma24` (`3_8`) | `wmma25` (`3_8`) | `wmma52` (`7_8`) | `wmma60` (`8_8`) |
-| M7 [112,127] | `wmma28` (`3_8`) | `wmma29` (`3_8`) | `wmma53` (`7_8`) | `wmma61` (`8_8`) |
+| M0 [0,15] | `wmma0` (`0_0`) | `wmma1` (`0_1`) | `wmma32` (`4_0`) | `wmma40` (`6_0`) |
+| M1 [16,31] | `wmma4` (`0_4`) | `wmma5` (`0_5`) | `wmma33` (`4_1`) | `wmma41` (`6_1`) |
+| M2 [32,47] | `wmma8` (`1_0`) | `wmma9` (`1_1`) | `wmma36` (`5_0`) | `wmma44` (`6_4`) |
+| M3 [48,63] | `wmma12` (`1_4`) | `wmma13` (`1_5`) | `wmma37` (`5_1`) | `wmma45` (`6_5`) |
+| M4 [64,79] | `wmma16` (`2_0`) | `wmma17` (`2_1`) | `wmma48` (`7_0`) | `wmma56` (`8_0`) |
+| M5 [80,95] | `wmma20` (`2_4`) | `wmma21` (`2_5`) | `wmma49` (`7_1`) | `wmma57` (`8_1`) |
+| M6 [96,111] | `wmma24` (`3_0`) | `wmma25` (`3_1`) | `wmma52` (`7_4`) | `wmma60` (`8_4`) |
+| M7 [112,127] | `wmma28` (`3_4`) | `wmma29` (`3_5`) | `wmma53` (`7_5`) | `wmma61` (`8_5`) |
 
 K1 表的每个格子计算同一个 M×N output fragment 在 `[128,255]` 上的第二次 K128 累加：
 
 | K1 [128,255] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] | N2 [64,95] | N3 [96,127] |
 |---|---:|---:|---:|---:|
-| M0 [0,15] | `wmma2` (`0_8`) | `wmma3` (`0_8`) | `wmma34` (`4_4`) | `wmma42` (`6_8`) |
-| M1 [16,31] | `wmma6` (`0_8`) | `wmma7` (`0_8`) | `wmma35` (`4_4`) | `wmma43` (`6_8`) |
-| M2 [32,47] | `wmma10` (`1_8`) | `wmma11` (`1_8`) | `wmma38` (`5_4`) | `wmma46` (`6_8`) |
-| M3 [48,63] | `wmma14` (`1_8`) | `wmma15` (`1_8`) | `wmma39` (`5_4`) | `wmma47` (`6_8`) |
-| M4 [64,79] | `wmma18` (`2_8`) | `wmma19` (`2_8`) | `wmma50` (`7_8`) | `wmma58` (`8_8`) |
-| M5 [80,95] | `wmma22` (`2_8`) | `wmma23` (`2_8`) | `wmma51` (`7_8`) | `wmma59` (`8_8`) |
-| M6 [96,111] | `wmma26` (`3_8`) | `wmma27` (`3_8`) | `wmma54` (`7_8`) | `wmma62` (`8_8`) |
-| M7 [112,127] | `wmma30` (`3_8`) | `wmma31` (`3_8`) | `wmma55` (`7_8`) | `wmma63` (`8_8`) |
+| M0 [0,15] | `wmma2` (`0_2`) | `wmma3` (`0_3`) | `wmma34` (`4_2`) | `wmma42` (`6_2`) |
+| M1 [16,31] | `wmma6` (`0_6`) | `wmma7` (`0_7`) | `wmma35` (`4_3`) | `wmma43` (`6_3`) |
+| M2 [32,47] | `wmma10` (`1_2`) | `wmma11` (`1_3`) | `wmma38` (`5_2`) | `wmma46` (`6_6`) |
+| M3 [48,63] | `wmma14` (`1_6`) | `wmma15` (`1_7`) | `wmma39` (`5_3`) | `wmma47` (`6_7`) |
+| M4 [64,79] | `wmma18` (`2_2`) | `wmma19` (`2_3`) | `wmma50` (`7_2`) | `wmma58` (`8_2`) |
+| M5 [80,95] | `wmma22` (`2_6`) | `wmma23` (`2_7`) | `wmma51` (`7_3`) | `wmma59` (`8_3`) |
+| M6 [96,111] | `wmma26` (`3_2`) | `wmma27` (`3_3`) | `wmma54` (`7_6`) | `wmma62` (`8_6`) |
+| M7 [112,127] | `wmma30` (`3_6`) | `wmma31` (`3_7`) | `wmma55` (`7_7`) | `wmma63` (`8_7`) |
 
 完整性检查：K0/K1 各有 `8×4=32` 个格子，两表合计 64 条，`wmma0..wmma63` 各出现一次；每个 `(M,N)` 的 K0/K1 条目使用同一 C/D fragment，`(K,M,N)` 的 `2×8×4=64` 个组合无重复、无遗漏。四类 DS 集合也分别完整：A/B data 各为 `0..31`，AS/BS 各为 `0..7`；P0 physical DS 恰为 `64 b128 + 16 b32`。
 
