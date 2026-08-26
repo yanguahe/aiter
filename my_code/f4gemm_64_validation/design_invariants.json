@@ -1,0 +1,76 @@
+{
+  "cluster_barrier_signal_count": 3,
+  "cluster_barrier_wait_count": 11,
+  "fixed_lds_end_0x2a000_occurrences": 0,
+  "new_ring_address_occurrences": {
+    "0x00000": 2966,
+    "0x04000": 2,
+    "0x08000": 5,
+    "0x0c000": 10,
+    "0x10000": 7,
+    "0x10400": 0,
+    "0x10800": 3,
+    "0x10c00": 0,
+    "0x11000": 3,
+    "0x11400": 0,
+    "0x11800": 3,
+    "0x11c00": 0,
+    "0x12000": 5,
+    "0x16000": 0,
+    "0x1a000": 5,
+    "0x1e000": 0,
+    "0x22000": 6
+  },
+  "old_only_ring_address_occurrences": {
+    "0x30000": 7,
+    "0x38000": 5,
+    "0x40000": 10,
+    "0x48000": 5,
+    "0x50000": 2
+  },
+  "output_staging_boundary_0x22000_occurrences": 6,
+  "output_store_protocol_windows": [
+    {
+      "instruction_index": 6615,
+      "line": 6677,
+      "wait_tensorcnt_within_32_after": false,
+      "wg_pair_within_32_instructions_after": false,
+      "wg_pair_within_32_instructions_before": false
+    },
+    {
+      "instruction_index": 6802,
+      "line": 6864,
+      "wait_tensorcnt_within_32_after": false,
+      "wg_pair_within_32_instructions_after": false,
+      "wg_pair_within_32_instructions_before": true
+    }
+  ],
+  "output_tdm_shape_interpretation": "two-store fallback-like",
+  "output_tdm_store_count": 2,
+  "tile_offset_128_literal_occurrences": 39,
+  "two_output_wg_rounds_statically_detected": false,
+  "wait_alu_count": 1,
+  "warnings": [
+    "expected packed-ring literals missing: 0x10400, 0x10c00, 0x11400, 0x11c00, 0x16000, 0x1e000",
+    "candidate fixed-LDS end/resource 0x2A000 (172032) is absent",
+    "two output WG barrier rounds (before first and after last output TDM) were not statically found",
+    "cluster barrier signal/wait static counts are not balanced (3 vs 11)",
+    "old-only ring/LDS literals remain: 0x30000, 0x38000, 0x40000, 0x48000, 0x50000",
+    "original 256x256 kernel symbol remains",
+    "new 64x64 kernel symbol is absent",
+    "old 327680-byte LDS descriptor remains",
+    "old next_free_vgpr=1024 descriptor remains"
+  ],
+  "wave_offset_64_literal_occurrences": 24,
+  "wg_barrier_signal_count": 62,
+  "wg_barrier_wait_count": 62,
+  "wmma_label_blocks_with_exactly_16": [
+    ".Lbranch_000000008c54"
+  ],
+  "wmma_phase_claim": "None. Exact-16 label blocks and total/divmod are search aids only; semantic phase boundaries are not proven.",
+  "wmma_total": 512,
+  "wmma_total_divmod_16": [
+    32,
+    0
+  ]
+}

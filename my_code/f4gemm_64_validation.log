@@ -1,0 +1,659 @@
+
+================================================================================
+0. Invocation context
+================================================================================
+date: 2026-08-26T04:22:42+00:00
+host: heliosr-2b805-c9-3
+pwd: /data/yanguahe/code/wk_sp1/aiter
+script: my_code/run_validate_f4gemm_64x64_isa.sh
+script invocation: my_code/run_validate_f4gemm_64x64_isa.sh ./my_code/f4gemm_64_validation
+architecture: gfx1250
+target triple: amdgcn-amd-amdhsa
+code object version: 6
+LLVM_BIN: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin
+REPO_ROOT: /data/yanguahe/code/wk_sp1/aiter
+TARGET_S: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s
+REFERENCE_S: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s
+OUT_DIR: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation
+python: /opt/venv/bin/python3
+WARNING: OUT_DIR is inside the repository; the default is outside the git tree.
+
+================================================================================
+1. LLVM toolchain inventory and versions
+================================================================================
+clang	FOUND	clang	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
+clang++	FOUND	clang++	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
+llvm-mc	FOUND	llvm-mc	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
+ld.lld	FOUND	ld.lld	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
+llvm-objdump	FOUND	llvm-objdump	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
+llvm-readelf	FOUND	llvm-readelf	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
+llvm-readobj	FOUND	llvm-readobj	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
+llvm-nm	FOUND	llvm-nm	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
+
+COMMAND [version_clang]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_clang]: 127
+
+COMMAND [version_clangxx]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++ --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_clangxx]: 127
+
+COMMAND [version_llvm-mc]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_llvm-mc]: 127
+
+COMMAND [version_ld_lld]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_ld_lld]: 127
+
+COMMAND [version_llvm-objdump]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_llvm-objdump]: 127
+
+COMMAND [version_llvm-readelf]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_llvm-readelf]: 127
+
+COMMAND [version_llvm-readobj]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_llvm-readobj]: 127
+
+COMMAND [version_llvm-nm]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --version
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [version_llvm-nm]: 127
+WARN  1. Toolchain inventory          8 tool version command(s) failed
+
+================================================================================
+2. Input integrity, syntax, directives, and symbols
+================================================================================
+COMMAND [cmp_target_reference]: cmp -s -- /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s
+WARNING: target and reference are byte-for-byte identical; the 64x64 rewrite may not have started.
+Assembly input transformation: exact byte-for-byte copy; no instructions, directives, or comments changed.
+COMMAND [input_probe]: /opt/venv/bin/python3 - /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s <embedded-python>
+
+[TARGET]
+requested/real path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s
+state: readable regular file
+size_bytes: 680574
+line_count: 7145
+sha256: ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+CRLF_count: 0
+NUL_count: 0
+
+[REFERENCE]
+requested/real path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s
+state: readable regular file
+size_bytes: 680574
+line_count: 7145
+sha256: ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+CRLF_count: 0
+NUL_count: 0
+
+[TARGET DIRECTIVES / SYMBOLS / RESOURCES]
+1: 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
+2: 	.amdhsa_code_object_version 6
+4: 	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+5: 	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7: 	.type	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps,@function
+7003: 	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7004: 		.amdhsa_group_segment_fixed_size 327680
+7005: 		.amdhsa_private_segment_fixed_size 0
+7006: 		.amdhsa_kernarg_size 80
+7007: 		.amdhsa_user_sgpr_count 22
+7015: 		.amdhsa_wavefront_size32 1
+7023: 		.amdhsa_next_free_vgpr 1024
+7024: 		.amdhsa_next_free_sgpr 104
+7025: 		.amdhsa_named_barrier_count 0
+7026: 		.amdhsa_reserve_vcc 1
+7043: 	.end_amdhsa_kernel
+7046: 	.size	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+7049: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr, 0
+7050: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr, 104
+7051: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier, 0
+7061: 	.set amdgpu.max_num_vgpr, 0
+7062: 	.set amdgpu.max_num_agpr, 0
+7064: 	.set amdgpu.max_num_named_barrier, 0
+7074:         .size:           8
+7079:         .size:           8
+7084:         .size:           8
+7089:         .size:           8
+7094:         .size:           8
+7097:         .size:           4
+7100:         .size:           4
+7103:         .size:           4
+7106:         .size:           4
+7109:         .size:           4
+7112:         .size:           4
+7115:         .size:           4
+7118:         .size:           4
+7121:         .size:           4
+7124:         .size:           4
+7126:     .group_segment_fixed_size: 327680
+7130:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7132:     .sgpr_count:     106
+7133:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+7136:     .vgpr_count:     1024
+7139: amdhsa.target:   amdgcn-amd-amdhsa--gfx1250
+
+[TARGET SYNTAX SUMMARY]
+objdump_address_encoding_comments: 6934
+instruction_like_lines: 6937
+comment_syntax: semicolon suffixes are valid AMDGPU assembler comments
+WARN  2. Input integrity              target is byte-for-byte identical to reference
+
+================================================================================
+3. Independent gfx1250 syntax and assembly routes
+================================================================================
+
+COMMAND [assemble_llvm_mc]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1250 -filetype=obj /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [assemble_llvm_mc]: 127
+
+COMMAND [assemble_clang]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+STATUS  [assemble_clang]: 127
+Sanitization skipped: assembly diagnostics did not implicate trailing objdump comments.
+FAIL  3. Assembly routes              no assembler route produced a valid object
+
+================================================================================
+4. AMDHSA shared code-object link experiments
+================================================================================
+WARN  4. Code-object link             link skipped because no object assembled
+
+================================================================================
+5. Complete disassembly plus ELF section and symbol tables
+================================================================================
+FAIL  5. Disassembly                  no valid object was available to disassemble
+
+================================================================================
+6-8. Metadata, opcode audit, and design-invariant analysis
+================================================================================
+
+COMMAND [static_audit]: /opt/venv/bin/python3 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py --manifest /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv --out-dir /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation --target /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
+STATIC OPCODE / CONTROL-FLOW AUDIT
+Per-phase note: this parser does not infer phase boundaries and makes no per-phase 16-WMMA claim.
+
+[target_source] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
+  sha256=ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+  instruction_count=6934
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=['f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps']
+  labels=59
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=97
+  new symbol strings=0
+  selected constants={'0x0': 2966, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2, '0x40': 24, '0x80': 39, '0x100': 91, '0x400': 53, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  tile literals={'64_or_0x40': 24, '128_or_0x80': 39, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 97}
+  exact-16 label blocks=['.Lbranch_000000008c54']
+  branch inventory:
+    line 16: s_cbranch_scc0 .lbranch_00000000195c resolved_in_text=True
+    line 166: s_cbranch_scc0 .lbranch_00000000ba60 resolved_in_text=True
+    line 171: s_cbranch_scc0 .lbranch_000000001c28 resolved_in_text=True
+    line 175: s_branch .lbranch_000000001ca8 resolved_in_text=True
+    line 214: s_cbranch_scc0 .lbranch_000000001d98 resolved_in_text=True
+    line 219: s_cbranch_scc0 .lbranch_000000001d04 resolved_in_text=True
+    line 227: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 260: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 330: s_cbranch_scc1 .lbranch_000000001f08 resolved_in_text=True
+    line 332: s_cbranch_scc1 .lbranch_000000002b48 resolved_in_text=True
+    line 334: s_cbranch_scc1 .lbranch_0000000037ac resolved_in_text=True
+    line 336: s_cbranch_scc1 .lbranch_0000000043f8 resolved_in_text=True
+    line 1039: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 1100: s_cbranch_scc1 .lbranch_000000002c70 resolved_in_text=True
+    line 1748: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 2451: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 2512: s_cbranch_scc1 .lbranch_000000004520 resolved_in_text=True
+    line 3161: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3223: s_cbranch_scc0 .lbranch_000000005548 resolved_in_text=True
+    line 3386: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3388: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3449: s_cbranch_scc0 .lbranch_000000005a54 resolved_in_text=True
+    line 3506: s_cbranch_scc1 .lbranch_00000000578c resolved_in_text=True
+    line 3619: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3621: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 3682: s_cbranch_scc0 .lbranch_000000005f44 resolved_in_text=True
+    line 3845: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3847: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3908: s_cbranch_scc0 .lbranch_000000006450 resolved_in_text=True
+    line 3965: s_cbranch_scc1 .lbranch_000000006188 resolved_in_text=True
+    line 4078: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 4080: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 4085: s_cbranch_scc1 .lbranch_00000000647c resolved_in_text=True
+    line 4087: s_cbranch_scc1 .lbranch_000000006510 resolved_in_text=True
+    line 4089: s_cbranch_scc1 .lbranch_0000000065a4 resolved_in_text=True
+    line 4091: s_cbranch_scc1 .lbranch_000000006638 resolved_in_text=True
+    line 4123: s_branch .lbranch_000000007890 resolved_in_text=True
+    line 4155: s_branch .lbranch_000000007fc8 resolved_in_text=True
+    line 4187: s_branch .lbranch_000000008700 resolved_in_text=True
+    line 4219: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 4224: s_cbranch_scc1 .lbranch_0000000066f4 resolved_in_text=True
+    line 4226: s_cbranch_scc1 .lbranch_000000006788 resolved_in_text=True
+    line 4228: s_cbranch_scc1 .lbranch_00000000681c resolved_in_text=True
+    line 4230: s_cbranch_scc1 .lbranch_0000000068b0 resolved_in_text=True
+    line 4262: s_branch .lbranch_0000000095a4 resolved_in_text=True
+    line 4294: s_branch .lbranch_000000009cdc resolved_in_text=True
+    line 4326: s_branch .lbranch_00000000a414 resolved_in_text=True
+    line 4358: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 5064: s_cbranch_scc0 .lbranch_000000008e4c resolved_in_text=True
+    line 5252: s_cbranch_scc0 .lbranch_000000008e54 resolved_in_text=True
+    line 5440: s_cbranch_scc0 .lbranch_000000008e5c resolved_in_text=True
+    line 5575: s_cbranch_scc0 .lbranch_000000008c54 resolved_in_text=True
+    line 5632: s_cbranch_scc0 .lbranch_000000008e64 resolved_in_text=True
+    line 5634: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 5637: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5640: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5643: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5646: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5834: s_cbranch_scc0 .lbranch_00000000ab54 resolved_in_text=True
+    line 6022: s_cbranch_scc0 .lbranch_00000000ab5c resolved_in_text=True
+    line 6210: s_cbranch_scc0 .lbranch_00000000ab64 resolved_in_text=True
+    line 6398: s_cbranch_scc0 .lbranch_00000000ab6c resolved_in_text=True
+    line 6400: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 6403: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6406: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6409: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6412: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6415: s_cbranch_scc0 .lbranch_00000000ab80 resolved_in_text=True
+    line 6499: s_cbranch_scc0 .lbranch_00000000ad68 resolved_in_text=True
+    line 6890: s_cbranch_scc1 .lbranch_00000000ba60 resolved_in_text=True
+    line 6932: s_cbranch_scc0 .lbranch_00000000ba20 resolved_in_text=True
+    line 6937: s_cbranch_scc0 .lbranch_00000000b98c resolved_in_text=True
+    line 6945: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6978: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6990: s_cbranch_scc1 .lbranch_000000005060 resolved_in_text=True
+    line 6992: s_cbranch_scc1 .lbranch_00000000554c resolved_in_text=True
+    line 6994: s_cbranch_scc1 .lbranch_000000005a58 resolved_in_text=True
+    line 6996: s_cbranch_scc1 .lbranch_000000005f48 resolved_in_text=True
+
+[reference_source] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s
+  sha256=ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+  instruction_count=6934
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=['f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps']
+  labels=59
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=97
+  new symbol strings=0
+  selected constants={'0x0': 2966, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2, '0x40': 24, '0x80': 39, '0x100': 91, '0x400': 53, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  tile literals={'64_or_0x40': 24, '128_or_0x80': 39, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 97}
+  exact-16 label blocks=['.Lbranch_000000008c54']
+  branch inventory:
+    line 16: s_cbranch_scc0 .lbranch_00000000195c resolved_in_text=True
+    line 166: s_cbranch_scc0 .lbranch_00000000ba60 resolved_in_text=True
+    line 171: s_cbranch_scc0 .lbranch_000000001c28 resolved_in_text=True
+    line 175: s_branch .lbranch_000000001ca8 resolved_in_text=True
+    line 214: s_cbranch_scc0 .lbranch_000000001d98 resolved_in_text=True
+    line 219: s_cbranch_scc0 .lbranch_000000001d04 resolved_in_text=True
+    line 227: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 260: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 330: s_cbranch_scc1 .lbranch_000000001f08 resolved_in_text=True
+    line 332: s_cbranch_scc1 .lbranch_000000002b48 resolved_in_text=True
+    line 334: s_cbranch_scc1 .lbranch_0000000037ac resolved_in_text=True
+    line 336: s_cbranch_scc1 .lbranch_0000000043f8 resolved_in_text=True
+    line 1039: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 1100: s_cbranch_scc1 .lbranch_000000002c70 resolved_in_text=True
+    line 1748: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 2451: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 2512: s_cbranch_scc1 .lbranch_000000004520 resolved_in_text=True
+    line 3161: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3223: s_cbranch_scc0 .lbranch_000000005548 resolved_in_text=True
+    line 3386: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3388: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3449: s_cbranch_scc0 .lbranch_000000005a54 resolved_in_text=True
+    line 3506: s_cbranch_scc1 .lbranch_00000000578c resolved_in_text=True
+    line 3619: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3621: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 3682: s_cbranch_scc0 .lbranch_000000005f44 resolved_in_text=True
+    line 3845: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3847: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3908: s_cbranch_scc0 .lbranch_000000006450 resolved_in_text=True
+    line 3965: s_cbranch_scc1 .lbranch_000000006188 resolved_in_text=True
+    line 4078: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 4080: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 4085: s_cbranch_scc1 .lbranch_00000000647c resolved_in_text=True
+    line 4087: s_cbranch_scc1 .lbranch_000000006510 resolved_in_text=True
+    line 4089: s_cbranch_scc1 .lbranch_0000000065a4 resolved_in_text=True
+    line 4091: s_cbranch_scc1 .lbranch_000000006638 resolved_in_text=True
+    line 4123: s_branch .lbranch_000000007890 resolved_in_text=True
+    line 4155: s_branch .lbranch_000000007fc8 resolved_in_text=True
+    line 4187: s_branch .lbranch_000000008700 resolved_in_text=True
+    line 4219: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 4224: s_cbranch_scc1 .lbranch_0000000066f4 resolved_in_text=True
+    line 4226: s_cbranch_scc1 .lbranch_000000006788 resolved_in_text=True
+    line 4228: s_cbranch_scc1 .lbranch_00000000681c resolved_in_text=True
+    line 4230: s_cbranch_scc1 .lbranch_0000000068b0 resolved_in_text=True
+    line 4262: s_branch .lbranch_0000000095a4 resolved_in_text=True
+    line 4294: s_branch .lbranch_000000009cdc resolved_in_text=True
+    line 4326: s_branch .lbranch_00000000a414 resolved_in_text=True
+    line 4358: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 5064: s_cbranch_scc0 .lbranch_000000008e4c resolved_in_text=True
+    line 5252: s_cbranch_scc0 .lbranch_000000008e54 resolved_in_text=True
+    line 5440: s_cbranch_scc0 .lbranch_000000008e5c resolved_in_text=True
+    line 5575: s_cbranch_scc0 .lbranch_000000008c54 resolved_in_text=True
+    line 5632: s_cbranch_scc0 .lbranch_000000008e64 resolved_in_text=True
+    line 5634: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 5637: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5640: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5643: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5646: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5834: s_cbranch_scc0 .lbranch_00000000ab54 resolved_in_text=True
+    line 6022: s_cbranch_scc0 .lbranch_00000000ab5c resolved_in_text=True
+    line 6210: s_cbranch_scc0 .lbranch_00000000ab64 resolved_in_text=True
+    line 6398: s_cbranch_scc0 .lbranch_00000000ab6c resolved_in_text=True
+    line 6400: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 6403: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6406: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6409: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6412: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6415: s_cbranch_scc0 .lbranch_00000000ab80 resolved_in_text=True
+    line 6499: s_cbranch_scc0 .lbranch_00000000ad68 resolved_in_text=True
+    line 6890: s_cbranch_scc1 .lbranch_00000000ba60 resolved_in_text=True
+    line 6932: s_cbranch_scc0 .lbranch_00000000ba20 resolved_in_text=True
+    line 6937: s_cbranch_scc0 .lbranch_00000000b98c resolved_in_text=True
+    line 6945: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6978: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6990: s_cbranch_scc1 .lbranch_000000005060 resolved_in_text=True
+    line 6992: s_cbranch_scc1 .lbranch_00000000554c resolved_in_text=True
+    line 6994: s_cbranch_scc1 .lbranch_000000005a58 resolved_in_text=True
+    line 6996: s_cbranch_scc1 .lbranch_000000005f48 resolved_in_text=True
+
+STATIC AUDIT WARNINGS
+  none
+
+DESIGN INVARIANTS
+  new_ring_address_occurrences: {'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old_only_ring_address_occurrences: {'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  output_staging_boundary_0x22000_occurrences: 6
+  fixed_lds_end_0x2a000_occurrences: 0
+  tile_offset_128_literal_occurrences: 39
+  wave_offset_64_literal_occurrences: 24
+  wait_alu_count: 1
+  wg_barrier_signal_count: 62
+  wg_barrier_wait_count: 62
+  cluster_barrier_signal_count: 3
+  cluster_barrier_wait_count: 11
+  wmma_total: 512
+  wmma_total_divmod_16: [32, 0]
+  wmma_label_blocks_with_exactly_16: ['.Lbranch_000000008c54']
+  wmma_phase_claim: None. Exact-16 label blocks and total/divmod are search aids only; semantic phase boundaries are not proven.
+  output_tdm_store_count: 2
+  output_tdm_shape_interpretation: two-store fallback-like
+  output_store_protocol_windows: [{'instruction_index': 6615, 'line': 6677, 'wg_pair_within_32_instructions_before': False, 'wg_pair_within_32_instructions_after': False, 'wait_tensorcnt_within_32_after': False}, {'instruction_index': 6802, 'line': 6864, 'wg_pair_within_32_instructions_before': True, 'wg_pair_within_32_instructions_after': False, 'wait_tensorcnt_within_32_after': False}]
+  two_output_wg_rounds_statically_detected: False
+  WARNING: expected packed-ring literals missing: 0x10400, 0x10c00, 0x11400, 0x11c00, 0x16000, 0x1e000
+  WARNING: candidate fixed-LDS end/resource 0x2A000 (172032) is absent
+  WARNING: two output WG barrier rounds (before first and after last output TDM) were not statically found
+  WARNING: cluster barrier signal/wait static counts are not balanced (3 vs 11)
+  WARNING: old-only ring/LDS literals remain: 0x30000, 0x38000, 0x40000, 0x48000, 0x50000
+  WARNING: original 256x256 kernel symbol remains
+  WARNING: new 64x64 kernel symbol is absent
+  WARNING: old 327680-byte LDS descriptor remains
+  WARNING: old next_free_vgpr=1024 descriptor remains
+
+METADATA / RESOURCE INSPECTION
+Old 256x256 symbol hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4: 	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5: 	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7: 	.type	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps,@function
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:8: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:16: 	s_cbranch_scc0 .Lbranch_00000000195c                                          ; 000000001928: BFA1000C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:166: 	s_cbranch_scc0 .Lbranch_00000000ba60                                       ; 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:171: 	s_cbranch_scc0 .Lbranch_000000001c28                                           ; 000000001C14: BFA10004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x328>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:175: 	s_branch .Lbranch_000000001ca8                                                ; 000000001C24: BFA00020 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3a8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:214: 	s_cbranch_scc0 .Lbranch_000000001d98                                          ; 000000001CCC: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x498>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:219: 	s_cbranch_scc0 .Lbranch_000000001d04                                           ; 000000001CE0: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x404>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:227: 	s_branch .Lbranch_000000001da0                                                ; 000000001D00: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:260: 	s_branch .Lbranch_000000001da0                                                 ; 000000001D94: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:330: 	s_cbranch_scc1 .Lbranch_000000001f08                                           ; 000000001EEC: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x608>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:332: 	s_cbranch_scc1 .Lbranch_000000002b48                                         ; 000000001EF4: BFA20314 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1248>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:334: 	s_cbranch_scc1 .Lbranch_0000000037ac                                        ; 000000001EFC: BFA2062B <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1eac>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:336: 	s_cbranch_scc1 .Lbranch_0000000043f8                                        ; 000000001F04: BFA2093C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2af8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1039: 	s_branch .Lbranch_000000007158                                              ; 000000002B44: BFA01184 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1100: 	s_cbranch_scc1 .Lbranch_000000002c70                                       ; 000000002C80: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1370>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1748: 	s_branch .Lbranch_000000008e6c                                              ; 0000000037A8: BFA015B0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:2451: 	s_branch .Lbranch_000000007158                                              ; 0000000043F4: BFA00B58 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:2512: 	s_cbranch_scc1 .Lbranch_000000004520                                       ; 000000004530: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2c20>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3161: 	s_branch .Lbranch_000000008e6c                                              ; 00000000505C: BFA00F83 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3223: 	s_cbranch_scc0 .Lbranch_000000005548                                         ; 000000005194: BFA100EC <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c48>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3386: 	s_branch .Lbranch_000000007158                                              ; 000000005544: BFA00704 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3388: 	s_branch .Lbranch_000000006454                                               ; 000000005548: BFA003C2 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3449: 	s_cbranch_scc0 .Lbranch_000000005a54                                         ; 00000000567C: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4154>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3506: 	s_cbranch_scc1 .Lbranch_00000000578c                                       ; 00000000579C: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3e8c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3619: 	s_branch .Lbranch_000000008e6c                                              ; 000000005A50: BFA00D06 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3621: 	s_branch .Lbranch_0000000066cc                                               ; 000000005A54: BFA0031D <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3682: 	s_cbranch_scc0 .Lbranch_000000005f44                                         ; 000000005B88: BFA100EE <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4644>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3845: 	s_branch .Lbranch_000000007158                                              ; 000000005F40: BFA00485 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3847: 	s_branch .Lbranch_000000006454                                               ; 000000005F44: BFA00143 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3908: 	s_cbranch_scc0 .Lbranch_000000006450                                         ; 000000006078: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b50>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3965: 	s_cbranch_scc1 .Lbranch_000000006188                                       ; 000000006198: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4888>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4078: 	s_branch .Lbranch_000000008e6c                                              ; 00000000644C: BFA00A87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4080: 	s_branch .Lbranch_0000000066cc                                               ; 000000006450: BFA0009E <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4085: 	s_cbranch_scc1 .Lbranch_00000000647c                                           ; 000000006460: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b7c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4087: 	s_cbranch_scc1 .Lbranch_000000006510                                          ; 000000006468: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4c10>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4089: 	s_cbranch_scc1 .Lbranch_0000000065a4                                          ; 000000006470: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4ca4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4091: 	s_cbranch_scc1 .Lbranch_000000006638                                         ; 000000006478: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4d38>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4123: 	s_branch .Lbranch_000000007890                                              ; 00000000650C: BFA004E0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5f90>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4155: 	s_branch .Lbranch_000000007fc8                                              ; 0000000065A0: BFA00689 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x66c8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4187: 	s_branch .Lbranch_000000008700                                              ; 000000006634: BFA00832 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x6e00>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4219: 	s_branch .Lbranch_000000007158                                               ; 0000000066C8: BFA002A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4224: 	s_cbranch_scc1 .Lbranch_0000000066f4                                           ; 0000000066D8: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4df4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4226: 	s_cbranch_scc1 .Lbranch_000000006788                                          ; 0000000066E0: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4e88>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4228: 	s_cbranch_scc1 .Lbranch_00000000681c                                          ; 0000000066E8: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4f1c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4230: 	s_cbranch_scc1 .Lbranch_0000000068b0                                         ; 0000000066F0: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4fb0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4262: 	s_branch .Lbranch_0000000095a4                                              ; 000000006784: BFA00B87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7ca4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4294: 	s_branch .Lbranch_000000009cdc                                              ; 000000006818: BFA00D30 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x83dc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4326: 	s_branch .Lbranch_00000000a414                                              ; 0000000068AC: BFA00ED9 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x8b14>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4358: 	s_branch .Lbranch_000000008e6c                                              ; 000000006940: BFA0094A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5064: 	s_cbranch_scc0 .Lbranch_000000008e4c                                        ; 00000000788C: BFA1056F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x754c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5252: 	s_cbranch_scc0 .Lbranch_000000008e54                                         ; 000000007FC4: BFA103A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7554>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5440: 	s_cbranch_scc0 .Lbranch_000000008e5c                                         ; 0000000086FC: BFA101D7 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x755c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5575: 	s_cbranch_scc0 .Lbranch_000000008c54                                           ; 000000008C4C: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7354>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5632: 	s_cbranch_scc0 .Lbranch_000000008e64                                           ; 000000008E40: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7564>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5634: 	s_branch .Lbranch_000000007158                                             ; 000000008E48: BFA0F8C3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5637: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E50: BFA00748 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5640: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E58: BFA00746 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5643: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E60: BFA00744 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5646: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5834: 	s_cbranch_scc0 .Lbranch_00000000ab54                                        ; 0000000095A0: BFA1056C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9254>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6022: 	s_cbranch_scc0 .Lbranch_00000000ab5c                                         ; 000000009CD8: BFA103A0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x925c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6210: 	s_cbranch_scc0 .Lbranch_00000000ab64                                         ; 00000000A410: BFA101D4 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9264>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6398: 	s_cbranch_scc0 .Lbranch_00000000ab6c                                           ; 00000000AB48: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x926c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6400: 	s_branch .Lbranch_000000008e6c                                             ; 00000000AB50: BFA0F8C6 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6403: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB58: BFA00006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6406: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB60: BFA00004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6409: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB68: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6412: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB70: BFA00000 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6415: 	s_cbranch_scc0 .Lbranch_00000000ab80                                           ; 00000000AB78: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9280>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6499: 	s_cbranch_scc0 .Lbranch_00000000ad68                                          ; 00000000AD1C: BFA10012 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9468>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6890: 	s_cbranch_scc1 .Lbranch_00000000ba60                                         ; 00000000B88C: BFA20074 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6932: 	s_cbranch_scc0 .Lbranch_00000000ba20                                          ; 00000000B954: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa120>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6937: 	s_cbranch_scc0 .Lbranch_00000000b98c                                           ; 00000000B968: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa08c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6945: 	s_branch .Lbranch_00000000ba28                                                ; 00000000B988: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6978: 	s_branch .Lbranch_00000000ba28                                                 ; 00000000BA1C: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6990: 	s_cbranch_scc1 .Lbranch_000000005060                                       ; 00000000BA44: BFA2E586 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3760>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6992: 	s_cbranch_scc1 .Lbranch_00000000554c                                       ; 00000000BA4C: BFA2E6BF <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c4c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6994: 	s_cbranch_scc1 .Lbranch_000000005a58                                       ; 00000000BA54: BFA2E800 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4158>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6996: 	s_cbranch_scc1 .Lbranch_000000005f48                                       ; 00000000BA5C: BFA2E93A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4648>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7003: 	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7046: 	.size	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7049: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7050: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr, 104
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7051: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7052: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7053: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc, 1
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7054: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7055: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7056: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7057: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7130:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7133:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+New 64x64 symbol hits:
+  none
+Old 327680-byte LDS hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7004: 		.amdhsa_group_segment_fixed_size 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7126:     .group_segment_fixed_size: 327680
+Candidate 172032-byte LDS hits:
+  none
+Old 1024-VGPR hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7023: 		.amdhsa_next_free_vgpr 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7136:     .vgpr_count:     1024
+  WARNING: original 256x256 kernel symbol remains in source/ELF reports
+  WARNING: 64x64 kernel symbol is absent from source/ELF reports
+  WARNING: old 327680-byte (0x50000) LDS resource remains
+  WARNING: old 1024-VGPR resource remains
+  WARNING: candidate 172032-byte (0x2A000) LDS resource is absent
+
+LLVM-MC VS CLANG OBJECT COMPARISON
+{
+  "comparison": {
+    "available": false
+  },
+  "routes": {},
+  "warnings": [
+    "two-route object comparison is unavailable"
+  ]
+}
+Whole-ELF hash/size differences alone are informational and do not fail validation.
+
+ARTIFACTS
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env
+STATUS  [static_audit]: 0
+WARN  6. Metadata/resources           0 tool command failure(s), 5 resource warning(s)
+PASS  7. Static opcode audit          source/disassembly opcode, labels, branches, and constants audited
+WARN  8. Design invariants            9 incomplete-rewrite/design warning(s); see design_invariants.json
+
+================================================================================
+9. Optional existing parser/tooling applicability
+================================================================================
+Inspected: my_code/isa_runner/gemm_isa_runner.py
+  SKIP: its CLI always proceeds from compile/link to HIP/PyTorch GEMM execution;
+  it has no compile-only or source-static CLI mode for this kernel.
+Inspected: my_code/isa_runner/tdm_adapter.py
+  SKIP: capture/replay/run all enter the production GPU capture path, and the
+  adapter targets a different 104-byte TDM GEMM ABI.
+Inspected: my_code/isa_runner/isa_runner.py
+  SKIP: its nominal no-smoke path still assembles/links into its cache; this
+  script already performs equivalent checks in OUT_DIR without invoking GPU code.
+No arguments were invented and no existing runner was invoked.
+WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI mode exists for the requested kernel
+
+================================================================================
+10. Round-trip and cross-route sanity
+================================================================================
+route comparison JSON: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
+comparison:
+  available: False
+WARNING: two-route object comparison is unavailable
+NOTE: whole-ELF differences alone are non-semantic and are not a failure.
+FAIL  10. Round-trip sanity           object, ELF, or disassembly validity failed
+
+================================================================================
+11. Final PASS/WARN/FAIL summary
+================================================================================
+Output directory: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation
+Assembly source used: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s
+Valid object count: 0
+Primary object: none
+Primary code object: none
+Valid disassembly count: 0
+Invalid disassembly count: 0
+
+WARN  1. Toolchain inventory          8 tool version command(s) failed
+WARN  2. Input integrity              target is byte-for-byte identical to reference
+FAIL  3. Assembly routes              no assembler route produced a valid object
+WARN  4. Code-object link             link skipped because no object assembled
+FAIL  5. Disassembly                  no valid object was available to disassemble
+WARN  6. Metadata/resources           0 tool command failure(s), 5 resource warning(s)
+PASS  7. Static opcode audit          source/disassembly opcode, labels, branches, and constants audited
+WARN  8. Design invariants            9 incomplete-rewrite/design warning(s); see design_invariants.json
+WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI mode exists for the requested kernel
+FAIL  10. Round-trip sanity           object, ELF, or disassembly validity failed
+
+Artifact paths:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env (95 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_clang.log (187 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_llvm_mc.log (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv (224 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/command_status.tsv (2242 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json (2368 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/existing_tooling.txt (640 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (793 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (32061 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1219 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.txt (2805 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/invocation.txt (804 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json (104647 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json (135 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.txt (264 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json (41411 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv (4402 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (41088 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.transformation.txt (107 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/tool_inventory.tsv (774 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clang.txt (187 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clangxx.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_ld_lld.txt (188 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-mc.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-nm.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-objdump.txt (194 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readelf.txt (194 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readobj.txt (194 bytes)
+FINAL RESULT: hard failure (no valid object or invalid ELF/disassembly).
+Artifacts remain in: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation

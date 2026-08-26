@@ -1,0 +1,3 @@
+label	kind	path
+target_source	source	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
+reference_source	source	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s

@@ -1,0 +1,11 @@
+experiment	result	detail
+1. Toolchain inventory	WARN	8 tool version command(s) failed
+2. Input integrity	WARN	target is byte-for-byte identical to reference
+3. Assembly routes	FAIL	no assembler route produced a valid object
+4. Code-object link	WARN	link skipped because no object assembled
+5. Disassembly	FAIL	no valid object was available to disassemble
+6. Metadata/resources	WARN	0 tool command failure(s), 5 resource warning(s)
+7. Static opcode audit	PASS	source/disassembly opcode, labels, branches, and constants audited
+8. Design invariants	WARN	9 incomplete-rewrite/design warning(s); see design_invariants.json
+9. Existing tooling	WARN	SKIP: no applicable read-only/static CLI mode exists for the requested kernel
+10. Round-trip sanity	FAIL	object, ELF, or disassembly validity failed

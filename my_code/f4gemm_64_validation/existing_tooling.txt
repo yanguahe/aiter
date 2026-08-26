@@ -1,0 +1,10 @@
+Inspected: my_code/isa_runner/gemm_isa_runner.py
+  SKIP: its CLI always proceeds from compile/link to HIP/PyTorch GEMM execution;
+  it has no compile-only or source-static CLI mode for this kernel.
+Inspected: my_code/isa_runner/tdm_adapter.py
+  SKIP: capture/replay/run all enter the production GPU capture path, and the
+  adapter targets a different 104-byte TDM GEMM ABI.
+Inspected: my_code/isa_runner/isa_runner.py
+  SKIP: its nominal no-smoke path still assembles/links into its cache; this
+  script already performs equivalent checks in OUT_DIR without invoking GPU code.
+No arguments were invented and no existing runner was invoked.

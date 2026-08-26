@@ -1,0 +1,1 @@
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory

@@ -1,0 +1,55 @@
+Output directory: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation
+Assembly source used: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s
+Valid object count: 0
+Primary object: none
+Primary code object: none
+Valid disassembly count: 0
+Invalid disassembly count: 0
+
+WARN  1. Toolchain inventory          8 tool version command(s) failed
+WARN  2. Input integrity              target is byte-for-byte identical to reference
+FAIL  3. Assembly routes              no assembler route produced a valid object
+WARN  4. Code-object link             link skipped because no object assembled
+FAIL  5. Disassembly                  no valid object was available to disassemble
+WARN  6. Metadata/resources           0 tool command failure(s), 5 resource warning(s)
+PASS  7. Static opcode audit          source/disassembly opcode, labels, branches, and constants audited
+WARN  8. Design invariants            9 incomplete-rewrite/design warning(s); see design_invariants.json
+WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI mode exists for the requested kernel
+FAIL  10. Round-trip sanity           object, ELF, or disassembly validity failed
+
+Artifact paths:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env (95 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_clang.log (187 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_llvm_mc.log (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv (224 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/command_status.tsv (2242 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json (2368 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/existing_tooling.txt (640 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (793 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (32061 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1219 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.txt (2805 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/invocation.txt (804 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json (104647 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json (135 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.txt (264 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json (41411 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv (4402 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (41088 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.transformation.txt (107 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/tool_inventory.tsv (774 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clang.txt (187 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clangxx.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_ld_lld.txt (188 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-mc.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-nm.txt (189 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-objdump.txt (194 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readelf.txt (194 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readobj.txt (194 bytes)
+FINAL RESULT: hard failure (no valid object or invalid ELF/disassembly).
+Artifacts remain in: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation

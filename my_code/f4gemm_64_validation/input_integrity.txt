@@ -1,0 +1,70 @@
+
+[TARGET]
+requested/real path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s
+state: readable regular file
+size_bytes: 680574
+line_count: 7145
+sha256: ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+CRLF_count: 0
+NUL_count: 0
+
+[REFERENCE]
+requested/real path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s
+state: readable regular file
+size_bytes: 680574
+line_count: 7145
+sha256: ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+CRLF_count: 0
+NUL_count: 0
+
+[TARGET DIRECTIVES / SYMBOLS / RESOURCES]
+1: 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
+2: 	.amdhsa_code_object_version 6
+4: 	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+5: 	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7: 	.type	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps,@function
+7003: 	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7004: 		.amdhsa_group_segment_fixed_size 327680
+7005: 		.amdhsa_private_segment_fixed_size 0
+7006: 		.amdhsa_kernarg_size 80
+7007: 		.amdhsa_user_sgpr_count 22
+7015: 		.amdhsa_wavefront_size32 1
+7023: 		.amdhsa_next_free_vgpr 1024
+7024: 		.amdhsa_next_free_sgpr 104
+7025: 		.amdhsa_named_barrier_count 0
+7026: 		.amdhsa_reserve_vcc 1
+7043: 	.end_amdhsa_kernel
+7046: 	.size	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+7049: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr, 0
+7050: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr, 104
+7051: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier, 0
+7061: 	.set amdgpu.max_num_vgpr, 0
+7062: 	.set amdgpu.max_num_agpr, 0
+7064: 	.set amdgpu.max_num_named_barrier, 0
+7074:         .size:           8
+7079:         .size:           8
+7084:         .size:           8
+7089:         .size:           8
+7094:         .size:           8
+7097:         .size:           4
+7100:         .size:           4
+7103:         .size:           4
+7106:         .size:           4
+7109:         .size:           4
+7112:         .size:           4
+7115:         .size:           4
+7118:         .size:           4
+7121:         .size:           4
+7124:         .size:           4
+7126:     .group_segment_fixed_size: 327680
+7130:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+7132:     .sgpr_count:     106
+7133:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+7136:     .vgpr_count:     1024
+7139: amdhsa.target:   amdgcn-amd-amdhsa--gfx1250
+
+[TARGET SYNTAX SUMMARY]
+objdump_address_encoding_comments: 6934
+instruction_like_lines: 6937
+comment_syntax: semicolon suffixes are valid AMDGPU assembler comments
