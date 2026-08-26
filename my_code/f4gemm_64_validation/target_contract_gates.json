@@ -1,0 +1,58 @@
+{
+  "contract_group_segment_bytes": 172032,
+  "contract_symbol": "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps",
+  "contract_tensor_store_from_lds_count": 1,
+  "failure_count": 5,
+  "failures": [
+    "required_symbol_in_target_source",
+    "required_symbol_in_every_produced_disassembly",
+    "target_group_segment_exactly_172032",
+    "target_source_exactly_one_tensor_store_from_lds",
+    "every_produced_disassembly_exactly_one_tensor_store_from_lds"
+  ],
+  "gates": {
+    "every_produced_disassembly_exactly_one_tensor_store_from_lds": false,
+    "required_symbol_in_every_produced_disassembly": false,
+    "required_symbol_in_target_source": false,
+    "target_group_segment_exactly_172032": false,
+    "target_source_exactly_one_tensor_store_from_lds": false
+  },
+  "old_contract_findings": {
+    "metadata_old_lds_hit_count": 10,
+    "metadata_old_symbol_hit_count": 310,
+    "metadata_old_vgpr_hit_count": 11,
+    "old_256_symbol_in_produced_disassembly": {
+      "clang_code_object": 1,
+      "clang_object": 1,
+      "lld_code_object": 1,
+      "llvm_mc_object": 1
+    },
+    "old_256_symbol_in_target_source": true,
+    "old_group_segment_327680_values": [
+      327680
+    ],
+    "old_next_free_vgpr_1024_values": [
+      1024
+    ]
+  },
+  "produced_disassembly_required_symbol_occurrences": {
+    "clang_code_object": 0,
+    "clang_object": 0,
+    "lld_code_object": 0,
+    "llvm_mc_object": 0
+  },
+  "produced_disassembly_tensor_store_from_lds_counts": {
+    "clang_code_object": 2,
+    "clang_object": 2,
+    "lld_code_object": 2,
+    "llvm_mc_object": 2
+  },
+  "target_group_segment_values": [
+    327680
+  ],
+  "target_next_free_vgpr_values": [
+    1024
+  ],
+  "target_source_tensor_store_from_lds_count": 2,
+  "unchanged_reference_copy": true
+}

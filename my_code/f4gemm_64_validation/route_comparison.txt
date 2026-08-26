@@ -1,0 +1,29 @@
+route comparison JSON: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
+clang_object:
+  path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+  size_bytes: 45232
+  elf_sha256: d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9
+  instruction_count: 7036
+  normalized_instruction_sha256: 4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0
+  symbols: ['amdgpu.max_num_agpr', 'amdgpu.max_num_named_barrier', 'amdgpu.max_num_sgpr', 'amdgpu.max_num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc']
+  counts: {'cluster_barrier_signal': 3, 'cluster_barrier_wait': 11, 'conditional_branch': 43, 'conversion': 262, 'ds_load_b128': 768, 'ds_load_b32': 192, 'ds_store_or_write': 64, 's_wait_alu': 1, 's_wait_dscnt': 50, 's_wait_tensorcnt': 23, 'tensor_load_to_lds': 56, 'tensor_store_from_lds': 2, 'unconditional_branch': 35, 'wg_barrier_signal': 62, 'wg_barrier_wait': 62, 'wmma': 512}
+llvm_mc_object:
+  path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+  size_bytes: 45232
+  elf_sha256: d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9
+  instruction_count: 7036
+  normalized_instruction_sha256: 4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0
+  symbols: ['amdgpu.max_num_agpr', 'amdgpu.max_num_named_barrier', 'amdgpu.max_num_sgpr', 'amdgpu.max_num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc']
+  counts: {'cluster_barrier_signal': 3, 'cluster_barrier_wait': 11, 'conditional_branch': 43, 'conversion': 262, 'ds_load_b128': 768, 'ds_load_b32': 192, 'ds_store_or_write': 64, 's_wait_alu': 1, 's_wait_dscnt': 50, 's_wait_tensorcnt': 23, 'tensor_load_to_lds': 56, 'tensor_store_from_lds': 2, 'unconditional_branch': 35, 'wg_barrier_signal': 62, 'wg_barrier_wait': 62, 'wmma': 512}
+comparison:
+  available: True
+  category_count_differences: {}
+  instruction_count_equal: True
+  normalized_instruction_hash_equal: True
+  size_equal: True
+  symbol_sets_equal: True
+  symbols_only_clang: []
+  symbols_only_llvm_mc: []
+  whole_elf_difference_is_not_alone_a_failure: True
+  whole_elf_hash_equal: True
+NOTE: whole-ELF differences alone are non-semantic and are not a failure.

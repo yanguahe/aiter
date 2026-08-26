@@ -1,0 +1,4432 @@
+{
+  "category_definitions": {
+    "cluster_barrier": "s_barrier_signal -3 / s_barrier_wait 0xfffd",
+    "conversion": "mnemonic contains a cvt/convert/pack component",
+    "ds_store_or_write": "mnemonic starts with ds_store or ds_write",
+    "wg_barrier": "s_barrier_signal -1 / s_barrier_wait 0xffff",
+    "wmma": "mnemonic starts with v_wmma"
+  },
+  "inputs": {
+    "clang_code_object": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 14,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l0"
+        },
+        {
+          "line": 165,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 170,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l1"
+        },
+        {
+          "line": 174,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l2"
+        },
+        {
+          "line": 215,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l4"
+        },
+        {
+          "line": 220,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l3"
+        },
+        {
+          "line": 228,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l6"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l7"
+        },
+        {
+          "line": 338,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l9"
+        },
+        {
+          "line": 340,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l10"
+        },
+        {
+          "line": 1044,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 1107,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l8"
+        },
+        {
+          "line": 1755,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 2459,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 2522,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l11"
+        },
+        {
+          "line": 3171,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3234,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l13"
+        },
+        {
+          "line": 3397,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3462,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l16"
+        },
+        {
+          "line": 3520,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l15"
+        },
+        {
+          "line": 3633,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3636,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 3698,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l18"
+        },
+        {
+          "line": 3861,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3864,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3926,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l21"
+        },
+        {
+          "line": 3984,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l20"
+        },
+        {
+          "line": 4097,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 4100,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 4106,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l23"
+        },
+        {
+          "line": 4108,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l24"
+        },
+        {
+          "line": 4110,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l25"
+        },
+        {
+          "line": 4112,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l26"
+        },
+        {
+          "line": 4145,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l34"
+        },
+        {
+          "line": 4178,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l35"
+        },
+        {
+          "line": 4211,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l36"
+        },
+        {
+          "line": 4244,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 4250,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l28"
+        },
+        {
+          "line": 4252,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l29"
+        },
+        {
+          "line": 4254,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l30"
+        },
+        {
+          "line": 4256,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l31"
+        },
+        {
+          "line": 4289,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l43"
+        },
+        {
+          "line": 4322,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l44"
+        },
+        {
+          "line": 4355,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l45"
+        },
+        {
+          "line": 4388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 5096,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l38"
+        },
+        {
+          "line": 5285,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l39"
+        },
+        {
+          "line": 5474,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l40"
+        },
+        {
+          "line": 5610,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l37"
+        },
+        {
+          "line": 5668,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l41"
+        },
+        {
+          "line": 5670,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 5674,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5678,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5682,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5686,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5875,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l46"
+        },
+        {
+          "line": 6064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l47"
+        },
+        {
+          "line": 6253,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l48"
+        },
+        {
+          "line": 6442,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l49"
+        },
+        {
+          "line": 6444,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 6448,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6452,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6456,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6460,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6464,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l51"
+        },
+        {
+          "line": 6549,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l52"
+        },
+        {
+          "line": 6941,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 6983,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l54"
+        },
+        {
+          "line": 6988,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l53"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7030,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7044,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l12"
+        },
+        {
+          "line": 7046,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l14"
+        },
+        {
+          "line": 7048,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l17"
+        },
+        {
+          "line": 7050,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l19"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 7036,
+      "kernel_symbols": [],
+      "kind": "disassembly",
+      "label_count": 58,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7",
+        "L8",
+        "L9",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "L17",
+        "L18",
+        "L19",
+        "L20",
+        "L21",
+        "L22",
+        "L23",
+        "L24",
+        "L25",
+        "L26",
+        "L27",
+        "L28",
+        "L29",
+        "L30",
+        "L31",
+        "L32",
+        "L33",
+        "L34",
+        "L35",
+        "L36",
+        "L37",
+        "L38",
+        "L39",
+        "L40",
+        "L41",
+        "L42",
+        "L43",
+        "L44",
+        "L45",
+        "L46",
+        "L47",
+        "L48",
+        "L49",
+        "L50",
+        "L51",
+        "L52",
+        "L53",
+        "L54",
+        "L55",
+        "L56"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2930,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0
+      },
+      "old_symbol_occurrences": 1,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.disassembly.txt",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2930,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 23,
+        "0x400": 50,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0,
+        "0x80": 38,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "31cba8a65b56cc98507ecba4ee2c728fa91429a9165a59cc9664913dd5afe87d",
+      "size_bytes": 685602,
+      "target_source_category_differences": {},
+      "tile_literal_occurrences": {
+        "128_or_0x80": 38,
+        "256_or_0x100": 91,
+        "64_or_0x40": 23
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 1,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        "L37"
+      ],
+      "wmma_by_label_block": {
+        "L33": 64,
+        "L34": 64,
+        "L35": 64,
+        "L36": 48,
+        "L37": 16,
+        "L42": 64,
+        "L43": 64,
+        "L44": 64,
+        "L45": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    },
+    "clang_object": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 14,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l0"
+        },
+        {
+          "line": 165,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 170,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l1"
+        },
+        {
+          "line": 174,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l2"
+        },
+        {
+          "line": 215,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l4"
+        },
+        {
+          "line": 220,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l3"
+        },
+        {
+          "line": 228,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l6"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l7"
+        },
+        {
+          "line": 338,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l9"
+        },
+        {
+          "line": 340,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l10"
+        },
+        {
+          "line": 1044,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 1107,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l8"
+        },
+        {
+          "line": 1755,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 2459,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 2522,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l11"
+        },
+        {
+          "line": 3171,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3234,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l13"
+        },
+        {
+          "line": 3397,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3462,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l16"
+        },
+        {
+          "line": 3520,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l15"
+        },
+        {
+          "line": 3633,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3636,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 3698,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l18"
+        },
+        {
+          "line": 3861,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3864,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3926,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l21"
+        },
+        {
+          "line": 3984,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l20"
+        },
+        {
+          "line": 4097,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 4100,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 4106,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l23"
+        },
+        {
+          "line": 4108,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l24"
+        },
+        {
+          "line": 4110,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l25"
+        },
+        {
+          "line": 4112,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l26"
+        },
+        {
+          "line": 4145,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l34"
+        },
+        {
+          "line": 4178,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l35"
+        },
+        {
+          "line": 4211,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l36"
+        },
+        {
+          "line": 4244,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 4250,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l28"
+        },
+        {
+          "line": 4252,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l29"
+        },
+        {
+          "line": 4254,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l30"
+        },
+        {
+          "line": 4256,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l31"
+        },
+        {
+          "line": 4289,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l43"
+        },
+        {
+          "line": 4322,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l44"
+        },
+        {
+          "line": 4355,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l45"
+        },
+        {
+          "line": 4388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 5096,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l38"
+        },
+        {
+          "line": 5285,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l39"
+        },
+        {
+          "line": 5474,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l40"
+        },
+        {
+          "line": 5610,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l37"
+        },
+        {
+          "line": 5668,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l41"
+        },
+        {
+          "line": 5670,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 5674,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5678,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5682,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5686,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5875,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l46"
+        },
+        {
+          "line": 6064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l47"
+        },
+        {
+          "line": 6253,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l48"
+        },
+        {
+          "line": 6442,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l49"
+        },
+        {
+          "line": 6444,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 6448,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6452,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6456,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6460,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6464,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l51"
+        },
+        {
+          "line": 6549,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l52"
+        },
+        {
+          "line": 6941,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 6983,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l54"
+        },
+        {
+          "line": 6988,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l53"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7030,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7044,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l12"
+        },
+        {
+          "line": 7046,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l14"
+        },
+        {
+          "line": 7048,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l17"
+        },
+        {
+          "line": 7050,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l19"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 7036,
+      "kernel_symbols": [],
+      "kind": "disassembly",
+      "label_count": 58,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7",
+        "L8",
+        "L9",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "L17",
+        "L18",
+        "L19",
+        "L20",
+        "L21",
+        "L22",
+        "L23",
+        "L24",
+        "L25",
+        "L26",
+        "L27",
+        "L28",
+        "L29",
+        "L30",
+        "L31",
+        "L32",
+        "L33",
+        "L34",
+        "L35",
+        "L36",
+        "L37",
+        "L38",
+        "L39",
+        "L40",
+        "L41",
+        "L42",
+        "L43",
+        "L44",
+        "L45",
+        "L46",
+        "L47",
+        "L48",
+        "L49",
+        "L50",
+        "L51",
+        "L52",
+        "L53",
+        "L54",
+        "L55",
+        "L56"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2930,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0
+      },
+      "old_symbol_occurrences": 1,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.disassembly.txt",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2930,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 23,
+        "0x400": 50,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0,
+        "0x80": 38,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "00ec05353ef1f37ae6755834d4fb909a60feddab643ea196947e069dad9921da",
+      "size_bytes": 685601,
+      "target_source_category_differences": {},
+      "tile_literal_occurrences": {
+        "128_or_0x80": 38,
+        "256_or_0x100": 91,
+        "64_or_0x40": 23
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 1,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        "L37"
+      ],
+      "wmma_by_label_block": {
+        "L33": 64,
+        "L34": 64,
+        "L35": 64,
+        "L36": 48,
+        "L37": 16,
+        "L42": 64,
+        "L43": 64,
+        "L44": 64,
+        "L45": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    },
+    "lld_code_object": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 14,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l0"
+        },
+        {
+          "line": 165,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 170,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l1"
+        },
+        {
+          "line": 174,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l2"
+        },
+        {
+          "line": 215,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l4"
+        },
+        {
+          "line": 220,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l3"
+        },
+        {
+          "line": 228,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l6"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l7"
+        },
+        {
+          "line": 338,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l9"
+        },
+        {
+          "line": 340,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l10"
+        },
+        {
+          "line": 1044,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 1107,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l8"
+        },
+        {
+          "line": 1755,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 2459,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 2522,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l11"
+        },
+        {
+          "line": 3171,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3234,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l13"
+        },
+        {
+          "line": 3397,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3462,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l16"
+        },
+        {
+          "line": 3520,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l15"
+        },
+        {
+          "line": 3633,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3636,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 3698,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l18"
+        },
+        {
+          "line": 3861,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3864,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3926,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l21"
+        },
+        {
+          "line": 3984,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l20"
+        },
+        {
+          "line": 4097,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 4100,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 4106,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l23"
+        },
+        {
+          "line": 4108,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l24"
+        },
+        {
+          "line": 4110,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l25"
+        },
+        {
+          "line": 4112,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l26"
+        },
+        {
+          "line": 4145,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l34"
+        },
+        {
+          "line": 4178,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l35"
+        },
+        {
+          "line": 4211,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l36"
+        },
+        {
+          "line": 4244,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 4250,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l28"
+        },
+        {
+          "line": 4252,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l29"
+        },
+        {
+          "line": 4254,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l30"
+        },
+        {
+          "line": 4256,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l31"
+        },
+        {
+          "line": 4289,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l43"
+        },
+        {
+          "line": 4322,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l44"
+        },
+        {
+          "line": 4355,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l45"
+        },
+        {
+          "line": 4388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 5096,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l38"
+        },
+        {
+          "line": 5285,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l39"
+        },
+        {
+          "line": 5474,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l40"
+        },
+        {
+          "line": 5610,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l37"
+        },
+        {
+          "line": 5668,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l41"
+        },
+        {
+          "line": 5670,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 5674,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5678,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5682,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5686,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5875,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l46"
+        },
+        {
+          "line": 6064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l47"
+        },
+        {
+          "line": 6253,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l48"
+        },
+        {
+          "line": 6442,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l49"
+        },
+        {
+          "line": 6444,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 6448,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6452,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6456,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6460,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6464,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l51"
+        },
+        {
+          "line": 6549,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l52"
+        },
+        {
+          "line": 6941,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 6983,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l54"
+        },
+        {
+          "line": 6988,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l53"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7030,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7044,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l12"
+        },
+        {
+          "line": 7046,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l14"
+        },
+        {
+          "line": 7048,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l17"
+        },
+        {
+          "line": 7050,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l19"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 7036,
+      "kernel_symbols": [],
+      "kind": "disassembly",
+      "label_count": 58,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7",
+        "L8",
+        "L9",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "L17",
+        "L18",
+        "L19",
+        "L20",
+        "L21",
+        "L22",
+        "L23",
+        "L24",
+        "L25",
+        "L26",
+        "L27",
+        "L28",
+        "L29",
+        "L30",
+        "L31",
+        "L32",
+        "L33",
+        "L34",
+        "L35",
+        "L36",
+        "L37",
+        "L38",
+        "L39",
+        "L40",
+        "L41",
+        "L42",
+        "L43",
+        "L44",
+        "L45",
+        "L46",
+        "L47",
+        "L48",
+        "L49",
+        "L50",
+        "L51",
+        "L52",
+        "L53",
+        "L54",
+        "L55",
+        "L56"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2930,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0
+      },
+      "old_symbol_occurrences": 1,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.disassembly.txt",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2930,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 23,
+        "0x400": 50,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0,
+        "0x80": 38,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "7e87655c034b95b5702dd0c0049fe50db4c9b0d9c885852177d93f7af0b24741",
+      "size_bytes": 685603,
+      "target_source_category_differences": {},
+      "tile_literal_occurrences": {
+        "128_or_0x80": 38,
+        "256_or_0x100": 91,
+        "64_or_0x40": 23
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 1,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        "L37"
+      ],
+      "wmma_by_label_block": {
+        "L33": 64,
+        "L34": 64,
+        "L35": 64,
+        "L36": 48,
+        "L37": 16,
+        "L42": 64,
+        "L43": 64,
+        "L44": 64,
+        "L45": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    },
+    "llvm_mc_object": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 14,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l0"
+        },
+        {
+          "line": 165,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 170,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l1"
+        },
+        {
+          "line": 174,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l2"
+        },
+        {
+          "line": 215,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l4"
+        },
+        {
+          "line": 220,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l3"
+        },
+        {
+          "line": 228,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l5"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l6"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l7"
+        },
+        {
+          "line": 338,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l9"
+        },
+        {
+          "line": 340,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l10"
+        },
+        {
+          "line": 1044,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 1107,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l8"
+        },
+        {
+          "line": 1755,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 2459,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 2522,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l11"
+        },
+        {
+          "line": 3171,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3234,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l13"
+        },
+        {
+          "line": 3397,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3462,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l16"
+        },
+        {
+          "line": 3520,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l15"
+        },
+        {
+          "line": 3633,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 3636,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 3698,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l18"
+        },
+        {
+          "line": 3861,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 3864,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l22"
+        },
+        {
+          "line": 3926,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l21"
+        },
+        {
+          "line": 3984,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l20"
+        },
+        {
+          "line": 4097,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 4100,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l27"
+        },
+        {
+          "line": 4106,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l23"
+        },
+        {
+          "line": 4108,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l24"
+        },
+        {
+          "line": 4110,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l25"
+        },
+        {
+          "line": 4112,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l26"
+        },
+        {
+          "line": 4145,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l34"
+        },
+        {
+          "line": 4178,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l35"
+        },
+        {
+          "line": 4211,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l36"
+        },
+        {
+          "line": 4244,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 4250,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l28"
+        },
+        {
+          "line": 4252,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l29"
+        },
+        {
+          "line": 4254,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l30"
+        },
+        {
+          "line": 4256,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l31"
+        },
+        {
+          "line": 4289,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l43"
+        },
+        {
+          "line": 4322,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l44"
+        },
+        {
+          "line": 4355,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l45"
+        },
+        {
+          "line": 4388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 5096,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l38"
+        },
+        {
+          "line": 5285,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l39"
+        },
+        {
+          "line": 5474,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l40"
+        },
+        {
+          "line": 5610,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l37"
+        },
+        {
+          "line": 5668,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l41"
+        },
+        {
+          "line": 5670,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l33"
+        },
+        {
+          "line": 5674,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5678,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5682,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5686,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 5875,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l46"
+        },
+        {
+          "line": 6064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l47"
+        },
+        {
+          "line": 6253,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l48"
+        },
+        {
+          "line": 6442,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l49"
+        },
+        {
+          "line": 6444,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l42"
+        },
+        {
+          "line": 6448,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6452,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6456,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6460,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l50"
+        },
+        {
+          "line": 6464,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l51"
+        },
+        {
+          "line": 6549,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l52"
+        },
+        {
+          "line": 6941,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l56"
+        },
+        {
+          "line": 6983,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l54"
+        },
+        {
+          "line": 6988,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l53"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7030,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l55"
+        },
+        {
+          "line": 7044,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l12"
+        },
+        {
+          "line": 7046,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l14"
+        },
+        {
+          "line": 7048,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l17"
+        },
+        {
+          "line": 7050,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": "l19"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 7036,
+      "kernel_symbols": [],
+      "kind": "disassembly",
+      "label_count": 58,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7",
+        "L8",
+        "L9",
+        "L10",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "L17",
+        "L18",
+        "L19",
+        "L20",
+        "L21",
+        "L22",
+        "L23",
+        "L24",
+        "L25",
+        "L26",
+        "L27",
+        "L28",
+        "L29",
+        "L30",
+        "L31",
+        "L32",
+        "L33",
+        "L34",
+        "L35",
+        "L36",
+        "L37",
+        "L38",
+        "L39",
+        "L40",
+        "L41",
+        "L42",
+        "L43",
+        "L44",
+        "L45",
+        "L46",
+        "L47",
+        "L48",
+        "L49",
+        "L50",
+        "L51",
+        "L52",
+        "L53",
+        "L54",
+        "L55",
+        "L56"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2930,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0
+      },
+      "old_symbol_occurrences": 1,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.disassembly.txt",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2930,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 23,
+        "0x400": 50,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 0,
+        "0x80": 38,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "dbab9ad3bcbdf391a4daa79649d9ef2be80f9f9afba32b1ad2d881bfad7bcf9c",
+      "size_bytes": 685603,
+      "target_source_category_differences": {},
+      "tile_literal_occurrences": {
+        "128_or_0x80": 38,
+        "256_or_0x100": 91,
+        "64_or_0x40": 23
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 1,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        "L37"
+      ],
+      "wmma_by_label_block": {
+        "L33": 64,
+        "L34": 64,
+        "L35": 64,
+        "L36": 48,
+        "L37": 16,
+        "L42": 64,
+        "L43": 64,
+        "L44": 64,
+        "L45": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    },
+    "reference_source": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 16,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000195c"
+        },
+        {
+          "line": 166,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba60"
+        },
+        {
+          "line": 171,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001c28"
+        },
+        {
+          "line": 175,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001ca8"
+        },
+        {
+          "line": 214,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001d98"
+        },
+        {
+          "line": 219,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001d04"
+        },
+        {
+          "line": 227,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001da0"
+        },
+        {
+          "line": 260,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001da0"
+        },
+        {
+          "line": 330,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001f08"
+        },
+        {
+          "line": 332,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000002b48"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000037ac"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000043f8"
+        },
+        {
+          "line": 1039,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 1100,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000002c70"
+        },
+        {
+          "line": 1748,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 2451,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 2512,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000004520"
+        },
+        {
+          "line": 3161,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 3223,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005548"
+        },
+        {
+          "line": 3386,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 3388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006454"
+        },
+        {
+          "line": 3449,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005a54"
+        },
+        {
+          "line": 3506,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000578c"
+        },
+        {
+          "line": 3619,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 3621,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066cc"
+        },
+        {
+          "line": 3682,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005f44"
+        },
+        {
+          "line": 3845,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 3847,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006454"
+        },
+        {
+          "line": 3908,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006450"
+        },
+        {
+          "line": 3965,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006188"
+        },
+        {
+          "line": 4078,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 4080,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066cc"
+        },
+        {
+          "line": 4085,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000647c"
+        },
+        {
+          "line": 4087,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006510"
+        },
+        {
+          "line": 4089,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000065a4"
+        },
+        {
+          "line": 4091,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006638"
+        },
+        {
+          "line": 4123,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007890"
+        },
+        {
+          "line": 4155,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007fc8"
+        },
+        {
+          "line": 4187,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008700"
+        },
+        {
+          "line": 4219,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 4224,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066f4"
+        },
+        {
+          "line": 4226,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006788"
+        },
+        {
+          "line": 4228,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000681c"
+        },
+        {
+          "line": 4230,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000068b0"
+        },
+        {
+          "line": 4262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000095a4"
+        },
+        {
+          "line": 4294,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000009cdc"
+        },
+        {
+          "line": 4326,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000a414"
+        },
+        {
+          "line": 4358,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 5064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e4c"
+        },
+        {
+          "line": 5252,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e54"
+        },
+        {
+          "line": 5440,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e5c"
+        },
+        {
+          "line": 5575,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008c54"
+        },
+        {
+          "line": 5632,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e64"
+        },
+        {
+          "line": 5634,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 5637,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5640,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5643,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5646,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5834,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab54"
+        },
+        {
+          "line": 6022,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab5c"
+        },
+        {
+          "line": 6210,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab64"
+        },
+        {
+          "line": 6398,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab6c"
+        },
+        {
+          "line": 6400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 6403,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6406,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6409,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6412,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6415,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab80"
+        },
+        {
+          "line": 6499,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ad68"
+        },
+        {
+          "line": 6890,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba60"
+        },
+        {
+          "line": 6932,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba20"
+        },
+        {
+          "line": 6937,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000b98c"
+        },
+        {
+          "line": 6945,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba28"
+        },
+        {
+          "line": 6978,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba28"
+        },
+        {
+          "line": 6990,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005060"
+        },
+        {
+          "line": 6992,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000554c"
+        },
+        {
+          "line": 6994,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005a58"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005f48"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 6934,
+      "kernel_symbols": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
+      ],
+      "kind": "source",
+      "label_count": 59,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        ".Lbranch_00000000195c",
+        ".Lbranch_000000001c28",
+        ".Lbranch_000000001ca8",
+        ".Lbranch_000000001d04",
+        ".Lbranch_000000001d98",
+        ".Lbranch_000000001da0",
+        ".Lbranch_000000001f08",
+        ".Lbranch_000000002b48",
+        ".Lbranch_000000002c70",
+        ".Lbranch_0000000037ac",
+        ".Lbranch_0000000043f8",
+        ".Lbranch_000000004520",
+        ".Lbranch_000000005060",
+        ".Lbranch_000000005548",
+        ".Lbranch_00000000554c",
+        ".Lbranch_00000000578c",
+        ".Lbranch_000000005a54",
+        ".Lbranch_000000005a58",
+        ".Lbranch_000000005f44",
+        ".Lbranch_000000005f48",
+        ".Lbranch_000000006188",
+        ".Lbranch_000000006450",
+        ".Lbranch_000000006454",
+        ".Lbranch_00000000647c",
+        ".Lbranch_000000006510",
+        ".Lbranch_0000000065a4",
+        ".Lbranch_000000006638",
+        ".Lbranch_0000000066cc",
+        ".Lbranch_0000000066f4",
+        ".Lbranch_000000006788",
+        ".Lbranch_00000000681c",
+        ".Lbranch_0000000068b0",
+        ".Lbranch_000000006944",
+        ".Lbranch_000000007158",
+        ".Lbranch_000000007890",
+        ".Lbranch_000000007fc8",
+        ".Lbranch_000000008700",
+        ".Lbranch_000000008c54",
+        ".Lbranch_000000008e4c",
+        ".Lbranch_000000008e54",
+        ".Lbranch_000000008e5c",
+        ".Lbranch_000000008e64",
+        ".Lbranch_000000008e6c",
+        ".Lbranch_0000000095a4",
+        ".Lbranch_000000009cdc",
+        ".Lbranch_00000000a414",
+        ".Lbranch_00000000ab54",
+        ".Lbranch_00000000ab5c",
+        ".Lbranch_00000000ab64",
+        ".Lbranch_00000000ab6c",
+        ".Lbranch_00000000ab74",
+        ".Lbranch_00000000ab80",
+        ".Lbranch_00000000ad68",
+        ".Lbranch_00000000b98c",
+        ".Lbranch_00000000ba20",
+        ".Lbranch_00000000ba28",
+        ".Lbranch_00000000ba60",
+        ".Lfunc_end0"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2966,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "b1aec5bcb5607902d50ece5f5fd018e1191d18d50e5add6008d3d9b6b368e676",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 2
+      },
+      "old_symbol_occurrences": 97,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2966,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 24,
+        "0x400": 53,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 2,
+        "0x80": 39,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec",
+      "size_bytes": 680574,
+      "tile_literal_occurrences": {
+        "128_or_0x80": 39,
+        "256_or_0x100": 91,
+        "64_or_0x40": 24
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 97,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        ".Lbranch_000000008c54"
+      ],
+      "wmma_by_label_block": {
+        ".Lbranch_000000007158": 64,
+        ".Lbranch_000000007890": 64,
+        ".Lbranch_000000007fc8": 64,
+        ".Lbranch_000000008700": 48,
+        ".Lbranch_000000008c54": 16,
+        ".Lbranch_000000008e6c": 64,
+        ".Lbranch_0000000095a4": 64,
+        ".Lbranch_000000009cdc": 64,
+        ".Lbranch_00000000a414": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    },
+    "target_source": {
+      "branch_count": 78,
+      "branches": [
+        {
+          "line": 16,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000195c"
+        },
+        {
+          "line": 166,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba60"
+        },
+        {
+          "line": 171,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001c28"
+        },
+        {
+          "line": 175,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001ca8"
+        },
+        {
+          "line": 214,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001d98"
+        },
+        {
+          "line": 219,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001d04"
+        },
+        {
+          "line": 227,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001da0"
+        },
+        {
+          "line": 260,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001da0"
+        },
+        {
+          "line": 330,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000001f08"
+        },
+        {
+          "line": 332,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000002b48"
+        },
+        {
+          "line": 334,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000037ac"
+        },
+        {
+          "line": 336,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000043f8"
+        },
+        {
+          "line": 1039,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 1100,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000002c70"
+        },
+        {
+          "line": 1748,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 2451,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 2512,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000004520"
+        },
+        {
+          "line": 3161,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 3223,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005548"
+        },
+        {
+          "line": 3386,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 3388,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006454"
+        },
+        {
+          "line": 3449,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005a54"
+        },
+        {
+          "line": 3506,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000578c"
+        },
+        {
+          "line": 3619,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 3621,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066cc"
+        },
+        {
+          "line": 3682,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005f44"
+        },
+        {
+          "line": 3845,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 3847,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006454"
+        },
+        {
+          "line": 3908,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006450"
+        },
+        {
+          "line": 3965,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006188"
+        },
+        {
+          "line": 4078,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 4080,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066cc"
+        },
+        {
+          "line": 4085,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000647c"
+        },
+        {
+          "line": 4087,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006510"
+        },
+        {
+          "line": 4089,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000065a4"
+        },
+        {
+          "line": 4091,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006638"
+        },
+        {
+          "line": 4123,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007890"
+        },
+        {
+          "line": 4155,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007fc8"
+        },
+        {
+          "line": 4187,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008700"
+        },
+        {
+          "line": 4219,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 4224,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000066f4"
+        },
+        {
+          "line": 4226,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000006788"
+        },
+        {
+          "line": 4228,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000681c"
+        },
+        {
+          "line": 4230,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000068b0"
+        },
+        {
+          "line": 4262,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_0000000095a4"
+        },
+        {
+          "line": 4294,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000009cdc"
+        },
+        {
+          "line": 4326,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000a414"
+        },
+        {
+          "line": 4358,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 5064,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e4c"
+        },
+        {
+          "line": 5252,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e54"
+        },
+        {
+          "line": 5440,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e5c"
+        },
+        {
+          "line": 5575,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008c54"
+        },
+        {
+          "line": 5632,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e64"
+        },
+        {
+          "line": 5634,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000007158"
+        },
+        {
+          "line": 5637,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5640,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5643,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5646,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 5834,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab54"
+        },
+        {
+          "line": 6022,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab5c"
+        },
+        {
+          "line": 6210,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab64"
+        },
+        {
+          "line": 6398,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab6c"
+        },
+        {
+          "line": 6400,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000008e6c"
+        },
+        {
+          "line": 6403,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6406,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6409,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6412,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab74"
+        },
+        {
+          "line": 6415,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ab80"
+        },
+        {
+          "line": 6499,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ad68"
+        },
+        {
+          "line": 6890,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba60"
+        },
+        {
+          "line": 6932,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba20"
+        },
+        {
+          "line": 6937,
+          "mnemonic": "s_cbranch_scc0",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000b98c"
+        },
+        {
+          "line": 6945,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba28"
+        },
+        {
+          "line": 6978,
+          "mnemonic": "s_branch",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000ba28"
+        },
+        {
+          "line": 6990,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005060"
+        },
+        {
+          "line": 6992,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_00000000554c"
+        },
+        {
+          "line": 6994,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005a58"
+        },
+        {
+          "line": 6996,
+          "mnemonic": "s_cbranch_scc1",
+          "resolved_in_text": true,
+          "symbolic": true,
+          "target": ".lbranch_000000005f48"
+        }
+      ],
+      "conversion_variants": {
+        "v_cvt_f32_u32_e32": 3,
+        "v_cvt_pk_bf16_f32": 256,
+        "v_cvt_u32_f32_e32": 3
+      },
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "ds_store_write_variants": {
+        "ds_store_b128": 64
+      },
+      "instruction_count": 6934,
+      "kernel_symbols": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
+      ],
+      "kind": "source",
+      "label_count": 59,
+      "labels": [
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        ".Lbranch_00000000195c",
+        ".Lbranch_000000001c28",
+        ".Lbranch_000000001ca8",
+        ".Lbranch_000000001d04",
+        ".Lbranch_000000001d98",
+        ".Lbranch_000000001da0",
+        ".Lbranch_000000001f08",
+        ".Lbranch_000000002b48",
+        ".Lbranch_000000002c70",
+        ".Lbranch_0000000037ac",
+        ".Lbranch_0000000043f8",
+        ".Lbranch_000000004520",
+        ".Lbranch_000000005060",
+        ".Lbranch_000000005548",
+        ".Lbranch_00000000554c",
+        ".Lbranch_00000000578c",
+        ".Lbranch_000000005a54",
+        ".Lbranch_000000005a58",
+        ".Lbranch_000000005f44",
+        ".Lbranch_000000005f48",
+        ".Lbranch_000000006188",
+        ".Lbranch_000000006450",
+        ".Lbranch_000000006454",
+        ".Lbranch_00000000647c",
+        ".Lbranch_000000006510",
+        ".Lbranch_0000000065a4",
+        ".Lbranch_000000006638",
+        ".Lbranch_0000000066cc",
+        ".Lbranch_0000000066f4",
+        ".Lbranch_000000006788",
+        ".Lbranch_00000000681c",
+        ".Lbranch_0000000068b0",
+        ".Lbranch_000000006944",
+        ".Lbranch_000000007158",
+        ".Lbranch_000000007890",
+        ".Lbranch_000000007fc8",
+        ".Lbranch_000000008700",
+        ".Lbranch_000000008c54",
+        ".Lbranch_000000008e4c",
+        ".Lbranch_000000008e54",
+        ".Lbranch_000000008e5c",
+        ".Lbranch_000000008e64",
+        ".Lbranch_000000008e6c",
+        ".Lbranch_0000000095a4",
+        ".Lbranch_000000009cdc",
+        ".Lbranch_00000000a414",
+        ".Lbranch_00000000ab54",
+        ".Lbranch_00000000ab5c",
+        ".Lbranch_00000000ab64",
+        ".Lbranch_00000000ab6c",
+        ".Lbranch_00000000ab74",
+        ".Lbranch_00000000ab80",
+        ".Lbranch_00000000ad68",
+        ".Lbranch_00000000b98c",
+        ".Lbranch_00000000ba20",
+        ".Lbranch_00000000ba28",
+        ".Lbranch_00000000ba60",
+        ".Lfunc_end0"
+      ],
+      "new_ring_constant_occurrences": {
+        "0x00000": 2966,
+        "0x04000": 2,
+        "0x08000": 5,
+        "0x0c000": 10,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x22000": 6
+      },
+      "new_symbol_occurrences": 0,
+      "normalized_instruction_sha256": "b1aec5bcb5607902d50ece5f5fd018e1191d18d50e5add6008d3d9b6b368e676",
+      "old_only_ring_constant_occurrences": {
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 2
+      },
+      "old_symbol_occurrences": 97,
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s",
+      "phase_boundary_note": "Label-block WMMA counts are inventory only. The parser does not infer semantic K-phase boundaries and therefore makes no per-phase 16-WMMA claim.",
+      "phase_boundary_proof": false,
+      "selected_constant_occurrences": {
+        "0x0": 2966,
+        "0x100": 91,
+        "0x1000": 36,
+        "0x10000": 7,
+        "0x10400": 0,
+        "0x10800": 3,
+        "0x10c00": 0,
+        "0x11000": 3,
+        "0x11400": 0,
+        "0x11800": 3,
+        "0x11c00": 0,
+        "0x12000": 5,
+        "0x16000": 0,
+        "0x1a000": 5,
+        "0x1e000": 0,
+        "0x2000": 16,
+        "0x22000": 6,
+        "0x26000": 0,
+        "0x2a000": 0,
+        "0x30000": 7,
+        "0x38000": 5,
+        "0x40": 24,
+        "0x400": 53,
+        "0x4000": 2,
+        "0x40000": 10,
+        "0x48000": 5,
+        "0x50000": 2,
+        "0x80": 39,
+        "0x8000": 5,
+        "0xc000": 10
+      },
+      "sha256": "ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec",
+      "size_bytes": 680574,
+      "tile_literal_occurrences": {
+        "128_or_0x80": 39,
+        "256_or_0x100": 91,
+        "64_or_0x40": 24
+      },
+      "tile_string_occurrences": {
+        "128x128": 0,
+        "256x256": 97,
+        "64x64": 0
+      },
+      "unresolved_symbolic_branches": [],
+      "wmma_16_count_label_blocks": [
+        ".Lbranch_000000008c54"
+      ],
+      "wmma_by_label_block": {
+        ".Lbranch_000000007158": 64,
+        ".Lbranch_000000007890": 64,
+        ".Lbranch_000000007fc8": 64,
+        ".Lbranch_000000008700": 48,
+        ".Lbranch_000000008c54": 16,
+        ".Lbranch_000000008e6c": 64,
+        ".Lbranch_0000000095a4": 64,
+        ".Lbranch_000000009cdc": 64,
+        ".Lbranch_00000000a414": 64
+      },
+      "wmma_variants": {
+        "v_wmma_scale_f32_32x16x128_f4": 512
+      }
+    }
+  },
+  "warnings": []
+}

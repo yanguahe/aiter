@@ -16,7 +16,7 @@ Only existing override/auto-discovered directories were added; caller entries we
 ================================================================================
 0. Invocation context
 ================================================================================
-date: 2026-08-26T05:03:01+00:00
+date: 2026-08-26T05:08:37+00:00
 host: heliosr-2b805-c9-3
 pwd: /data/yanguahe/code/wk_sp1/aiter
 script: my_code/run_validate_f4gemm_64x64_isa.sh
@@ -47,15 +47,15 @@ llvm-readobj	FOUND	llvm-readobj	/data/yanguahe/code/wk_sp1/llvm-project/mlir_ins
 llvm-nm	FOUND	llvm-nm	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
 
 COMMAND [ldd_clang]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
-	linux-vdso.so.1 (0x00007c1b2ef64000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007c1b2ef3c000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007c1b2ee69000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007c1b23382000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007c1b23299000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007c1b23269000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007c1b23057000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007c1b2ef66000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007c1b23052000)
+	linux-vdso.so.1 (0x00007ebc0ae96000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007ebc0ae6e000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007ebbff52d000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007ebbff2af000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007ebbff1c6000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007ebbff198000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ebbfef86000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007ebc0ae98000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007ebbfef81000)
 STATUS  [ldd_clang]: 0
 
 COMMAND [version_clang]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang --version
@@ -68,15 +68,15 @@ STATUS  [version_clang]: 0
 clang	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
 
 COMMAND [ldd_clangxx]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
-	linux-vdso.so.1 (0x0000760fd3eb5000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x0000760fd3e8d000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x0000760fc852d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x0000760fc82af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x0000760fc81c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x0000760fc8198000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000760fc7f86000)
-	/lib64/ld-linux-x86-64.so.2 (0x0000760fd3eb7000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x0000760fd3e86000)
+	linux-vdso.so.1 (0x00007e5645dfe000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007e5645dd6000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007e5645d03000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007e563a182000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007e563a099000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007e5645cd3000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007e5639e87000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007e5645e00000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007e5645cce000)
 STATUS  [ldd_clangxx]: 0
 
 COMMAND [version_clangxx]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++ --version
@@ -89,15 +89,15 @@ STATUS  [version_clangxx]: 0
 clang++	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
 
 COMMAND [ldd_llvm-mc]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
-	linux-vdso.so.1 (0x0000795e836c1000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x0000795e83699000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x0000795e8192d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x0000795e816af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x0000795e815c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x0000795e81598000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000795e81386000)
-	/lib64/ld-linux-x86-64.so.2 (0x0000795e836c3000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x0000795e83692000)
+	linux-vdso.so.1 (0x00007b2113435000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007b211340d000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007b211333a000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007b2111382000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007b2111299000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007b211330a000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007b2111087000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007b2113437000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007b2113305000)
 STATUS  [ldd_llvm-mc]: 0
 
 COMMAND [version_llvm-mc]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc --version
@@ -116,15 +116,15 @@ STATUS  [version_llvm-mc]: 0
 llvm-mc	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
 
 COMMAND [ldd_ld_lld]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
-	linux-vdso.so.1 (0x00007da835cac000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007da835c84000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007da82e32d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007da82e0af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007da82dfc6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007da835c54000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007da82ddb4000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007da835cae000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007da835c4f000)
+	linux-vdso.so.1 (0x00007709115b1000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x0000770911589000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007709114b6000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x0000770909982000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x0000770909899000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x0000770911486000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000770909687000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007709115b3000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x0000770911481000)
 STATUS  [ldd_ld_lld]: 0
 
 COMMAND [version_ld_lld]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld --version
@@ -133,15 +133,15 @@ STATUS  [version_ld_lld]: 0
 ld.lld	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
 
 COMMAND [ldd_llvm-objdump]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
-	linux-vdso.so.1 (0x00007b6aa9217000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007b6aa91ef000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007b6aa752d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007b6aa72af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007b6aa71c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007b6aa91bf000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007b6aa6fb4000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007b6aa9219000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007b6aa91ba000)
+	linux-vdso.so.1 (0x000072c4537f0000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000072c4537c8000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000072c451b2d000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000072c4518af000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000072c4517c6000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000072c451798000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000072c451586000)
+	/lib64/ld-linux-x86-64.so.2 (0x000072c4537f2000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000072c4537c1000)
 STATUS  [ldd_llvm-objdump]: 0
 
 COMMAND [version_llvm-objdump]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --version
@@ -161,15 +161,15 @@ STATUS  [version_llvm-objdump]: 0
 llvm-objdump	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
 
 COMMAND [ldd_llvm-readelf]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
-	linux-vdso.so.1 (0x000073455e24d000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000073455e225000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000073455d72d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000073455d4af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000073455d3c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000073455d398000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000073455d186000)
-	/lib64/ld-linux-x86-64.so.2 (0x000073455e24f000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000073455d181000)
+	linux-vdso.so.1 (0x00007e9b3d81c000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007e9b3d7f4000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007e9b3d721000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007e9b3c982000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007e9b3d638000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007e9b3c954000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007e9b3c742000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007e9b3d81e000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007e9b3d631000)
 STATUS  [ldd_llvm-readelf]: 0
 
 COMMAND [version_llvm-readelf]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf --version
@@ -180,15 +180,15 @@ STATUS  [version_llvm-readelf]: 0
 llvm-readelf	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
 
 COMMAND [ldd_llvm-readobj]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
-	linux-vdso.so.1 (0x00007cc254121000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007cc2540f9000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007cc254026000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007cc253382000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007cc253299000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007cc25326b000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007cc253059000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007cc254123000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007cc253054000)
+	linux-vdso.so.1 (0x00007f8a7bdac000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007f8a7bd84000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007f8a7bcb1000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007f8a7af82000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f8a7ae99000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f8a7bc81000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f8a7ac87000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f8a7bdae000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007f8a7bc7c000)
 STATUS  [ldd_llvm-readobj]: 0
 
 COMMAND [version_llvm-readobj]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --version
@@ -199,15 +199,15 @@ STATUS  [version_llvm-readobj]: 0
 llvm-readobj	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
 
 COMMAND [ldd_llvm-nm]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
-	linux-vdso.so.1 (0x00007faa76d89000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007faa76d61000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007faa76c8e000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007faa74b82000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007faa74a99000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007faa76c5e000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007faa74887000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007faa76d8b000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007faa76c59000)
+	linux-vdso.so.1 (0x00007821c0fe6000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007821c0fbe000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007821c0eeb000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007821bed82000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007821bec99000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007821c0ebb000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007821bea87000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007821c0fe8000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007821c0eb6000)
 STATUS  [ldd_llvm-nm]: 0
 
 COMMAND [version_llvm-nm]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --version
@@ -31820,23 +31820,1106 @@ PASS  5. Disassembly                  4 produced ELF file(s) fully disassembled
 ================================================================================
 
 COMMAND [static_audit]: /opt/venv/bin/python3 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py --manifest /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv --out-dir /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation --target /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
-Traceback (most recent call last):
-  File "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py", line 844, in <module>
-    main()
-  File "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py", line 672, in main
-    report = analyze_input(label, kind, path)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py", line 259, in analyze_input
-    literals = literal_counts(text)
-               ^^^^^^^^^^^^^^^^^^^^
-  File "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py", line 199, in literal_counts
-    counter[int(token, 0)] += 1
-            ^^^^^^^^^^^^^
-ValueError: invalid literal for int() with base 0: '0000000000000328'
-STATUS  [static_audit]: 1
-WARN  6. Metadata/resources           metadata analysis program failed with status 1
-WARN  7. Static opcode audit          embedded static audit failed with status 1
-WARN  8. Design invariants            design-invariant heuristic analysis unavailable
+Embedded literal-parser self-tests: PASS
+STATIC OPCODE / CONTROL-FLOW AUDIT
+Per-phase note: this parser does not infer phase boundaries and makes no per-phase 16-WMMA claim.
+
+[target_source] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
+  sha256=ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+  instruction_count=6934
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=['f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps']
+  labels=59
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=97
+  new symbol strings=0
+  selected constants={'0x0': 2966, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2, '0x40': 24, '0x80': 39, '0x100': 91, '0x400': 53, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  tile literals={'64_or_0x40': 24, '128_or_0x80': 39, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 97}
+  exact-16 label blocks=['.Lbranch_000000008c54']
+  branch inventory:
+    line 16: s_cbranch_scc0 .lbranch_00000000195c resolved_in_text=True
+    line 166: s_cbranch_scc0 .lbranch_00000000ba60 resolved_in_text=True
+    line 171: s_cbranch_scc0 .lbranch_000000001c28 resolved_in_text=True
+    line 175: s_branch .lbranch_000000001ca8 resolved_in_text=True
+    line 214: s_cbranch_scc0 .lbranch_000000001d98 resolved_in_text=True
+    line 219: s_cbranch_scc0 .lbranch_000000001d04 resolved_in_text=True
+    line 227: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 260: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 330: s_cbranch_scc1 .lbranch_000000001f08 resolved_in_text=True
+    line 332: s_cbranch_scc1 .lbranch_000000002b48 resolved_in_text=True
+    line 334: s_cbranch_scc1 .lbranch_0000000037ac resolved_in_text=True
+    line 336: s_cbranch_scc1 .lbranch_0000000043f8 resolved_in_text=True
+    line 1039: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 1100: s_cbranch_scc1 .lbranch_000000002c70 resolved_in_text=True
+    line 1748: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 2451: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 2512: s_cbranch_scc1 .lbranch_000000004520 resolved_in_text=True
+    line 3161: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3223: s_cbranch_scc0 .lbranch_000000005548 resolved_in_text=True
+    line 3386: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3388: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3449: s_cbranch_scc0 .lbranch_000000005a54 resolved_in_text=True
+    line 3506: s_cbranch_scc1 .lbranch_00000000578c resolved_in_text=True
+    line 3619: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3621: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 3682: s_cbranch_scc0 .lbranch_000000005f44 resolved_in_text=True
+    line 3845: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3847: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3908: s_cbranch_scc0 .lbranch_000000006450 resolved_in_text=True
+    line 3965: s_cbranch_scc1 .lbranch_000000006188 resolved_in_text=True
+    line 4078: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 4080: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 4085: s_cbranch_scc1 .lbranch_00000000647c resolved_in_text=True
+    line 4087: s_cbranch_scc1 .lbranch_000000006510 resolved_in_text=True
+    line 4089: s_cbranch_scc1 .lbranch_0000000065a4 resolved_in_text=True
+    line 4091: s_cbranch_scc1 .lbranch_000000006638 resolved_in_text=True
+    line 4123: s_branch .lbranch_000000007890 resolved_in_text=True
+    line 4155: s_branch .lbranch_000000007fc8 resolved_in_text=True
+    line 4187: s_branch .lbranch_000000008700 resolved_in_text=True
+    line 4219: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 4224: s_cbranch_scc1 .lbranch_0000000066f4 resolved_in_text=True
+    line 4226: s_cbranch_scc1 .lbranch_000000006788 resolved_in_text=True
+    line 4228: s_cbranch_scc1 .lbranch_00000000681c resolved_in_text=True
+    line 4230: s_cbranch_scc1 .lbranch_0000000068b0 resolved_in_text=True
+    line 4262: s_branch .lbranch_0000000095a4 resolved_in_text=True
+    line 4294: s_branch .lbranch_000000009cdc resolved_in_text=True
+    line 4326: s_branch .lbranch_00000000a414 resolved_in_text=True
+    line 4358: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 5064: s_cbranch_scc0 .lbranch_000000008e4c resolved_in_text=True
+    line 5252: s_cbranch_scc0 .lbranch_000000008e54 resolved_in_text=True
+    line 5440: s_cbranch_scc0 .lbranch_000000008e5c resolved_in_text=True
+    line 5575: s_cbranch_scc0 .lbranch_000000008c54 resolved_in_text=True
+    line 5632: s_cbranch_scc0 .lbranch_000000008e64 resolved_in_text=True
+    line 5634: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 5637: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5640: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5643: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5646: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5834: s_cbranch_scc0 .lbranch_00000000ab54 resolved_in_text=True
+    line 6022: s_cbranch_scc0 .lbranch_00000000ab5c resolved_in_text=True
+    line 6210: s_cbranch_scc0 .lbranch_00000000ab64 resolved_in_text=True
+    line 6398: s_cbranch_scc0 .lbranch_00000000ab6c resolved_in_text=True
+    line 6400: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 6403: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6406: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6409: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6412: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6415: s_cbranch_scc0 .lbranch_00000000ab80 resolved_in_text=True
+    line 6499: s_cbranch_scc0 .lbranch_00000000ad68 resolved_in_text=True
+    line 6890: s_cbranch_scc1 .lbranch_00000000ba60 resolved_in_text=True
+    line 6932: s_cbranch_scc0 .lbranch_00000000ba20 resolved_in_text=True
+    line 6937: s_cbranch_scc0 .lbranch_00000000b98c resolved_in_text=True
+    line 6945: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6978: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6990: s_cbranch_scc1 .lbranch_000000005060 resolved_in_text=True
+    line 6992: s_cbranch_scc1 .lbranch_00000000554c resolved_in_text=True
+    line 6994: s_cbranch_scc1 .lbranch_000000005a58 resolved_in_text=True
+    line 6996: s_cbranch_scc1 .lbranch_000000005f48 resolved_in_text=True
+
+[reference_source] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s
+  sha256=ede0570ccc2283083638f6adbc6e8e97e617bda797b002728e0de516fed138ec
+  instruction_count=6934
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=['f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps']
+  labels=59
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=97
+  new symbol strings=0
+  selected constants={'0x0': 2966, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2, '0x40': 24, '0x80': 39, '0x100': 91, '0x400': 53, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  tile literals={'64_or_0x40': 24, '128_or_0x80': 39, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 97}
+  exact-16 label blocks=['.Lbranch_000000008c54']
+  branch inventory:
+    line 16: s_cbranch_scc0 .lbranch_00000000195c resolved_in_text=True
+    line 166: s_cbranch_scc0 .lbranch_00000000ba60 resolved_in_text=True
+    line 171: s_cbranch_scc0 .lbranch_000000001c28 resolved_in_text=True
+    line 175: s_branch .lbranch_000000001ca8 resolved_in_text=True
+    line 214: s_cbranch_scc0 .lbranch_000000001d98 resolved_in_text=True
+    line 219: s_cbranch_scc0 .lbranch_000000001d04 resolved_in_text=True
+    line 227: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 260: s_branch .lbranch_000000001da0 resolved_in_text=True
+    line 330: s_cbranch_scc1 .lbranch_000000001f08 resolved_in_text=True
+    line 332: s_cbranch_scc1 .lbranch_000000002b48 resolved_in_text=True
+    line 334: s_cbranch_scc1 .lbranch_0000000037ac resolved_in_text=True
+    line 336: s_cbranch_scc1 .lbranch_0000000043f8 resolved_in_text=True
+    line 1039: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 1100: s_cbranch_scc1 .lbranch_000000002c70 resolved_in_text=True
+    line 1748: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 2451: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 2512: s_cbranch_scc1 .lbranch_000000004520 resolved_in_text=True
+    line 3161: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3223: s_cbranch_scc0 .lbranch_000000005548 resolved_in_text=True
+    line 3386: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3388: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3449: s_cbranch_scc0 .lbranch_000000005a54 resolved_in_text=True
+    line 3506: s_cbranch_scc1 .lbranch_00000000578c resolved_in_text=True
+    line 3619: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 3621: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 3682: s_cbranch_scc0 .lbranch_000000005f44 resolved_in_text=True
+    line 3845: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 3847: s_branch .lbranch_000000006454 resolved_in_text=True
+    line 3908: s_cbranch_scc0 .lbranch_000000006450 resolved_in_text=True
+    line 3965: s_cbranch_scc1 .lbranch_000000006188 resolved_in_text=True
+    line 4078: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 4080: s_branch .lbranch_0000000066cc resolved_in_text=True
+    line 4085: s_cbranch_scc1 .lbranch_00000000647c resolved_in_text=True
+    line 4087: s_cbranch_scc1 .lbranch_000000006510 resolved_in_text=True
+    line 4089: s_cbranch_scc1 .lbranch_0000000065a4 resolved_in_text=True
+    line 4091: s_cbranch_scc1 .lbranch_000000006638 resolved_in_text=True
+    line 4123: s_branch .lbranch_000000007890 resolved_in_text=True
+    line 4155: s_branch .lbranch_000000007fc8 resolved_in_text=True
+    line 4187: s_branch .lbranch_000000008700 resolved_in_text=True
+    line 4219: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 4224: s_cbranch_scc1 .lbranch_0000000066f4 resolved_in_text=True
+    line 4226: s_cbranch_scc1 .lbranch_000000006788 resolved_in_text=True
+    line 4228: s_cbranch_scc1 .lbranch_00000000681c resolved_in_text=True
+    line 4230: s_cbranch_scc1 .lbranch_0000000068b0 resolved_in_text=True
+    line 4262: s_branch .lbranch_0000000095a4 resolved_in_text=True
+    line 4294: s_branch .lbranch_000000009cdc resolved_in_text=True
+    line 4326: s_branch .lbranch_00000000a414 resolved_in_text=True
+    line 4358: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 5064: s_cbranch_scc0 .lbranch_000000008e4c resolved_in_text=True
+    line 5252: s_cbranch_scc0 .lbranch_000000008e54 resolved_in_text=True
+    line 5440: s_cbranch_scc0 .lbranch_000000008e5c resolved_in_text=True
+    line 5575: s_cbranch_scc0 .lbranch_000000008c54 resolved_in_text=True
+    line 5632: s_cbranch_scc0 .lbranch_000000008e64 resolved_in_text=True
+    line 5634: s_branch .lbranch_000000007158 resolved_in_text=True
+    line 5637: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5640: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5643: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5646: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 5834: s_cbranch_scc0 .lbranch_00000000ab54 resolved_in_text=True
+    line 6022: s_cbranch_scc0 .lbranch_00000000ab5c resolved_in_text=True
+    line 6210: s_cbranch_scc0 .lbranch_00000000ab64 resolved_in_text=True
+    line 6398: s_cbranch_scc0 .lbranch_00000000ab6c resolved_in_text=True
+    line 6400: s_branch .lbranch_000000008e6c resolved_in_text=True
+    line 6403: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6406: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6409: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6412: s_branch .lbranch_00000000ab74 resolved_in_text=True
+    line 6415: s_cbranch_scc0 .lbranch_00000000ab80 resolved_in_text=True
+    line 6499: s_cbranch_scc0 .lbranch_00000000ad68 resolved_in_text=True
+    line 6890: s_cbranch_scc1 .lbranch_00000000ba60 resolved_in_text=True
+    line 6932: s_cbranch_scc0 .lbranch_00000000ba20 resolved_in_text=True
+    line 6937: s_cbranch_scc0 .lbranch_00000000b98c resolved_in_text=True
+    line 6945: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6978: s_branch .lbranch_00000000ba28 resolved_in_text=True
+    line 6990: s_cbranch_scc1 .lbranch_000000005060 resolved_in_text=True
+    line 6992: s_cbranch_scc1 .lbranch_00000000554c resolved_in_text=True
+    line 6994: s_cbranch_scc1 .lbranch_000000005a58 resolved_in_text=True
+    line 6996: s_cbranch_scc1 .lbranch_000000005f48 resolved_in_text=True
+
+[llvm_mc_object] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.disassembly.txt
+  sha256=dbab9ad3bcbdf391a4daa79649d9ef2be80f9f9afba32b1ad2d881bfad7bcf9c
+  instruction_count=7036
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=[]
+  labels=58
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=1
+  new symbol strings=0
+  selected constants={'0x0': 2930, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0, '0x40': 23, '0x80': 38, '0x100': 91, '0x400': 50, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2930, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0}
+  tile literals={'64_or_0x40': 23, '128_or_0x80': 38, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 1}
+  exact-16 label blocks=['L37']
+  branch inventory:
+    line 14: s_cbranch_scc0 l0 resolved_in_text=True
+    line 165: s_cbranch_scc0 l56 resolved_in_text=True
+    line 170: s_cbranch_scc0 l1 resolved_in_text=True
+    line 174: s_branch l2 resolved_in_text=True
+    line 215: s_cbranch_scc0 l4 resolved_in_text=True
+    line 220: s_cbranch_scc0 l3 resolved_in_text=True
+    line 228: s_branch l5 resolved_in_text=True
+    line 262: s_branch l5 resolved_in_text=True
+    line 334: s_cbranch_scc1 l6 resolved_in_text=True
+    line 336: s_cbranch_scc1 l7 resolved_in_text=True
+    line 338: s_cbranch_scc1 l9 resolved_in_text=True
+    line 340: s_cbranch_scc1 l10 resolved_in_text=True
+    line 1044: s_branch l33 resolved_in_text=True
+    line 1107: s_cbranch_scc1 l8 resolved_in_text=True
+    line 1755: s_branch l42 resolved_in_text=True
+    line 2459: s_branch l33 resolved_in_text=True
+    line 2522: s_cbranch_scc1 l11 resolved_in_text=True
+    line 3171: s_branch l42 resolved_in_text=True
+    line 3234: s_cbranch_scc0 l13 resolved_in_text=True
+    line 3397: s_branch l33 resolved_in_text=True
+    line 3400: s_branch l22 resolved_in_text=True
+    line 3462: s_cbranch_scc0 l16 resolved_in_text=True
+    line 3520: s_cbranch_scc1 l15 resolved_in_text=True
+    line 3633: s_branch l42 resolved_in_text=True
+    line 3636: s_branch l27 resolved_in_text=True
+    line 3698: s_cbranch_scc0 l18 resolved_in_text=True
+    line 3861: s_branch l33 resolved_in_text=True
+    line 3864: s_branch l22 resolved_in_text=True
+    line 3926: s_cbranch_scc0 l21 resolved_in_text=True
+    line 3984: s_cbranch_scc1 l20 resolved_in_text=True
+    line 4097: s_branch l42 resolved_in_text=True
+    line 4100: s_branch l27 resolved_in_text=True
+    line 4106: s_cbranch_scc1 l23 resolved_in_text=True
+    line 4108: s_cbranch_scc1 l24 resolved_in_text=True
+    line 4110: s_cbranch_scc1 l25 resolved_in_text=True
+    line 4112: s_cbranch_scc1 l26 resolved_in_text=True
+    line 4145: s_branch l34 resolved_in_text=True
+    line 4178: s_branch l35 resolved_in_text=True
+    line 4211: s_branch l36 resolved_in_text=True
+    line 4244: s_branch l33 resolved_in_text=True
+    line 4250: s_cbranch_scc1 l28 resolved_in_text=True
+    line 4252: s_cbranch_scc1 l29 resolved_in_text=True
+    line 4254: s_cbranch_scc1 l30 resolved_in_text=True
+    line 4256: s_cbranch_scc1 l31 resolved_in_text=True
+    line 4289: s_branch l43 resolved_in_text=True
+    line 4322: s_branch l44 resolved_in_text=True
+    line 4355: s_branch l45 resolved_in_text=True
+    line 4388: s_branch l42 resolved_in_text=True
+    line 5096: s_cbranch_scc0 l38 resolved_in_text=True
+    line 5285: s_cbranch_scc0 l39 resolved_in_text=True
+    line 5474: s_cbranch_scc0 l40 resolved_in_text=True
+    line 5610: s_cbranch_scc0 l37 resolved_in_text=True
+    line 5668: s_cbranch_scc0 l41 resolved_in_text=True
+    line 5670: s_branch l33 resolved_in_text=True
+    line 5674: s_branch l50 resolved_in_text=True
+    line 5678: s_branch l50 resolved_in_text=True
+    line 5682: s_branch l50 resolved_in_text=True
+    line 5686: s_branch l50 resolved_in_text=True
+    line 5875: s_cbranch_scc0 l46 resolved_in_text=True
+    line 6064: s_cbranch_scc0 l47 resolved_in_text=True
+    line 6253: s_cbranch_scc0 l48 resolved_in_text=True
+    line 6442: s_cbranch_scc0 l49 resolved_in_text=True
+    line 6444: s_branch l42 resolved_in_text=True
+    line 6448: s_branch l50 resolved_in_text=True
+    line 6452: s_branch l50 resolved_in_text=True
+    line 6456: s_branch l50 resolved_in_text=True
+    line 6460: s_branch l50 resolved_in_text=True
+    line 6464: s_cbranch_scc0 l51 resolved_in_text=True
+    line 6549: s_cbranch_scc0 l52 resolved_in_text=True
+    line 6941: s_cbranch_scc1 l56 resolved_in_text=True
+    line 6983: s_cbranch_scc0 l54 resolved_in_text=True
+    line 6988: s_cbranch_scc0 l53 resolved_in_text=True
+    line 6996: s_branch l55 resolved_in_text=True
+    line 7030: s_branch l55 resolved_in_text=True
+    line 7044: s_cbranch_scc1 l12 resolved_in_text=True
+    line 7046: s_cbranch_scc1 l14 resolved_in_text=True
+    line 7048: s_cbranch_scc1 l17 resolved_in_text=True
+    line 7050: s_cbranch_scc1 l19 resolved_in_text=True
+
+[clang_object] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.disassembly.txt
+  sha256=00ec05353ef1f37ae6755834d4fb909a60feddab643ea196947e069dad9921da
+  instruction_count=7036
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=[]
+  labels=58
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=1
+  new symbol strings=0
+  selected constants={'0x0': 2930, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0, '0x40': 23, '0x80': 38, '0x100': 91, '0x400': 50, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2930, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0}
+  tile literals={'64_or_0x40': 23, '128_or_0x80': 38, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 1}
+  exact-16 label blocks=['L37']
+  branch inventory:
+    line 14: s_cbranch_scc0 l0 resolved_in_text=True
+    line 165: s_cbranch_scc0 l56 resolved_in_text=True
+    line 170: s_cbranch_scc0 l1 resolved_in_text=True
+    line 174: s_branch l2 resolved_in_text=True
+    line 215: s_cbranch_scc0 l4 resolved_in_text=True
+    line 220: s_cbranch_scc0 l3 resolved_in_text=True
+    line 228: s_branch l5 resolved_in_text=True
+    line 262: s_branch l5 resolved_in_text=True
+    line 334: s_cbranch_scc1 l6 resolved_in_text=True
+    line 336: s_cbranch_scc1 l7 resolved_in_text=True
+    line 338: s_cbranch_scc1 l9 resolved_in_text=True
+    line 340: s_cbranch_scc1 l10 resolved_in_text=True
+    line 1044: s_branch l33 resolved_in_text=True
+    line 1107: s_cbranch_scc1 l8 resolved_in_text=True
+    line 1755: s_branch l42 resolved_in_text=True
+    line 2459: s_branch l33 resolved_in_text=True
+    line 2522: s_cbranch_scc1 l11 resolved_in_text=True
+    line 3171: s_branch l42 resolved_in_text=True
+    line 3234: s_cbranch_scc0 l13 resolved_in_text=True
+    line 3397: s_branch l33 resolved_in_text=True
+    line 3400: s_branch l22 resolved_in_text=True
+    line 3462: s_cbranch_scc0 l16 resolved_in_text=True
+    line 3520: s_cbranch_scc1 l15 resolved_in_text=True
+    line 3633: s_branch l42 resolved_in_text=True
+    line 3636: s_branch l27 resolved_in_text=True
+    line 3698: s_cbranch_scc0 l18 resolved_in_text=True
+    line 3861: s_branch l33 resolved_in_text=True
+    line 3864: s_branch l22 resolved_in_text=True
+    line 3926: s_cbranch_scc0 l21 resolved_in_text=True
+    line 3984: s_cbranch_scc1 l20 resolved_in_text=True
+    line 4097: s_branch l42 resolved_in_text=True
+    line 4100: s_branch l27 resolved_in_text=True
+    line 4106: s_cbranch_scc1 l23 resolved_in_text=True
+    line 4108: s_cbranch_scc1 l24 resolved_in_text=True
+    line 4110: s_cbranch_scc1 l25 resolved_in_text=True
+    line 4112: s_cbranch_scc1 l26 resolved_in_text=True
+    line 4145: s_branch l34 resolved_in_text=True
+    line 4178: s_branch l35 resolved_in_text=True
+    line 4211: s_branch l36 resolved_in_text=True
+    line 4244: s_branch l33 resolved_in_text=True
+    line 4250: s_cbranch_scc1 l28 resolved_in_text=True
+    line 4252: s_cbranch_scc1 l29 resolved_in_text=True
+    line 4254: s_cbranch_scc1 l30 resolved_in_text=True
+    line 4256: s_cbranch_scc1 l31 resolved_in_text=True
+    line 4289: s_branch l43 resolved_in_text=True
+    line 4322: s_branch l44 resolved_in_text=True
+    line 4355: s_branch l45 resolved_in_text=True
+    line 4388: s_branch l42 resolved_in_text=True
+    line 5096: s_cbranch_scc0 l38 resolved_in_text=True
+    line 5285: s_cbranch_scc0 l39 resolved_in_text=True
+    line 5474: s_cbranch_scc0 l40 resolved_in_text=True
+    line 5610: s_cbranch_scc0 l37 resolved_in_text=True
+    line 5668: s_cbranch_scc0 l41 resolved_in_text=True
+    line 5670: s_branch l33 resolved_in_text=True
+    line 5674: s_branch l50 resolved_in_text=True
+    line 5678: s_branch l50 resolved_in_text=True
+    line 5682: s_branch l50 resolved_in_text=True
+    line 5686: s_branch l50 resolved_in_text=True
+    line 5875: s_cbranch_scc0 l46 resolved_in_text=True
+    line 6064: s_cbranch_scc0 l47 resolved_in_text=True
+    line 6253: s_cbranch_scc0 l48 resolved_in_text=True
+    line 6442: s_cbranch_scc0 l49 resolved_in_text=True
+    line 6444: s_branch l42 resolved_in_text=True
+    line 6448: s_branch l50 resolved_in_text=True
+    line 6452: s_branch l50 resolved_in_text=True
+    line 6456: s_branch l50 resolved_in_text=True
+    line 6460: s_branch l50 resolved_in_text=True
+    line 6464: s_cbranch_scc0 l51 resolved_in_text=True
+    line 6549: s_cbranch_scc0 l52 resolved_in_text=True
+    line 6941: s_cbranch_scc1 l56 resolved_in_text=True
+    line 6983: s_cbranch_scc0 l54 resolved_in_text=True
+    line 6988: s_cbranch_scc0 l53 resolved_in_text=True
+    line 6996: s_branch l55 resolved_in_text=True
+    line 7030: s_branch l55 resolved_in_text=True
+    line 7044: s_cbranch_scc1 l12 resolved_in_text=True
+    line 7046: s_cbranch_scc1 l14 resolved_in_text=True
+    line 7048: s_cbranch_scc1 l17 resolved_in_text=True
+    line 7050: s_cbranch_scc1 l19 resolved_in_text=True
+
+[lld_code_object] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.disassembly.txt
+  sha256=7e87655c034b95b5702dd0c0049fe50db4c9b0d9c885852177d93f7af0b24741
+  instruction_count=7036
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=[]
+  labels=58
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=1
+  new symbol strings=0
+  selected constants={'0x0': 2930, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0, '0x40': 23, '0x80': 38, '0x100': 91, '0x400': 50, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2930, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0}
+  tile literals={'64_or_0x40': 23, '128_or_0x80': 38, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 1}
+  exact-16 label blocks=['L37']
+  branch inventory:
+    line 14: s_cbranch_scc0 l0 resolved_in_text=True
+    line 165: s_cbranch_scc0 l56 resolved_in_text=True
+    line 170: s_cbranch_scc0 l1 resolved_in_text=True
+    line 174: s_branch l2 resolved_in_text=True
+    line 215: s_cbranch_scc0 l4 resolved_in_text=True
+    line 220: s_cbranch_scc0 l3 resolved_in_text=True
+    line 228: s_branch l5 resolved_in_text=True
+    line 262: s_branch l5 resolved_in_text=True
+    line 334: s_cbranch_scc1 l6 resolved_in_text=True
+    line 336: s_cbranch_scc1 l7 resolved_in_text=True
+    line 338: s_cbranch_scc1 l9 resolved_in_text=True
+    line 340: s_cbranch_scc1 l10 resolved_in_text=True
+    line 1044: s_branch l33 resolved_in_text=True
+    line 1107: s_cbranch_scc1 l8 resolved_in_text=True
+    line 1755: s_branch l42 resolved_in_text=True
+    line 2459: s_branch l33 resolved_in_text=True
+    line 2522: s_cbranch_scc1 l11 resolved_in_text=True
+    line 3171: s_branch l42 resolved_in_text=True
+    line 3234: s_cbranch_scc0 l13 resolved_in_text=True
+    line 3397: s_branch l33 resolved_in_text=True
+    line 3400: s_branch l22 resolved_in_text=True
+    line 3462: s_cbranch_scc0 l16 resolved_in_text=True
+    line 3520: s_cbranch_scc1 l15 resolved_in_text=True
+    line 3633: s_branch l42 resolved_in_text=True
+    line 3636: s_branch l27 resolved_in_text=True
+    line 3698: s_cbranch_scc0 l18 resolved_in_text=True
+    line 3861: s_branch l33 resolved_in_text=True
+    line 3864: s_branch l22 resolved_in_text=True
+    line 3926: s_cbranch_scc0 l21 resolved_in_text=True
+    line 3984: s_cbranch_scc1 l20 resolved_in_text=True
+    line 4097: s_branch l42 resolved_in_text=True
+    line 4100: s_branch l27 resolved_in_text=True
+    line 4106: s_cbranch_scc1 l23 resolved_in_text=True
+    line 4108: s_cbranch_scc1 l24 resolved_in_text=True
+    line 4110: s_cbranch_scc1 l25 resolved_in_text=True
+    line 4112: s_cbranch_scc1 l26 resolved_in_text=True
+    line 4145: s_branch l34 resolved_in_text=True
+    line 4178: s_branch l35 resolved_in_text=True
+    line 4211: s_branch l36 resolved_in_text=True
+    line 4244: s_branch l33 resolved_in_text=True
+    line 4250: s_cbranch_scc1 l28 resolved_in_text=True
+    line 4252: s_cbranch_scc1 l29 resolved_in_text=True
+    line 4254: s_cbranch_scc1 l30 resolved_in_text=True
+    line 4256: s_cbranch_scc1 l31 resolved_in_text=True
+    line 4289: s_branch l43 resolved_in_text=True
+    line 4322: s_branch l44 resolved_in_text=True
+    line 4355: s_branch l45 resolved_in_text=True
+    line 4388: s_branch l42 resolved_in_text=True
+    line 5096: s_cbranch_scc0 l38 resolved_in_text=True
+    line 5285: s_cbranch_scc0 l39 resolved_in_text=True
+    line 5474: s_cbranch_scc0 l40 resolved_in_text=True
+    line 5610: s_cbranch_scc0 l37 resolved_in_text=True
+    line 5668: s_cbranch_scc0 l41 resolved_in_text=True
+    line 5670: s_branch l33 resolved_in_text=True
+    line 5674: s_branch l50 resolved_in_text=True
+    line 5678: s_branch l50 resolved_in_text=True
+    line 5682: s_branch l50 resolved_in_text=True
+    line 5686: s_branch l50 resolved_in_text=True
+    line 5875: s_cbranch_scc0 l46 resolved_in_text=True
+    line 6064: s_cbranch_scc0 l47 resolved_in_text=True
+    line 6253: s_cbranch_scc0 l48 resolved_in_text=True
+    line 6442: s_cbranch_scc0 l49 resolved_in_text=True
+    line 6444: s_branch l42 resolved_in_text=True
+    line 6448: s_branch l50 resolved_in_text=True
+    line 6452: s_branch l50 resolved_in_text=True
+    line 6456: s_branch l50 resolved_in_text=True
+    line 6460: s_branch l50 resolved_in_text=True
+    line 6464: s_cbranch_scc0 l51 resolved_in_text=True
+    line 6549: s_cbranch_scc0 l52 resolved_in_text=True
+    line 6941: s_cbranch_scc1 l56 resolved_in_text=True
+    line 6983: s_cbranch_scc0 l54 resolved_in_text=True
+    line 6988: s_cbranch_scc0 l53 resolved_in_text=True
+    line 6996: s_branch l55 resolved_in_text=True
+    line 7030: s_branch l55 resolved_in_text=True
+    line 7044: s_cbranch_scc1 l12 resolved_in_text=True
+    line 7046: s_cbranch_scc1 l14 resolved_in_text=True
+    line 7048: s_cbranch_scc1 l17 resolved_in_text=True
+    line 7050: s_cbranch_scc1 l19 resolved_in_text=True
+
+[clang_code_object] /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.disassembly.txt
+  sha256=31cba8a65b56cc98507ecba4ee2c728fa91429a9165a59cc9664913dd5afe87d
+  instruction_count=7036
+  wmma=512
+  ds_load_b128=768
+  ds_load_b32=192
+  ds_store_or_write=64
+  tensor_load_to_lds=56
+  tensor_store_from_lds=2
+  s_wait_dscnt=50
+  s_wait_tensorcnt=23
+  s_wait_alu=1
+  wg_barrier_signal=62
+  wg_barrier_wait=62
+  cluster_barrier_signal=3
+  cluster_barrier_wait=11
+  conditional_branch=43
+  unconditional_branch=35
+  conversion=262
+  ds_store/write variants={'ds_store_b128': 64}
+  conversion variants={'v_cvt_f32_u32_e32': 3, 'v_cvt_pk_bf16_f32': 256, 'v_cvt_u32_f32_e32': 3}
+  WMMA variants={'v_wmma_scale_f32_32x16x128_f4': 512}
+  kernel symbols=[]
+  labels=58
+  branches=78
+  unresolved symbolic branches=0
+  old symbol strings=1
+  new symbol strings=0
+  selected constants={'0x0': 2930, '0x4000': 2, '0x8000': 5, '0xc000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6, '0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0, '0x40': 23, '0x80': 38, '0x100': 91, '0x400': 50, '0x1000': 36, '0x2000': 16, '0x26000': 0, '0x2a000': 0}
+  new ring constants={'0x00000': 2930, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old-only ring constants={'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 0}
+  tile literals={'64_or_0x40': 23, '128_or_0x80': 38, '256_or_0x100': 91}
+  tile strings={'64x64': 0, '128x128': 0, '256x256': 1}
+  exact-16 label blocks=['L37']
+  branch inventory:
+    line 14: s_cbranch_scc0 l0 resolved_in_text=True
+    line 165: s_cbranch_scc0 l56 resolved_in_text=True
+    line 170: s_cbranch_scc0 l1 resolved_in_text=True
+    line 174: s_branch l2 resolved_in_text=True
+    line 215: s_cbranch_scc0 l4 resolved_in_text=True
+    line 220: s_cbranch_scc0 l3 resolved_in_text=True
+    line 228: s_branch l5 resolved_in_text=True
+    line 262: s_branch l5 resolved_in_text=True
+    line 334: s_cbranch_scc1 l6 resolved_in_text=True
+    line 336: s_cbranch_scc1 l7 resolved_in_text=True
+    line 338: s_cbranch_scc1 l9 resolved_in_text=True
+    line 340: s_cbranch_scc1 l10 resolved_in_text=True
+    line 1044: s_branch l33 resolved_in_text=True
+    line 1107: s_cbranch_scc1 l8 resolved_in_text=True
+    line 1755: s_branch l42 resolved_in_text=True
+    line 2459: s_branch l33 resolved_in_text=True
+    line 2522: s_cbranch_scc1 l11 resolved_in_text=True
+    line 3171: s_branch l42 resolved_in_text=True
+    line 3234: s_cbranch_scc0 l13 resolved_in_text=True
+    line 3397: s_branch l33 resolved_in_text=True
+    line 3400: s_branch l22 resolved_in_text=True
+    line 3462: s_cbranch_scc0 l16 resolved_in_text=True
+    line 3520: s_cbranch_scc1 l15 resolved_in_text=True
+    line 3633: s_branch l42 resolved_in_text=True
+    line 3636: s_branch l27 resolved_in_text=True
+    line 3698: s_cbranch_scc0 l18 resolved_in_text=True
+    line 3861: s_branch l33 resolved_in_text=True
+    line 3864: s_branch l22 resolved_in_text=True
+    line 3926: s_cbranch_scc0 l21 resolved_in_text=True
+    line 3984: s_cbranch_scc1 l20 resolved_in_text=True
+    line 4097: s_branch l42 resolved_in_text=True
+    line 4100: s_branch l27 resolved_in_text=True
+    line 4106: s_cbranch_scc1 l23 resolved_in_text=True
+    line 4108: s_cbranch_scc1 l24 resolved_in_text=True
+    line 4110: s_cbranch_scc1 l25 resolved_in_text=True
+    line 4112: s_cbranch_scc1 l26 resolved_in_text=True
+    line 4145: s_branch l34 resolved_in_text=True
+    line 4178: s_branch l35 resolved_in_text=True
+    line 4211: s_branch l36 resolved_in_text=True
+    line 4244: s_branch l33 resolved_in_text=True
+    line 4250: s_cbranch_scc1 l28 resolved_in_text=True
+    line 4252: s_cbranch_scc1 l29 resolved_in_text=True
+    line 4254: s_cbranch_scc1 l30 resolved_in_text=True
+    line 4256: s_cbranch_scc1 l31 resolved_in_text=True
+    line 4289: s_branch l43 resolved_in_text=True
+    line 4322: s_branch l44 resolved_in_text=True
+    line 4355: s_branch l45 resolved_in_text=True
+    line 4388: s_branch l42 resolved_in_text=True
+    line 5096: s_cbranch_scc0 l38 resolved_in_text=True
+    line 5285: s_cbranch_scc0 l39 resolved_in_text=True
+    line 5474: s_cbranch_scc0 l40 resolved_in_text=True
+    line 5610: s_cbranch_scc0 l37 resolved_in_text=True
+    line 5668: s_cbranch_scc0 l41 resolved_in_text=True
+    line 5670: s_branch l33 resolved_in_text=True
+    line 5674: s_branch l50 resolved_in_text=True
+    line 5678: s_branch l50 resolved_in_text=True
+    line 5682: s_branch l50 resolved_in_text=True
+    line 5686: s_branch l50 resolved_in_text=True
+    line 5875: s_cbranch_scc0 l46 resolved_in_text=True
+    line 6064: s_cbranch_scc0 l47 resolved_in_text=True
+    line 6253: s_cbranch_scc0 l48 resolved_in_text=True
+    line 6442: s_cbranch_scc0 l49 resolved_in_text=True
+    line 6444: s_branch l42 resolved_in_text=True
+    line 6448: s_branch l50 resolved_in_text=True
+    line 6452: s_branch l50 resolved_in_text=True
+    line 6456: s_branch l50 resolved_in_text=True
+    line 6460: s_branch l50 resolved_in_text=True
+    line 6464: s_cbranch_scc0 l51 resolved_in_text=True
+    line 6549: s_cbranch_scc0 l52 resolved_in_text=True
+    line 6941: s_cbranch_scc1 l56 resolved_in_text=True
+    line 6983: s_cbranch_scc0 l54 resolved_in_text=True
+    line 6988: s_cbranch_scc0 l53 resolved_in_text=True
+    line 6996: s_branch l55 resolved_in_text=True
+    line 7030: s_branch l55 resolved_in_text=True
+    line 7044: s_cbranch_scc1 l12 resolved_in_text=True
+    line 7046: s_cbranch_scc1 l14 resolved_in_text=True
+    line 7048: s_cbranch_scc1 l17 resolved_in_text=True
+    line 7050: s_cbranch_scc1 l19 resolved_in_text=True
+
+STATIC AUDIT WARNINGS
+  none
+
+HARD TARGET-CONTRACT GATES
+  unchanged_reference_copy: True
+  FAIL: required_symbol_in_target_source
+  FAIL: required_symbol_in_every_produced_disassembly
+  FAIL: target_group_segment_exactly_172032
+  FAIL: target_source_exactly_one_tensor_store_from_lds
+  FAIL: every_produced_disassembly_exactly_one_tensor_store_from_lds
+  failure_count: 5
+  CONTRACT FAILURE: required_symbol_in_target_source
+  CONTRACT FAILURE: required_symbol_in_every_produced_disassembly
+  CONTRACT FAILURE: target_group_segment_exactly_172032
+  CONTRACT FAILURE: target_source_exactly_one_tensor_store_from_lds
+  CONTRACT FAILURE: every_produced_disassembly_exactly_one_tensor_store_from_lds
+  PROMINENT OLD-CONTRACT FINDINGS:
+    old_256_symbol_in_target_source: True
+    old_256_symbol_in_produced_disassembly: {'llvm_mc_object': 1, 'clang_object': 1, 'lld_code_object': 1, 'clang_code_object': 1}
+    old_group_segment_327680_values: [327680]
+    old_next_free_vgpr_1024_values: [1024]
+    metadata_old_symbol_hit_count: 310
+    metadata_old_lds_hit_count: 10
+    metadata_old_vgpr_hit_count: 11
+
+DESIGN HEURISTICS (SEARCH AIDS ONLY; NOT SEMANTIC PROOF)
+  heuristic_notice: Literal presence, nearby-barrier windows, and raw barrier counts are search aids only; they are not semantic proof and never hard failures.
+  new_ring_address_occurrences: {'0x00000': 2966, '0x04000': 2, '0x08000': 5, '0x0c000': 10, '0x10000': 7, '0x10400': 0, '0x10800': 3, '0x10c00': 0, '0x11000': 3, '0x11400': 0, '0x11800': 3, '0x11c00': 0, '0x12000': 5, '0x16000': 0, '0x1a000': 5, '0x1e000': 0, '0x22000': 6}
+  old_only_ring_address_occurrences: {'0x30000': 7, '0x38000': 5, '0x40000': 10, '0x48000': 5, '0x50000': 2}
+  output_staging_boundary_0x22000_occurrences: 6
+  fixed_lds_end_0x2a000_occurrences: 0
+  tile_offset_128_literal_occurrences: 39
+  wave_offset_64_literal_occurrences: 24
+  wait_alu_count: 1
+  wg_barrier_signal_count: 62
+  wg_barrier_wait_count: 62
+  cluster_barrier_signal_count: 3
+  cluster_barrier_wait_count: 11
+  wmma_total: 512
+  wmma_total_divmod_16: [32, 0]
+  wmma_label_blocks_with_exactly_16: ['.Lbranch_000000008c54']
+  wmma_phase_claim: None. Exact-16 label blocks and total/divmod are search aids only; semantic phase boundaries are not proven.
+  output_tdm_store_count: 2
+  output_tdm_shape_interpretation: CONTRACT FAIL: expected exactly one output TDM store
+  output_store_protocol_windows: [{'instruction_index': 6615, 'line': 6677, 'wg_pair_within_32_instructions_before': False, 'wg_pair_within_32_instructions_after': False, 'wait_tensorcnt_within_32_after': False}, {'instruction_index': 6802, 'line': 6864, 'wg_pair_within_32_instructions_before': True, 'wg_pair_within_32_instructions_after': False, 'wait_tensorcnt_within_32_after': False}]
+  two_output_wg_rounds_statically_detected: False
+  WARNING: HEURISTIC WARNING: expected packed-ring literals missing: 0x10400, 0x10c00, 0x11400, 0x11c00, 0x16000, 0x1e000
+  WARNING: HEURISTIC WARNING: candidate fixed-LDS end/resource literal 0x2A000 (172032) is absent
+  WARNING: HEURISTIC WARNING: nearby-barrier search did not find two output WG rounds (before first and after last output TDM); this is not semantic proof
+  WARNING: HEURISTIC WARNING: raw cluster barrier signal/wait counts are not balanced (3 vs 11); counts do not prove protocol semantics
+  WARNING: HEURISTIC WARNING: old-only ring/LDS literals remain: 0x30000, 0x38000, 0x40000, 0x48000, 0x50000
+  WARNING: original 256x256 kernel symbol remains
+  WARNING: new 128x128 contract kernel symbol is absent
+  WARNING: old 327680-byte LDS descriptor remains
+  WARNING: old next_free_vgpr=1024 descriptor remains
+
+METADATA / RESOURCE INSPECTION
+Old 256x256 symbol hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4: 	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5: 	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7: 	.type	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps,@function
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:8: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:16: 	s_cbranch_scc0 .Lbranch_00000000195c                                          ; 000000001928: BFA1000C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:166: 	s_cbranch_scc0 .Lbranch_00000000ba60                                       ; 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:171: 	s_cbranch_scc0 .Lbranch_000000001c28                                           ; 000000001C14: BFA10004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x328>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:175: 	s_branch .Lbranch_000000001ca8                                                ; 000000001C24: BFA00020 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3a8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:214: 	s_cbranch_scc0 .Lbranch_000000001d98                                          ; 000000001CCC: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x498>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:219: 	s_cbranch_scc0 .Lbranch_000000001d04                                           ; 000000001CE0: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x404>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:227: 	s_branch .Lbranch_000000001da0                                                ; 000000001D00: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:260: 	s_branch .Lbranch_000000001da0                                                 ; 000000001D94: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4a0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:330: 	s_cbranch_scc1 .Lbranch_000000001f08                                           ; 000000001EEC: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x608>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:332: 	s_cbranch_scc1 .Lbranch_000000002b48                                         ; 000000001EF4: BFA20314 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1248>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:334: 	s_cbranch_scc1 .Lbranch_0000000037ac                                        ; 000000001EFC: BFA2062B <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1eac>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:336: 	s_cbranch_scc1 .Lbranch_0000000043f8                                        ; 000000001F04: BFA2093C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2af8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1039: 	s_branch .Lbranch_000000007158                                              ; 000000002B44: BFA01184 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1100: 	s_cbranch_scc1 .Lbranch_000000002c70                                       ; 000000002C80: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x1370>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:1748: 	s_branch .Lbranch_000000008e6c                                              ; 0000000037A8: BFA015B0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:2451: 	s_branch .Lbranch_000000007158                                              ; 0000000043F4: BFA00B58 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:2512: 	s_cbranch_scc1 .Lbranch_000000004520                                       ; 000000004530: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x2c20>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3161: 	s_branch .Lbranch_000000008e6c                                              ; 00000000505C: BFA00F83 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3223: 	s_cbranch_scc0 .Lbranch_000000005548                                         ; 000000005194: BFA100EC <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c48>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3386: 	s_branch .Lbranch_000000007158                                              ; 000000005544: BFA00704 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3388: 	s_branch .Lbranch_000000006454                                               ; 000000005548: BFA003C2 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3449: 	s_cbranch_scc0 .Lbranch_000000005a54                                         ; 00000000567C: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4154>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3506: 	s_cbranch_scc1 .Lbranch_00000000578c                                       ; 00000000579C: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3e8c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3619: 	s_branch .Lbranch_000000008e6c                                              ; 000000005A50: BFA00D06 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3621: 	s_branch .Lbranch_0000000066cc                                               ; 000000005A54: BFA0031D <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3682: 	s_cbranch_scc0 .Lbranch_000000005f44                                         ; 000000005B88: BFA100EE <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4644>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3845: 	s_branch .Lbranch_000000007158                                              ; 000000005F40: BFA00485 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3847: 	s_branch .Lbranch_000000006454                                               ; 000000005F44: BFA00143 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b54>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3908: 	s_cbranch_scc0 .Lbranch_000000006450                                         ; 000000006078: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b50>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:3965: 	s_cbranch_scc1 .Lbranch_000000006188                                       ; 000000006198: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4888>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4078: 	s_branch .Lbranch_000000008e6c                                              ; 00000000644C: BFA00A87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4080: 	s_branch .Lbranch_0000000066cc                                               ; 000000006450: BFA0009E <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4dcc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4085: 	s_cbranch_scc1 .Lbranch_00000000647c                                           ; 000000006460: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4b7c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4087: 	s_cbranch_scc1 .Lbranch_000000006510                                          ; 000000006468: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4c10>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4089: 	s_cbranch_scc1 .Lbranch_0000000065a4                                          ; 000000006470: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4ca4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4091: 	s_cbranch_scc1 .Lbranch_000000006638                                         ; 000000006478: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4d38>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4123: 	s_branch .Lbranch_000000007890                                              ; 00000000650C: BFA004E0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5f90>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4155: 	s_branch .Lbranch_000000007fc8                                              ; 0000000065A0: BFA00689 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x66c8>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4187: 	s_branch .Lbranch_000000008700                                              ; 000000006634: BFA00832 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x6e00>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4219: 	s_branch .Lbranch_000000007158                                               ; 0000000066C8: BFA002A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4224: 	s_cbranch_scc1 .Lbranch_0000000066f4                                           ; 0000000066D8: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4df4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4226: 	s_cbranch_scc1 .Lbranch_000000006788                                          ; 0000000066E0: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4e88>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4228: 	s_cbranch_scc1 .Lbranch_00000000681c                                          ; 0000000066E8: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4f1c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4230: 	s_cbranch_scc1 .Lbranch_0000000068b0                                         ; 0000000066F0: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4fb0>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4262: 	s_branch .Lbranch_0000000095a4                                              ; 000000006784: BFA00B87 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7ca4>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4294: 	s_branch .Lbranch_000000009cdc                                              ; 000000006818: BFA00D30 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x83dc>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4326: 	s_branch .Lbranch_00000000a414                                              ; 0000000068AC: BFA00ED9 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x8b14>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:4358: 	s_branch .Lbranch_000000008e6c                                              ; 000000006940: BFA0094A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5064: 	s_cbranch_scc0 .Lbranch_000000008e4c                                        ; 00000000788C: BFA1056F <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x754c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5252: 	s_cbranch_scc0 .Lbranch_000000008e54                                         ; 000000007FC4: BFA103A3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7554>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5440: 	s_cbranch_scc0 .Lbranch_000000008e5c                                         ; 0000000086FC: BFA101D7 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x755c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5575: 	s_cbranch_scc0 .Lbranch_000000008c54                                           ; 000000008C4C: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7354>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5632: 	s_cbranch_scc0 .Lbranch_000000008e64                                           ; 000000008E40: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x7564>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5634: 	s_branch .Lbranch_000000007158                                             ; 000000008E48: BFA0F8C3 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x5858>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5637: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E50: BFA00748 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5640: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E58: BFA00746 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5643: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E60: BFA00744 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5646: 	s_branch .Lbranch_00000000ab74                                              ; 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:5834: 	s_cbranch_scc0 .Lbranch_00000000ab54                                        ; 0000000095A0: BFA1056C <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9254>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6022: 	s_cbranch_scc0 .Lbranch_00000000ab5c                                         ; 000000009CD8: BFA103A0 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x925c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6210: 	s_cbranch_scc0 .Lbranch_00000000ab64                                         ; 00000000A410: BFA101D4 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9264>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6398: 	s_cbranch_scc0 .Lbranch_00000000ab6c                                           ; 00000000AB48: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x926c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6400: 	s_branch .Lbranch_000000008e6c                                             ; 00000000AB50: BFA0F8C6 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x756c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6403: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB58: BFA00006 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6406: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB60: BFA00004 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6409: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB68: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6412: 	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB70: BFA00000 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9274>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6415: 	s_cbranch_scc0 .Lbranch_00000000ab80                                           ; 00000000AB78: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9280>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6499: 	s_cbranch_scc0 .Lbranch_00000000ad68                                          ; 00000000AD1C: BFA10012 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x9468>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6890: 	s_cbranch_scc1 .Lbranch_00000000ba60                                         ; 00000000B88C: BFA20074 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa160>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6932: 	s_cbranch_scc0 .Lbranch_00000000ba20                                          ; 00000000B954: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa120>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6937: 	s_cbranch_scc0 .Lbranch_00000000b98c                                           ; 00000000B968: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa08c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6945: 	s_branch .Lbranch_00000000ba28                                                ; 00000000B988: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6978: 	s_branch .Lbranch_00000000ba28                                                 ; 00000000BA1C: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0xa128>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6990: 	s_cbranch_scc1 .Lbranch_000000005060                                       ; 00000000BA44: BFA2E586 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3760>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6992: 	s_cbranch_scc1 .Lbranch_00000000554c                                       ; 00000000BA4C: BFA2E6BF <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x3c4c>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6994: 	s_cbranch_scc1 .Lbranch_000000005a58                                       ; 00000000BA54: BFA2E800 <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4158>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:6996: 	s_cbranch_scc1 .Lbranch_000000005f48                                       ; 00000000BA5C: BFA2E93A <f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps+0x4648>
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7003: 	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7046: 	.size	f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7049: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7050: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr, 104
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7051: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7052: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7053: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc, 1
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7054: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7055: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7056: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7057: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call, 0
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7130:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7133:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:49:      1: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:50:      2: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:55:      1: 0000000000000400     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:56:      2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:57:      3: 0000000000000068     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:58:      4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:59:      5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:60:      6: 0000000000000001     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:61:      7: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:62:      8: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:63:      9: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:64:     10: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:70:     16: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:71:     17: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:138:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:141:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:43:      1: 0000000000000400     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:44:      2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:45:      3: 0000000000000068     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:46:      4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:47:      5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:48:      6: 0000000000000001     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:49:      7: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:50:      8: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:51:      9: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:52:     10: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:57:     15: 0000000000000000 41320 FUNC    GLOBAL PROTECTED   2 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:58:     16: 0000000000000000    64 OBJECT  GLOBAL PROTECTED   3 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:125:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:128:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:49:      1: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:50:      2: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:55:      1: 0000000000000400     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:56:      2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:57:      3: 0000000000000068     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:58:      4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:59:      5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:60:      6: 0000000000000001     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:61:      7: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:62:      8: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:63:      9: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:64:     10: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:70:     16: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:71:     17: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:138:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:141:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:43:      1: 0000000000000400     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:44:      2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:45:      3: 0000000000000068     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:46:      4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:47:      5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:48:      6: 0000000000000001     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:49:      7: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:50:      8: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:51:      9: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:52:     10: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:57:     15: 0000000000000000 41320 FUNC    GLOBAL PROTECTED   2 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:58:     16: 0000000000000000    64 OBJECT  GLOBAL PROTECTED   3 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:125:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:128:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:272:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr (1)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:281:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr (56)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:290:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr (111)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:299:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier (171)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:308:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size (235)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:317:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc (298)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:326:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch (353)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:335:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack (417)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:344:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion (483)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:353:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call (543)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:409:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps (696)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:420:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd (742)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:503:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:506:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.relocations.txt:9:     0x10 R_AMDGPU_REL64 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps 0x10
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:179:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr (94)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:188:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr (249)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:197:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr (169)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:206:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier (333)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:215:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size (667)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:224:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc (785)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:233:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch (603)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:242:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack (521)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:251:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion (397)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:260:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call (457)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:305:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps (7)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:316:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd (736)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:399:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:402:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:272:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr (1)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:281:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr (56)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:290:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr (111)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:299:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier (171)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:308:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size (235)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:317:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc (298)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:326:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch (353)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:335:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack (417)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:344:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion (483)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:353:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call (543)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:409:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps (696)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:420:     Name: f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd (742)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:503:     .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:506:     .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readobj.relocations.txt:9:     0x10 R_AMDGPU_REL64 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps 0x10
+  ... 110 additional hits retained in JSON
+New 128x128 contract symbol hits:
+  none
+Old 327680-byte LDS hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7004: 		.amdhsa_group_segment_fixed_size 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7126:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:134:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:121:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:134:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:121:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:499:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:395:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:499:     .group_segment_fixed_size: 327680
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readobj.txt:395:     .group_segment_fixed_size: 327680
+Candidate 172032-byte LDS hits:
+  none
+Old 1024-VGPR hits:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7023: 		.amdhsa_next_free_vgpr 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7048: 	.set f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr, 1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s:7136:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readelf.txt:144:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readelf.txt:131:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readelf.txt:144:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readelf.txt:131:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.readobj.txt:509:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt:405:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.readobj.txt:509:     .vgpr_count:     1024
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readobj.txt:405:     .vgpr_count:     1024
+  WARNING: original 256x256 kernel symbol remains in source/ELF reports
+  WARNING: 128x128 contract kernel symbol is absent from source/ELF reports
+  WARNING: old 327680-byte (0x50000) LDS resource remains
+  WARNING: old 1024-VGPR resource remains
+  WARNING: candidate 172032-byte (0x2A000) LDS resource is absent
+
+LLVM-MC VS CLANG OBJECT COMPARISON
+{
+  "comparison": {
+    "available": true,
+    "category_count_differences": {},
+    "instruction_count_equal": true,
+    "normalized_instruction_hash_equal": true,
+    "size_equal": true,
+    "symbol_sets_equal": true,
+    "symbols_only_clang": [],
+    "symbols_only_llvm_mc": [],
+    "whole_elf_difference_is_not_alone_a_failure": true,
+    "whole_elf_hash_equal": true
+  },
+  "routes": {
+    "clang_object": {
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "disassembly_path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.disassembly.txt",
+      "elf_sha256": "d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9",
+      "instruction_count": 7036,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o",
+      "size_bytes": 45232,
+      "symbols": [
+        "amdgpu.max_num_agpr",
+        "amdgpu.max_num_named_barrier",
+        "amdgpu.max_num_sgpr",
+        "amdgpu.max_num_vgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc"
+      ]
+    },
+    "llvm_mc_object": {
+      "counts": {
+        "cluster_barrier_signal": 3,
+        "cluster_barrier_wait": 11,
+        "conditional_branch": 43,
+        "conversion": 262,
+        "ds_load_b128": 768,
+        "ds_load_b32": 192,
+        "ds_store_or_write": 64,
+        "s_wait_alu": 1,
+        "s_wait_dscnt": 50,
+        "s_wait_tensorcnt": 23,
+        "tensor_load_to_lds": 56,
+        "tensor_store_from_lds": 2,
+        "unconditional_branch": 35,
+        "wg_barrier_signal": 62,
+        "wg_barrier_wait": 62,
+        "wmma": 512
+      },
+      "disassembly_path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.disassembly.txt",
+      "elf_sha256": "d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9",
+      "instruction_count": 7036,
+      "normalized_instruction_sha256": "4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0",
+      "path": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o",
+      "size_bytes": 45232,
+      "symbols": [
+        "amdgpu.max_num_agpr",
+        "amdgpu.max_num_named_barrier",
+        "amdgpu.max_num_sgpr",
+        "amdgpu.max_num_vgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch",
+        "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc"
+      ]
+    }
+  },
+  "warnings": []
+}
+Whole-ELF hash/size differences alone are informational and do not fail validation.
+
+ARTIFACTS
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target_contract_gates.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env
+STATUS  [static_audit]: 0
+PASS  6. Metadata/resources           8 generic ELF note decode(s) succeeded; 4 unsupported specialized flag invocation(s) skipped
+PASS  7. Static opcode audit          target source, reference source, and 4 produced disassembly input(s) audited
+FAIL  8. Design invariants            INCOMPLETE unchanged reference-copy target; 5 hard final-contract gate(s) failed
 
 ================================================================================
 9. Optional existing parser/tooling applicability
@@ -31856,6 +32939,35 @@ WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI m
 ================================================================================
 10. Round-trip and cross-route sanity
 ================================================================================
+route comparison JSON: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
+clang_object:
+  path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+  size_bytes: 45232
+  elf_sha256: d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9
+  instruction_count: 7036
+  normalized_instruction_sha256: 4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0
+  symbols: ['amdgpu.max_num_agpr', 'amdgpu.max_num_named_barrier', 'amdgpu.max_num_sgpr', 'amdgpu.max_num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc']
+  counts: {'cluster_barrier_signal': 3, 'cluster_barrier_wait': 11, 'conditional_branch': 43, 'conversion': 262, 'ds_load_b128': 768, 'ds_load_b32': 192, 'ds_store_or_write': 64, 's_wait_alu': 1, 's_wait_dscnt': 50, 's_wait_tensorcnt': 23, 'tensor_load_to_lds': 56, 'tensor_store_from_lds': 2, 'unconditional_branch': 35, 'wg_barrier_signal': 62, 'wg_barrier_wait': 62, 'wmma': 512}
+llvm_mc_object:
+  path: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+  size_bytes: 45232
+  elf_sha256: d855db5a555860d4482f6642cac5d0a1334e5c037e12c2913c22fcfcbafc1db9
+  instruction_count: 7036
+  normalized_instruction_sha256: 4662391b1f6451c145795aa1336bbd715857e113abe57e5c6c52e85d7aff9aa0
+  symbols: ['amdgpu.max_num_agpr', 'amdgpu.max_num_named_barrier', 'amdgpu.max_num_sgpr', 'amdgpu.max_num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch', 'f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc']
+  counts: {'cluster_barrier_signal': 3, 'cluster_barrier_wait': 11, 'conditional_branch': 43, 'conversion': 262, 'ds_load_b128': 768, 'ds_load_b32': 192, 'ds_store_or_write': 64, 's_wait_alu': 1, 's_wait_dscnt': 50, 's_wait_tensorcnt': 23, 'tensor_load_to_lds': 56, 'tensor_store_from_lds': 2, 'unconditional_branch': 35, 'wg_barrier_signal': 62, 'wg_barrier_wait': 62, 'wmma': 512}
+comparison:
+  available: True
+  category_count_differences: {}
+  instruction_count_equal: True
+  normalized_instruction_hash_equal: True
+  size_equal: True
+  symbol_sets_equal: True
+  symbols_only_clang: []
+  symbols_only_llvm_mc: []
+  whole_elf_difference_is_not_alone_a_failure: True
+  whole_elf_hash_equal: True
+NOTE: whole-ELF differences alone are non-semantic and are not a failure.
 PASS  10. Round-trip sanity           ELF/disassembly sanity passed; no unresolved symbols reported
 
 ================================================================================
@@ -31874,13 +32986,14 @@ WARN  2. Input integrity              target is byte-for-byte identical to refer
 PASS  3. Assembly routes              llvm-mc and clang each produced a valid object from the exact copied source
 PASS  4. Code-object link             loadable-style shared AMDHSA code object produced
 PASS  5. Disassembly                  4 produced ELF file(s) fully disassembled
-WARN  6. Metadata/resources           metadata analysis program failed with status 1
-WARN  7. Static opcode audit          embedded static audit failed with status 1
-WARN  8. Design invariants            design-invariant heuristic analysis unavailable
+PASS  6. Metadata/resources           8 generic ELF note decode(s) succeeded; 4 unsupported specialized flag invocation(s) skipped
+PASS  7. Static opcode audit          target source, reference source, and 4 produced disassembly input(s) audited
+FAIL  8. Design invariants            INCOMPLETE unchanged reference-copy target; 5 hard final-contract gate(s) failed
 WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI mode exists for the requested kernel
 PASS  10. Round-trip sanity           ELF/disassembly sanity passed; no unresolved symbols reported
 
 Artifact paths:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env (246 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_clang.log (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_llvm_mc.log (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv (1121 bytes)
@@ -31921,10 +33034,11 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt (8840 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/command_status.tsv (10746 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json (2742 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/existing_tooling.txt (640 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (834 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (33098 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1407 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (947 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (39158 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1520 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.txt (2805 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/invocation.txt (1188 bytes)
@@ -31979,6 +33093,7 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readobj.txt (8842 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_runtime_path.value (340 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_runtime_paths.txt (1748 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json (195622 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_show_raw.help.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_show_raw.help.txt (8964 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_symbolize.help.stderr.txt (0 bytes)
@@ -31986,8 +33101,12 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_readobj_amdgpu_metadata.help.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_readobj_amdgpu_metadata.help.txt (7138 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s (680574 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (813 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json (4452 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.txt (3610 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json (112843 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv (13152 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (93000 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s (680574 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.transformation.txt (107 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co (46576 bytes)
@@ -31995,6 +33114,7 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co (46576 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o (45232 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target_contract_gates.json (1764 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/tool_inventory.tsv (822 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clang.txt (258 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clangxx.txt (258 bytes)
@@ -32004,5 +33124,5 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-objdump.txt (327 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readelf.txt (85 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readobj.txt (85 bytes)
-FINAL RESULT: validation completed; warnings do not change the zero exit status.
+FINAL RESULT: hard failure: a produced ELF/disassembly artifact is invalid; see validation reports.
 Artifacts remain in: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation

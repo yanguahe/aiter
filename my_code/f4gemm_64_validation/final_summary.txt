@@ -11,13 +11,14 @@ WARN  2. Input integrity              target is byte-for-byte identical to refer
 PASS  3. Assembly routes              llvm-mc and clang each produced a valid object from the exact copied source
 PASS  4. Code-object link             loadable-style shared AMDHSA code object produced
 PASS  5. Disassembly                  4 produced ELF file(s) fully disassembled
-WARN  6. Metadata/resources           metadata analysis program failed with status 1
-WARN  7. Static opcode audit          embedded static audit failed with status 1
-WARN  8. Design invariants            design-invariant heuristic analysis unavailable
+PASS  6. Metadata/resources           8 generic ELF note decode(s) succeeded; 4 unsupported specialized flag invocation(s) skipped
+PASS  7. Static opcode audit          target source, reference source, and 4 produced disassembly input(s) audited
+FAIL  8. Design invariants            INCOMPLETE unchanged reference-copy target; 5 hard final-contract gate(s) failed
 WARN  9. Existing tooling             SKIP: no applicable read-only/static CLI mode exists for the requested kernel
 PASS  10. Round-trip sanity           ELF/disassembly sanity passed; no unresolved symbols reported
 
 Artifact paths:
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/analysis_status.env (246 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_clang.log (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/assemble_llvm_mc.log (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv (1121 bytes)
@@ -58,10 +59,11 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.readobj.txt (8840 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/command_status.tsv (10746 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/design_invariants.json (2742 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/existing_tooling.txt (640 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (834 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (33098 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1407 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/experiment_summary.tsv (947 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py (39158 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/final_summary.txt (1520 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/input_integrity.txt (2805 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/invocation.txt (1188 bytes)
@@ -116,6 +118,7 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.readobj.txt (8842 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_runtime_path.value (340 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_runtime_paths.txt (1748 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/metadata_resource_analysis.json (195622 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_show_raw.help.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_show_raw.help.txt (8964 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_objdump_symbolize.help.stderr.txt (0 bytes)
@@ -123,8 +126,12 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_readobj_amdgpu_metadata.help.stderr.txt (0 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/probe_llvm_readobj_amdgpu_metadata.help.txt (7138 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s (680574 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (813 bytes)
-  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json (4452 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.txt (3610 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.json (112843 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.stderr.txt (0 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.tsv (13152 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/static_count.txt (93000 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s (680574 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.transformation.txt (107 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co (46576 bytes)
@@ -132,6 +139,7 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co (46576 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o (45232 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s (680574 bytes)
+  /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target_contract_gates.json (1764 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/tool_inventory.tsv (822 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clang.txt (258 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_clangxx.txt (258 bytes)
@@ -141,5 +149,5 @@ Artifact paths:
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-objdump.txt (327 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readelf.txt (85 bytes)
   /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/version_llvm-readobj.txt (85 bytes)
-FINAL RESULT: validation completed; warnings do not change the zero exit status.
+FINAL RESULT: hard failure: a produced ELF/disassembly artifact is invalid; see validation reports.
 Artifacts remain in: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation
