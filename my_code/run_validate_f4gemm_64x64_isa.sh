@@ -60,7 +60,7 @@ REPO_ROOT="$(canonical_path "${REPO_ROOT}")"
 if [[ -n "${TARGET_S:-}" ]]; then
     target_input="${TARGET_S}"
 else
-    target_input="${REPO_ROOT}/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s"
+    target_input="${REPO_ROOT}/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.s"
 fi
 if [[ -n "${REFERENCE_S:-}" ]]; then
     reference_input="${REFERENCE_S}"
