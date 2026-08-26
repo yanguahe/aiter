@@ -7,6 +7,7 @@ readonly TRIPLE="amdgcn-amd-amdhsa"
 readonly CODE_OBJECT_VERSION="6"
 
 LLVM_BIN="${LLVM_BIN:-/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin}"
+LLVM_RUNTIME_LIBS="${LLVM_RUNTIME_LIBS:-}"
 REPO_ROOT="${REPO_ROOT:-/data/yanguahe/code/wk_sp1/aiter}"
 
 usage() {
@@ -16,6 +17,8 @@ Usage:
 
 Environment overrides:
   LLVM_BIN    LLVM tool directory
+  LLVM_RUNTIME_LIBS
+              Colon-separated LLVM runtime library directories, searched first
   REPO_ROOT   Aiter repository root
   TARGET_S    target assembly source
   REFERENCE_S reference assembly source
@@ -179,6 +182,100 @@ record_experiment() {
 }
 
 HARD_FAIL=0
+TOOLCHAIN_ROOT_CAUSE=""
+ZSTD_UNRESOLVED=0
+
+runtime_path_value="${OUT_DIR}/llvm_runtime_path.value"
+runtime_discovery_report="${OUT_DIR}/llvm_runtime_paths.txt"
+runtime_discovery_command="$(
+    quote_command \
+        "${PYTHON}" - \
+        "${LLVM_RUNTIME_LIBS}" \
+        "${LD_LIBRARY_PATH:-}" \
+        "${LLVM_BIN}" \
+        "${runtime_path_value}"
+)"
+printf 'COMMAND [discover_llvm_runtime_libraries]: %s <embedded-python>\n' \
+    "${runtime_discovery_command}"
+set +e
+"${PYTHON}" - \
+    "${LLVM_RUNTIME_LIBS}" \
+    "${LD_LIBRARY_PATH:-}" \
+    "${LLVM_BIN}" \
+    "${runtime_path_value}" <<'PY' | tee "${runtime_discovery_report}"
+import glob
+import os
+import sys
+from pathlib import Path
+
+override, caller_ld, llvm_bin, output_path = sys.argv[1:5]
+rows = []
+ordered = []
+
+
+def add_directory(raw, source, *, preserve_missing=False):
+    if not raw:
+        return
+    path = os.path.realpath(os.path.expanduser(raw))
+    exists = os.path.isdir(path)
+    rows.append((source, path, exists))
+    if (exists or preserve_missing) and path not in ordered:
+        ordered.append(path)
+
+
+for entry in override.split(":"):
+    add_directory(entry, "LLVM_RUNTIME_LIBS")
+
+patterns = (
+    "/opt/venv/lib/python*/site-packages/_rocm_sdk_core/lib",
+    "/opt/venv/lib/python*/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps",
+    "/opt/venv/lib/python*/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib",
+)
+for pattern in patterns:
+    for match in sorted(glob.glob(pattern)):
+        add_directory(match, f"auto:{pattern}")
+
+zstd_patterns = (
+    "/opt/venv/lib/python*/site-packages/**/librocm_sysdeps_zstd.so.1",
+    "/opt/venv/lib/python*/site-packages/**/librocm_sysdeps_zstd.so",
+)
+for pattern in zstd_patterns:
+    for match in sorted(glob.glob(pattern, recursive=True)):
+        add_directory(str(Path(match).parent), f"auto:zstd-parent:{match}")
+
+for candidate in (
+    "/opt/rocm/lib",
+    "/opt/rocm/lib64",
+    str(Path(llvm_bin).resolve().parent.parent / "lib"),
+    str(Path(llvm_bin).resolve().parent.parent / "lib64"),
+):
+    add_directory(candidate, "auto:standard")
+
+# Preserve every non-empty caller entry exactly in search order, even if it is
+# temporarily unavailable (for example, a later-mounted container path).
+for entry in caller_ld.split(":"):
+    add_directory(entry, "caller:LD_LIBRARY_PATH", preserve_missing=True)
+
+print("LLVM runtime library discovery:")
+for source, path, exists in rows:
+    print(f"  {'FOUND' if exists else 'MISSING'} [{source}] {path}")
+final_path = ":".join(ordered)
+Path(output_path).write_text(final_path + "\n", encoding="utf-8", newline="\n")
+print(f"Final LD_LIBRARY_PATH: {final_path or '<empty>'}")
+print("Only existing override/auto-discovered directories were added; caller entries were preserved.")
+PY
+runtime_discovery_status=${PIPESTATUS[0]}
+set -e
+record_command_status \
+    "discover_llvm_runtime_libraries" \
+    "${runtime_discovery_status}" \
+    "${runtime_discovery_command} <embedded-python>"
+if (( runtime_discovery_status != 0 )) || [[ ! -f "${runtime_path_value}" ]]; then
+    echo "WARNING: LLVM runtime library discovery failed; preserving caller LD_LIBRARY_PATH." >&2
+else
+    IFS= read -r LD_LIBRARY_PATH < "${runtime_path_value}" || true
+    export LD_LIBRARY_PATH
+fi
 
 banner "0. Invocation context"
 {
@@ -193,6 +290,8 @@ banner "0. Invocation context"
     printf 'target triple: %s\n' "${TRIPLE}"
     printf 'code object version: %s\n' "${CODE_OBJECT_VERSION}"
     printf 'LLVM_BIN: %s\n' "${LLVM_BIN}"
+    printf 'LLVM_RUNTIME_LIBS: %s\n' "${LLVM_RUNTIME_LIBS:-<unset>}"
+    printf 'LD_LIBRARY_PATH: %s\n' "${LD_LIBRARY_PATH:-<empty>}"
     printf 'REPO_ROOT: %s\n' "${REPO_ROOT}"
     printf 'TARGET_S: %s\n' "${TARGET_S}"
     printf 'REFERENCE_S: %s\n' "${REFERENCE_S}"
@@ -208,7 +307,7 @@ banner "1. LLVM toolchain inventory and versions"
 resolve_tool() {
     local name="$1"
     local candidate="${LLVM_BIN%/}/${name}"
-    if [[ -x "${candidate}" && -f "${candidate}" ]]; then
+    if [[ -f "${candidate}" ]]; then
         printf '%s' "${candidate}"
         return 0
     fi
@@ -234,7 +333,6 @@ if path="$(resolve_tool llvm-readobj)"; then LLVM_READOBJ="${path}"; fi
 if path="$(resolve_tool llvm-nm)"; then LLVM_NM="${path}"; fi
 
 TOOL_INVENTORY="${OUT_DIR}/tool_inventory.tsv"
-printf 'requested_name\tstate\texecutable_name\tpath\n' > "${TOOL_INVENTORY}"
 declare -a TOOL_LABELS=()
 declare -a TOOL_PATHS=()
 
@@ -243,11 +341,11 @@ inventory_tool() {
     local path="$2"
     if [[ -n "${path}" ]]; then
         printf '%s\tFOUND\t%s\t%s\n' \
-            "${requested}" "$(basename "${path}")" "${path}" | tee -a "${TOOL_INVENTORY}"
+            "${requested}" "$(basename "${path}")" "${path}"
         TOOL_LABELS+=("${requested}")
         TOOL_PATHS+=("${path}")
     else
-        printf '%s\tMISSING\t-\t-\n' "${requested}" | tee -a "${TOOL_INVENTORY}"
+        printf '%s\tMISSING\t-\t-\n' "${requested}"
     fi
 }
 
@@ -260,36 +358,178 @@ inventory_tool "llvm-readelf" "${LLVM_READELF}"
 inventory_tool "llvm-readobj" "${LLVM_READOBJ}"
 inventory_tool "llvm-nm" "${LLVM_NM}"
 
+LLVM_MC_LAUNCHABLE=0
+CLANG_LAUNCHABLE=0
+CLANGXX_LAUNCHABLE=0
+LD_LLD_LAUNCHABLE=0
+LLVM_OBJDUMP_LAUNCHABLE=0
+LLVM_READELF_LAUNCHABLE=0
+LLVM_READOBJ_LAUNCHABLE=0
+LLVM_NM_LAUNCHABLE=0
+LDD_NOT_FOUND_TOOLS=0
+LDD_UNAVAILABLE=0
 version_failures=0
+printf 'requested_name\texists\texecutable\tlaunchable\tversion_status\tldd_not_found\tpath\n' \
+    > "${TOOL_INVENTORY}"
+
+set_tool_launchability() {
+    local label="$1"
+    local value="$2"
+    case "${label}" in
+        clang) CLANG_LAUNCHABLE="${value}" ;;
+        clang++) CLANGXX_LAUNCHABLE="${value}" ;;
+        llvm-mc) LLVM_MC_LAUNCHABLE="${value}" ;;
+        ld.lld) LD_LLD_LAUNCHABLE="${value}" ;;
+        llvm-objdump) LLVM_OBJDUMP_LAUNCHABLE="${value}" ;;
+        llvm-readelf) LLVM_READELF_LAUNCHABLE="${value}" ;;
+        llvm-readobj) LLVM_READOBJ_LAUNCHABLE="${value}" ;;
+        llvm-nm) LLVM_NM_LAUNCHABLE="${value}" ;;
+    esac
+}
+
+for requested in clang clang++ llvm-mc ld.lld llvm-objdump llvm-readelf llvm-readobj llvm-nm; do
+    path=""
+    case "${requested}" in
+        clang) path="${CLANG}" ;;
+        clang++) path="${CLANGXX}" ;;
+        llvm-mc) path="${LLVM_MC}" ;;
+        ld.lld) path="${LD_LLD}" ;;
+        llvm-objdump) path="${LLVM_OBJDUMP}" ;;
+        llvm-readelf) path="${LLVM_READELF}" ;;
+        llvm-readobj) path="${LLVM_READOBJ}" ;;
+        llvm-nm) path="${LLVM_NM}" ;;
+    esac
+    if [[ -z "${path}" ]]; then
+        printf '%s\tNO\tNO\tNO\tNOT_RUN\tNOT_RUN\t-\n' "${requested}" \
+            | tee -a "${TOOL_INVENTORY}"
+    fi
+done
+
 for index in "${!TOOL_PATHS[@]}"; do
     label="${TOOL_LABELS[${index}]}"
     tool="${TOOL_PATHS[${index}]}"
     safe_label="${label//+/x}"
     safe_label="${safe_label//./_}"
-    run_logged \
-        "version_${safe_label}" \
-        "${OUT_DIR}/version_${safe_label}.txt" \
-        "${tool}" --version
-    if (( LAST_STATUS != 0 )); then
-        ((version_failures += 1))
+    executable_state="NO"
+    launchable_state="NO"
+    version_status="NOT_RUN"
+    ldd_not_found="NOT_RUN"
+    if [[ -x "${tool}" ]]; then
+        executable_state="YES"
     fi
+
+    if command -v ldd >/dev/null 2>&1; then
+        run_logged \
+            "ldd_${safe_label}" \
+            "${OUT_DIR}/ldd_${safe_label}.txt" \
+            ldd "${tool}"
+        ldd_status="${LAST_STATUS}"
+        set +e
+        "${PYTHON}" - "${OUT_DIR}/ldd_${safe_label}.txt" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").lower()
+raise SystemExit(0 if "not found" in text else 1)
+PY
+        has_not_found=$?
+        set -e
+        if (( has_not_found == 0 )); then
+            ldd_not_found="YES"
+            ((LDD_NOT_FOUND_TOOLS += 1))
+            if "${PYTHON}" - "${OUT_DIR}/ldd_${safe_label}.txt" <<'PY'
+import sys
+from pathlib import Path
+lines = Path(sys.argv[1]).read_text(
+    encoding="utf-8", errors="replace"
+).splitlines()
+unresolved = any(
+    "librocm_sysdeps_zstd.so.1" in line and "not found" in line.lower()
+    for line in lines
+)
+raise SystemExit(0 if unresolved else 1)
+PY
+            then
+                ZSTD_UNRESOLVED=1
+            fi
+        else
+            ldd_not_found="NO"
+        fi
+        if (( ldd_status != 0 )); then
+            echo "WARNING: ldd returned status ${ldd_status} for ${label}."
+        fi
+    else
+        LDD_UNAVAILABLE=1
+        ldd_not_found="UNAVAILABLE"
+        printf 'SKIP: ldd is unavailable; dependencies were not enumerated for %s.\n' \
+            "${tool}" | tee "${OUT_DIR}/ldd_${safe_label}.txt"
+    fi
+
+    if [[ -x "${tool}" ]]; then
+        run_logged \
+            "version_${safe_label}" \
+            "${OUT_DIR}/version_${safe_label}.txt" \
+            "${tool}" --version
+        version_status="${LAST_STATUS}"
+        if (( version_status == 0 )); then
+            launchable_state="YES"
+            set_tool_launchability "${label}" 1
+        else
+            ((version_failures += 1))
+            if "${PYTHON}" - "${OUT_DIR}/version_${safe_label}.txt" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+raise SystemExit(0 if "librocm_sysdeps_zstd.so.1" in text else 1)
+PY
+            then
+                ZSTD_UNRESOLVED=1
+            fi
+        fi
+    else
+        ((version_failures += 1))
+        printf 'SKIP: file exists but is not executable: %s\n' "${tool}" \
+            | tee "${OUT_DIR}/version_${safe_label}.txt"
+    fi
+    printf '%s\tYES\t%s\t%s\t%s\t%s\t%s\n' \
+        "${label}" \
+        "${executable_state}" \
+        "${launchable_state}" \
+        "${version_status}" \
+        "${ldd_not_found}" \
+        "${tool}" | tee -a "${TOOL_INVENTORY}"
 done
 
 toolchain_level="PASS"
-toolchain_detail="core assembly and disassembly tools found"
-if [[ -z "${LLVM_OBJDUMP}" || ( -z "${LLVM_MC}" && -z "${CLANG}" ) ]]; then
+toolchain_detail="core tools exist and launch; dependency/version probes passed"
+if (( LLVM_MC_LAUNCHABLE == 0 && CLANG_LAUNCHABLE == 0 )); then
     toolchain_level="FAIL"
-    toolchain_detail="missing llvm-objdump or every assembler route"
+    toolchain_detail="llvm-mc and clang are both missing, non-executable, or unlaunchable"
+    TOOLCHAIN_ROOT_CAUSE="no launchable core assembler"
     HARD_FAIL=1
-elif [[ -z "${LLVM_MC}" || -z "${CLANG}" ]]; then
+elif (( LLVM_OBJDUMP_LAUNCHABLE == 0 )); then
+    toolchain_level="FAIL"
+    toolchain_detail="llvm-objdump is missing, non-executable, or unlaunchable"
+    TOOLCHAIN_ROOT_CAUSE="no launchable core disassembler"
+    HARD_FAIL=1
+elif (( LLVM_MC_LAUNCHABLE == 0 || CLANG_LAUNCHABLE == 0 )); then
     toolchain_level="WARN"
-    toolchain_detail="only one independent assembler route is available"
-elif (( version_failures != 0 )); then
+    toolchain_detail="only one independent assembler route exists and launches"
+elif (( version_failures != 0 || LDD_NOT_FOUND_TOOLS != 0 )); then
     toolchain_level="WARN"
-    toolchain_detail="${version_failures} tool version command(s) failed"
-elif [[ -z "${LLVM_READELF}" || -z "${LLVM_READOBJ}" || -z "${LLVM_NM}" ]]; then
+    toolchain_detail="${version_failures} version/launch failure(s), ${LDD_NOT_FOUND_TOOLS} tool(s) with unresolved ldd dependencies"
+elif (( LLVM_READELF_LAUNCHABLE == 0 || LLVM_READOBJ_LAUNCHABLE == 0 || LLVM_NM_LAUNCHABLE == 0 )); then
     toolchain_level="WARN"
-    toolchain_detail="one or more optional ELF metadata tools are unavailable"
+    toolchain_detail="one or more optional ELF metadata tools are missing or unlaunchable"
+fi
+if (( ZSTD_UNRESOLVED != 0 )); then
+    TOOLCHAIN_ROOT_CAUSE="dynamic loader cannot resolve librocm_sysdeps_zstd.so.1"
+    {
+        echo "ROOT CAUSE: librocm_sysdeps_zstd.so.1 remains unresolved after runtime-path discovery."
+        echo "Remediation (no installation performed): point LLVM_RUNTIME_LIBS at the existing SDK library directories, for example:"
+        echo "  LLVM_RUNTIME_LIBS=/opt/venv/lib/pythonX.Y/site-packages/_rocm_sdk_core/lib:/opt/venv/lib/pythonX.Y/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps bash $0 [OUT_DIR]"
+        echo "or prepend those same existing directories to LD_LIBRARY_PATH before rerunning."
+        echo "See ${runtime_discovery_report} and ${OUT_DIR}/ldd_*.txt for discovered and unresolved paths."
+    } | tee "${OUT_DIR}/runtime_loader_remediation.txt" >&2
 fi
 record_experiment "1. Toolchain inventory" "${toolchain_level}" "${toolchain_detail}"
 
@@ -323,7 +563,7 @@ if (( target_exists && reference_exists )); then
         if (( cmp_status == 0 )); then
             identical_inputs=1
             cmp_state="identical"
-            echo "WARNING: target and reference are byte-for-byte identical; the 64x64 rewrite may not have started."
+            echo "WARNING: target and reference are byte-for-byte identical; the final 128x128-symbol rewrite may not have started."
         elif (( cmp_status == 1 )); then
             cmp_state="different"
             echo "PASS: target and reference differ."
@@ -472,7 +712,7 @@ MC_OBJ=""
 CLANG_OBJ=""
 ASSEMBLY_SOURCE_USED="${OUT_DIR}/target.assembly.s"
 
-if (( target_exists )) && [[ -n "${LLVM_MC}" ]]; then
+if (( target_exists && LLVM_MC_LAUNCHABLE )); then
     mc_candidate="${OUT_DIR}/target.llvm-mc.o"
     if attempt_elf_command \
         "assemble_llvm_mc" \
@@ -487,11 +727,11 @@ if (( target_exists )) && [[ -n "${LLVM_MC}" ]]; then
         MC_OK=1
         MC_OBJ="${mc_candidate}"
     fi
-elif [[ -z "${LLVM_MC}" ]]; then
-    echo "WARNING: llvm-mc route skipped because llvm-mc was not found."
+elif (( LLVM_MC_LAUNCHABLE == 0 )); then
+    echo "WARNING: llvm-mc route skipped because llvm-mc is missing or unlaunchable."
 fi
 
-if (( target_exists )) && [[ -n "${CLANG}" ]]; then
+if (( target_exists && CLANG_LAUNCHABLE )); then
     clang_candidate="${OUT_DIR}/target.clang.o"
     if attempt_elf_command \
         "assemble_clang" \
@@ -507,8 +747,8 @@ if (( target_exists )) && [[ -n "${CLANG}" ]]; then
         CLANG_OK=1
         CLANG_OBJ="${clang_candidate}"
     fi
-elif [[ -z "${CLANG}" ]]; then
-    echo "WARNING: independent clang assembler route skipped because clang was not found."
+elif (( CLANG_LAUNCHABLE == 0 )); then
+    echo "WARNING: independent clang assembler route skipped because clang is missing or unlaunchable."
 fi
 
 has_stale_objdump_comments() {
@@ -598,7 +838,7 @@ PY
 
     if (( sanitize_status == 0 )); then
         ASSEMBLY_SOURCE_USED="${sanitized_source}"
-        if [[ -n "${LLVM_MC}" ]]; then
+        if (( LLVM_MC_LAUNCHABLE )); then
             mc_candidate="${OUT_DIR}/target.llvm-mc.sanitized.o"
             if attempt_elf_command \
                 "assemble_llvm_mc_sanitized" \
@@ -614,7 +854,7 @@ PY
                 MC_OBJ="${mc_candidate}"
             fi
         fi
-        if [[ -n "${CLANG}" ]]; then
+        if (( CLANG_LAUNCHABLE )); then
             clang_candidate="${OUT_DIR}/target.clang.sanitized.o"
             if attempt_elf_command \
                 "assemble_clang_sanitized" \
@@ -668,7 +908,7 @@ LLD_CO=""
 CLANG_CO=""
 PRIMARY_CO=""
 
-if [[ -n "${PRIMARY_OBJ}" && -n "${LD_LLD}" ]]; then
+if [[ -n "${PRIMARY_OBJ}" ]] && (( LD_LLD_LAUNCHABLE )); then
     lld_candidate="${OUT_DIR}/target.ld_lld.co"
     if attempt_elf_command \
         "link_ld_lld" \
@@ -682,11 +922,11 @@ if [[ -n "${PRIMARY_OBJ}" && -n "${LD_LLD}" ]]; then
         LLD_LINK_OK=1
         LLD_CO="${lld_candidate}"
     fi
-elif [[ -z "${LD_LLD}" ]]; then
-    echo "WARNING: direct ld.lld link route skipped because ld.lld was not found."
+elif (( LD_LLD_LAUNCHABLE == 0 )); then
+    echo "WARNING: direct ld.lld link route skipped because ld.lld is missing or unlaunchable."
 fi
 
-if [[ -n "${PRIMARY_OBJ}" && -n "${CLANG}" ]]; then
+if [[ -n "${PRIMARY_OBJ}" ]] && (( CLANG_LAUNCHABLE )); then
     clang_co_candidate="${OUT_DIR}/target.clang.co"
     if attempt_elf_command \
         "link_clang_driver" \
@@ -870,7 +1110,7 @@ inspect_elf() {
         ((METADATA_TOOL_FAILURES += 1))
     fi
 
-    if [[ -n "${LLVM_READELF}" ]]; then
+    if (( LLVM_READELF_LAUNCHABLE )); then
         run_capture_stdout \
             "${label}_readelf" \
             "${OUT_DIR}/${label}.readelf.txt" \
@@ -881,7 +1121,7 @@ inspect_elf() {
         fi
     fi
 
-    if [[ -n "${LLVM_READOBJ}" ]]; then
+    if (( LLVM_READOBJ_LAUNCHABLE )); then
         run_capture_stdout \
             "${label}_readobj" \
             "${OUT_DIR}/${label}.readobj.txt" \
@@ -916,7 +1156,7 @@ inspect_elf() {
         fi
     fi
 
-    if [[ -n "${LLVM_NM}" ]]; then
+    if (( LLVM_NM_LAUNCHABLE )); then
         run_capture_stdout \
             "${label}_nm_defined" \
             "${OUT_DIR}/${label}.nm.defined.txt" \
@@ -949,7 +1189,7 @@ inspect_elf() {
     fi
 }
 
-if [[ -n "${LLVM_OBJDUMP}" ]]; then
+if (( LLVM_OBJDUMP_LAUNCHABLE )); then
     for index in "${!INSPECT_FILES[@]}"; do
         inspect_elf \
             "${INSPECT_LABELS[${index}]}" \
@@ -957,7 +1197,7 @@ if [[ -n "${LLVM_OBJDUMP}" ]]; then
             "${INSPECT_FILES[${index}]}"
     done
 else
-    echo "ERROR: llvm-objdump is unavailable; produced objects cannot be validated." >&2
+    echo "ERROR: llvm-objdump is missing or unlaunchable; produced objects cannot be validated." >&2
     if (( VALID_OBJECT_COUNT > 0 )); then
         DISASM_INVALID_COUNT="${VALID_OBJECT_COUNT}"
     fi
@@ -967,8 +1207,8 @@ fi
 disasm_level="PASS"
 disasm_detail="${DISASM_VALID_COUNT} produced ELF file(s) fully disassembled"
 if (( VALID_OBJECT_COUNT == 0 )); then
-    disasm_level="FAIL"
-    disasm_detail="no valid object was available to disassemble"
+    disasm_level="WARN"
+    disasm_detail="UNAVAILABLE: no object assembled; no produced disassembly was available to validate"
 elif (( DISASM_INVALID_COUNT != 0 || ELF_HEADER_INVALID_COUNT != 0 )); then
     disasm_level="FAIL"
     disasm_detail="invalid ELF header or disassembly detected"
@@ -991,7 +1231,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 OLD_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
-NEW_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps"
+NEW_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
 
 CATEGORY_NAMES = (
     "wmma",
@@ -1354,45 +1594,59 @@ def design_analysis(target_text, target_report):
     missing_ring = [name for name, count in ring_presence.items() if count == 0]
     if missing_ring:
         warnings.append(
-            "expected packed-ring literals missing: " + ", ".join(missing_ring)
+            "HEURISTIC WARNING: expected packed-ring literals missing: "
+            + ", ".join(missing_ring)
         )
     if literals[0x2A000] == 0 and not re.search(r"\b172032\b", target_text):
-        warnings.append("candidate fixed-LDS end/resource 0x2A000 (172032) is absent")
+        warnings.append(
+            "HEURISTIC WARNING: candidate fixed-LDS end/resource literal "
+            "0x2A000 (172032) is absent"
+        )
     if literals[0x22000] == 0:
-        warnings.append("input-ring/output-staging boundary 0x22000 is absent")
+        warnings.append(
+            "HEURISTIC WARNING: input-ring/output-staging boundary literal "
+            "0x22000 is absent"
+        )
     if literals[0x80] == 0 and not re.search(r"(?<!\w)128(?!\w)", target_text):
-        warnings.append("128 tile/wave offset literal was not found")
+        warnings.append("HEURISTIC WARNING: 128 tile/wave offset literal was not found")
     if literals[0x40] == 0 and not re.search(r"(?<!\w)64(?!\w)", target_text):
-        warnings.append("64 tile/wave offset literal was not found")
+        warnings.append("HEURISTIC WARNING: 64 tile/wave offset literal was not found")
     if counts["s_wait_alu"] == 0:
         warnings.append("s_wait_alu is absent")
     if counts["tensor_store_from_lds"] == 0:
         warnings.append("output tensor_store_from_lds candidate is absent")
     if not first_last_two_rounds:
         warnings.append(
-            "two output WG barrier rounds (before first and after last output TDM) "
-            "were not statically found"
+            "HEURISTIC WARNING: nearby-barrier search did not find two output "
+            "WG rounds (before first and after last output TDM); this is not "
+            "semantic proof"
         )
     if counts["wg_barrier_signal"] != counts["wg_barrier_wait"]:
         warnings.append(
-            "WG barrier signal/wait static counts are not balanced "
-            f"({counts['wg_barrier_signal']} vs {counts['wg_barrier_wait']})"
+            "HEURISTIC WARNING: raw WG barrier signal/wait counts are not "
+            f"balanced ({counts['wg_barrier_signal']} vs "
+            f"{counts['wg_barrier_wait']}); counts do not prove protocol semantics"
         )
     if counts["cluster_barrier_signal"] == 0 or counts["cluster_barrier_wait"] == 0:
-        warnings.append("cluster barrier signal/wait presence is incomplete")
+        warnings.append(
+            "HEURISTIC WARNING: raw cluster barrier signal/wait presence is incomplete"
+        )
     if counts["cluster_barrier_signal"] != counts["cluster_barrier_wait"]:
         warnings.append(
-            "cluster barrier signal/wait static counts are not balanced "
-            f"({counts['cluster_barrier_signal']} vs "
-            f"{counts['cluster_barrier_wait']})"
+            "HEURISTIC WARNING: raw cluster barrier signal/wait counts are not "
+            f"balanced ({counts['cluster_barrier_signal']} vs "
+            f"{counts['cluster_barrier_wait']}); counts do not prove protocol semantics"
         )
     present_old = [name for name, count in old_presence.items() if count]
     if present_old:
-        warnings.append("old-only ring/LDS literals remain: " + ", ".join(present_old))
+        warnings.append(
+            "HEURISTIC WARNING: old-only ring/LDS literals remain: "
+            + ", ".join(present_old)
+        )
     if target_report["old_symbol_occurrences"]:
         warnings.append("original 256x256 kernel symbol remains")
     if target_report["new_symbol_occurrences"] == 0:
-        warnings.append("new 64x64 kernel symbol is absent")
+        warnings.append("new 128x128 contract kernel symbol is absent")
     if re.search(
         r"(?mi)^\s*\.amdhsa_group_segment_fixed_size\s+327680\b",
         target_text,
@@ -1405,6 +1659,10 @@ def design_analysis(target_text, target_report):
         warnings.append("old next_free_vgpr=1024 descriptor remains")
 
     return {
+        "heuristic_notice": (
+            "Literal presence, nearby-barrier windows, and raw barrier counts are "
+            "search aids only; they are not semantic proof and never hard failures."
+        ),
         "new_ring_address_occurrences": ring_presence,
         "old_only_ring_address_occurrences": old_presence,
         "output_staging_boundary_0x22000_occurrences": literals[0x22000],
@@ -1496,7 +1754,7 @@ def metadata_analysis(out_dir, target_path):
     if old_symbol_hits:
         warnings.append("original 256x256 kernel symbol remains in source/ELF reports")
     if not new_symbol_hits:
-        warnings.append("64x64 kernel symbol is absent from source/ELF reports")
+        warnings.append("128x128 contract kernel symbol is absent from source/ELF reports")
     if old_lds_hits:
         warnings.append("old 327680-byte (0x50000) LDS resource remains")
     if old_vgpr_hits:
@@ -1752,7 +2010,7 @@ def main():
     else:
         print("  none")
 
-    print("\nDESIGN INVARIANTS")
+    print("\nDESIGN HEURISTICS (SEARCH AIDS ONLY; NOT SEMANTIC PROOF)")
     for key, value in design.items():
         if key != "warnings":
             print(f"  {key}: {value}")
@@ -1764,7 +2022,7 @@ def main():
 
     print("\nMETADATA / RESOURCE INSPECTION")
     print_hits("Old 256x256 symbol hits:", metadata["old_symbol_hits"])
-    print_hits("New 64x64 symbol hits:", metadata["new_symbol_hits"])
+    print_hits("New 128x128 contract symbol hits:", metadata["new_symbol_hits"])
     print_hits("Old 327680-byte LDS hits:", metadata["old_lds_hits"])
     print_hits("Candidate 172032-byte LDS hits:", metadata["candidate_lds_hits"])
     print_hits("Old 1024-VGPR hits:", metadata["old_vgpr_hits"])
@@ -1780,6 +2038,11 @@ def main():
         "DESIGN_WARNINGS": len(design.get("warnings", ())),
         "METADATA_WARNINGS": len(metadata["warnings"]),
         "ROUTE_WARNINGS": len(routes["warnings"]),
+        "TARGET_SOURCE_AUDITED": int("target_source" in reports),
+        "REFERENCE_SOURCE_AUDITED": int("reference_source" in reports),
+        "DISASSEMBLIES_AUDITED": sum(
+            1 for report in reports.values() if report["kind"] == "disassembly"
+        ),
         "UNRESOLVED_BRANCHES": sum(
             len(report["unresolved_symbolic_branches"])
             for report in reports.values()
@@ -1829,6 +2092,9 @@ DESIGN_WARNINGS=0
 METADATA_WARNINGS=0
 ROUTE_WARNINGS=0
 UNRESOLVED_BRANCHES=0
+TARGET_SOURCE_AUDITED=0
+REFERENCE_SOURCE_AUDITED=0
+DISASSEMBLIES_AUDITED=0
 if [[ -f "${OUT_DIR}/analysis_status.env" ]]; then
     while IFS='=' read -r key value; do
         case "${key}" in
@@ -1837,13 +2103,19 @@ if [[ -f "${OUT_DIR}/analysis_status.env" ]]; then
             METADATA_WARNINGS) METADATA_WARNINGS="${value}" ;;
             ROUTE_WARNINGS) ROUTE_WARNINGS="${value}" ;;
             UNRESOLVED_BRANCHES) UNRESOLVED_BRANCHES="${value}" ;;
+            TARGET_SOURCE_AUDITED) TARGET_SOURCE_AUDITED="${value}" ;;
+            REFERENCE_SOURCE_AUDITED) REFERENCE_SOURCE_AUDITED="${value}" ;;
+            DISASSEMBLIES_AUDITED) DISASSEMBLIES_AUDITED="${value}" ;;
         esac
     done < "${OUT_DIR}/analysis_status.env"
 fi
 
 metadata_level="PASS"
 metadata_detail="ELF/source metadata and resource reports collected"
-if (( static_audit_status != 0 )); then
+if (( VALID_OBJECT_COUNT == 0 )); then
+    metadata_level="WARN"
+    metadata_detail="SKIP: no object/code object exists; ELF metadata/resource tools were not invoked"
+elif (( static_audit_status != 0 )); then
     metadata_level="WARN"
     metadata_detail="metadata analysis program failed with status ${static_audit_status}"
 elif (( METADATA_TOOL_FAILURES != 0 || METADATA_WARNINGS != 0 )); then
@@ -1853,24 +2125,28 @@ fi
 record_experiment "6. Metadata/resources" "${metadata_level}" "${metadata_detail}"
 
 audit_level="PASS"
-audit_detail="source/disassembly opcode, labels, branches, and constants audited"
+audit_detail="target source, reference source, and ${DISASSEMBLIES_AUDITED} produced disassembly input(s) audited"
 if (( static_audit_status != 0 )); then
     audit_level="WARN"
     audit_detail="embedded static audit failed with status ${static_audit_status}"
+elif (( DISASSEMBLIES_AUDITED == 0 )); then
+    audit_level="WARN"
+    audit_detail="SOURCE-ONLY: no produced disassembly exists; target=${TARGET_SOURCE_AUDITED}, reference=${REFERENCE_SOURCE_AUDITED} source audit(s)"
+elif (( TARGET_SOURCE_AUDITED == 0 || REFERENCE_SOURCE_AUDITED == 0 )); then
+    audit_level="WARN"
+    audit_detail="incomplete intended inputs: target=${TARGET_SOURCE_AUDITED}, reference=${REFERENCE_SOURCE_AUDITED}, disassemblies=${DISASSEMBLIES_AUDITED}"
 elif (( STATIC_WARNINGS != 0 || UNRESOLVED_BRANCHES != 0 )); then
     audit_level="WARN"
     audit_detail="${STATIC_WARNINGS} comparison warning(s), ${UNRESOLVED_BRANCHES} unresolved parsed branch target(s)"
 fi
 record_experiment "7. Static opcode audit" "${audit_level}" "${audit_detail}"
 
-design_level="PASS"
-design_detail="candidate design literals and synchronization constructs found"
+design_level="WARN"
+design_detail="HEURISTIC ONLY: literal presence, nearby barriers, and raw signal/wait counts are not semantic proof"
 if (( static_audit_status != 0 )); then
-    design_level="WARN"
-    design_detail="design-invariant analysis unavailable"
+    design_detail="design-invariant heuristic analysis unavailable"
 elif (( DESIGN_WARNINGS != 0 )); then
-    design_level="WARN"
-    design_detail="${DESIGN_WARNINGS} incomplete-rewrite/design warning(s); see design_invariants.json"
+    design_detail="${DESIGN_WARNINGS} HEURISTIC WARNING(S); not hard failures or semantic proof; see design_invariants.json"
 fi
 record_experiment "8. Design invariants" "${design_level}" "${design_detail}"
 
@@ -1926,9 +2202,12 @@ fi
 
 roundtrip_level="PASS"
 roundtrip_detail="ELF/disassembly sanity passed; no unresolved symbols reported"
-if (( VALID_OBJECT_COUNT == 0 || DISASM_INVALID_COUNT != 0 || ELF_HEADER_INVALID_COUNT != 0 )); then
+if (( VALID_OBJECT_COUNT == 0 )); then
     roundtrip_level="FAIL"
-    roundtrip_detail="object, ELF, or disassembly validity failed"
+    roundtrip_detail="UNAVAILABLE: no valid object assembled; ELF/disassembly validation was not performed"
+elif (( DISASM_INVALID_COUNT != 0 || ELF_HEADER_INVALID_COUNT != 0 || ELF_SUCCESS_INVALID != 0 )); then
+    roundtrip_level="FAIL"
+    roundtrip_detail="INVALID: a produced artifact failed ELF-header or disassembly validation"
 elif (( ROUTE_WARNINGS != 0 || UNRESOLVED_SYMBOL_FILES != 0 || UNRESOLVED_BRANCHES != 0 )); then
     roundtrip_level="WARN"
     roundtrip_detail="${ROUTE_WARNINGS} route comparison warning(s), ${UNRESOLVED_SYMBOL_FILES} ELF file(s) with undefined symbols"
@@ -1982,8 +2261,16 @@ fi
 if (( final_status == 0 )); then
     echo "FINAL RESULT: validation completed; warnings do not change the zero exit status." \
         | tee -a "${OUT_DIR}/final_summary.txt"
+elif (( VALID_OBJECT_COUNT == 0 )); then
+    if [[ -n "${TOOLCHAIN_ROOT_CAUSE}" ]]; then
+        echo "FINAL RESULT: hard failure: no valid object assembled; ELF/disassembly artifacts are unavailable (not observed invalid). Root cause: ${TOOLCHAIN_ROOT_CAUSE}." \
+            | tee -a "${OUT_DIR}/final_summary.txt" >&2
+    else
+        echo "FINAL RESULT: hard failure: no valid object assembled; ELF/disassembly artifacts are unavailable (not observed invalid). See assembler logs." \
+            | tee -a "${OUT_DIR}/final_summary.txt" >&2
+    fi
 else
-    echo "FINAL RESULT: hard failure (no valid object or invalid ELF/disassembly)." \
+    echo "FINAL RESULT: hard failure: a produced ELF/disassembly artifact is invalid; see validation reports." \
         | tee -a "${OUT_DIR}/final_summary.txt" >&2
 fi
 echo "Artifacts remain in: ${OUT_DIR}" | tee -a "${OUT_DIR}/final_summary.txt"
