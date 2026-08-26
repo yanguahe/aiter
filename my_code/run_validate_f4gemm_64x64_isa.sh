@@ -533,6 +533,63 @@ if (( ZSTD_UNRESOLVED != 0 )); then
 fi
 record_experiment "1. Toolchain inventory" "${toolchain_level}" "${toolchain_detail}"
 
+LLVM_OBJDUMP_SHOW_RAW_SUPPORTED=0
+LLVM_OBJDUMP_SYMBOLIZE_SUPPORTED=0
+LLVM_READOBJ_AMDGPU_METADATA_SUPPORTED=0
+
+probe_help_capability() {
+    local label="$1"
+    local tool="$2"
+    local option="$3"
+    local stdout_file="${OUT_DIR}/${label}.help.txt"
+    local stderr_file="${OUT_DIR}/${label}.help.stderr.txt"
+    local rendered
+    rendered="$(quote_command "${tool}" --help)"
+    printf '\nCOMMAND [%s_help]: %s\n' "${label}" "${rendered}"
+    set +e
+    "${tool}" --help > "${stdout_file}" 2> "${stderr_file}"
+    local status=$?
+    set -e
+    record_command_status "${label}_help" "${status}" "${rendered}"
+    printf 'STATUS  [%s_help]: %s\n' "${label}" "${status}"
+    if (( status != 0 )); then
+        printf 'WARNING: capability probe failed for %s; optional flag %s will not be used.\n' \
+            "${tool}" "${option}" >&2
+        return 1
+    fi
+    "${PYTHON}" - "${stdout_file}" "${option}" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+raise SystemExit(0 if sys.argv[2] in text else 1)
+PY
+}
+
+if (( LLVM_OBJDUMP_LAUNCHABLE )); then
+    if probe_help_capability \
+        "probe_llvm_objdump_show_raw" "${LLVM_OBJDUMP}" "--show-raw-insn"; then
+        LLVM_OBJDUMP_SHOW_RAW_SUPPORTED=1
+    fi
+    if probe_help_capability \
+        "probe_llvm_objdump_symbolize" "${LLVM_OBJDUMP}" "--symbolize-operands"; then
+        LLVM_OBJDUMP_SYMBOLIZE_SUPPORTED=1
+    fi
+fi
+if (( LLVM_READOBJ_LAUNCHABLE )) && probe_help_capability \
+    "probe_llvm_readobj_amdgpu_metadata" \
+    "${LLVM_READOBJ}" \
+    "--amdgpu-metadata"; then
+    LLVM_READOBJ_AMDGPU_METADATA_SUPPORTED=1
+fi
+{
+    printf 'llvm-objdump --show-raw-insn supported: %s\n' \
+        "${LLVM_OBJDUMP_SHOW_RAW_SUPPORTED}"
+    printf 'llvm-objdump --symbolize-operands supported: %s\n' \
+        "${LLVM_OBJDUMP_SYMBOLIZE_SUPPORTED}"
+    printf 'llvm-readobj --amdgpu-metadata supported: %s\n' \
+        "${LLVM_READOBJ_AMDGPU_METADATA_SUPPORTED}"
+} | tee "${OUT_DIR}/llvm_capabilities.txt"
+
 banner "2. Input integrity, syntax, directives, and symbols"
 
 target_exists=0
@@ -702,6 +759,35 @@ attempt_elf_command() {
     LAST_ELF_REASON="valid non-empty ELF"
     printf 'PASS: %s produced %s\n' "${name}" "${output}"
     return 0
+}
+
+validate_et_dyn_amdgpu() {
+    local file="$1"
+    local report="$2"
+    set +e
+    "${PYTHON}" - "${file}" <<'PY' | tee "${report}"
+import struct
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = path.read_bytes() if path.is_file() else b""
+if len(data) < 20 or data[:4] != b"\x7fELF":
+    print(f"INVALID: not a complete ELF header: {path}")
+    raise SystemExit(1)
+byte_order = "<" if data[5] == 1 else ">" if data[5] == 2 else None
+if byte_order is None:
+    print(f"INVALID: unknown ELF byte order: {data[5]}")
+    raise SystemExit(1)
+elf_type, machine = struct.unpack_from(byte_order + "HH", data, 16)
+print(f"path: {path}")
+print(f"ELF e_type: {elf_type} ({'ET_DYN' if elf_type == 3 else 'not ET_DYN'})")
+print(f"ELF e_machine: {machine} ({'EM_AMDGPU' if machine == 224 else 'not EM_AMDGPU'})")
+raise SystemExit(0 if elf_type == 3 and machine == 224 else 1)
+PY
+    local status=${PIPESTATUS[0]}
+    set -e
+    return "${status}"
 }
 
 banner "3. Independent gfx1250 syntax and assembly routes"
@@ -918,9 +1004,14 @@ if [[ -n "${PRIMARY_OBJ}" ]] && (( LD_LLD_LAUNCHABLE )); then
         -shared \
         --no-undefined \
         -o "${lld_candidate}" \
-        "${PRIMARY_OBJ}"; then
+        "${PRIMARY_OBJ}" \
+        && validate_et_dyn_amdgpu \
+            "${lld_candidate}" "${OUT_DIR}/link_ld_lld.elf_type.txt"; then
         LLD_LINK_OK=1
         LLD_CO="${lld_candidate}"
+    else
+        echo "ERROR: ld.lld output is not an ET_DYN EM_AMDGPU code object." >&2
+        HARD_FAIL=1
     fi
 elif (( LD_LLD_LAUNCHABLE == 0 )); then
     echo "WARNING: direct ld.lld link route skipped because ld.lld is missing or unlaunchable."
@@ -938,11 +1029,15 @@ if [[ -n "${PRIMARY_OBJ}" ]] && (( CLANG_LAUNCHABLE )); then
         -mcode-object-version="${CODE_OBJECT_VERSION}" \
         -nostdlib \
         -Wl,--no-undefined \
-        -shared \
         "${PRIMARY_OBJ}" \
-        -o "${clang_co_candidate}"; then
+        -o "${clang_co_candidate}" \
+        && validate_et_dyn_amdgpu \
+            "${clang_co_candidate}" "${OUT_DIR}/link_clang_driver.elf_type.txt"; then
         CLANG_LINK_OK=1
         CLANG_CO="${clang_co_candidate}"
+    else
+        echo "ERROR: clang-driver output is not an ET_DYN EM_AMDGPU code object." >&2
+        HARD_FAIL=1
     fi
 fi
 
@@ -1005,6 +1100,8 @@ DISASM_VALID_COUNT=0
 DISASM_INVALID_COUNT=0
 ELF_HEADER_INVALID_COUNT=0
 METADATA_TOOL_FAILURES=0
+METADATA_NOTE_DECODES=0
+METADATA_SPECIALIZED_SKIPS=0
 UNRESOLVED_SYMBOL_FILES=0
 
 validate_disassembly() {
@@ -1071,18 +1168,25 @@ inspect_elf() {
     fi
 
     local disassembly="${OUT_DIR}/${label}.disassembly.txt"
+    local -a disassembly_args=(
+        --disassemble
+        --mcpu="${ARCH}"
+    )
+    if (( LLVM_OBJDUMP_SHOW_RAW_SUPPORTED )); then
+        disassembly_args+=(--show-raw-insn)
+    fi
+    if (( LLVM_OBJDUMP_SYMBOLIZE_SUPPORTED )); then
+        disassembly_args+=(--symbolize-operands)
+    fi
+    disassembly_args+=("${file}")
     run_capture_stdout \
-        "${label}_disassemble_rich" \
+        "${label}_disassemble_capability_selected" \
         "${disassembly}" \
-        "${OUT_DIR}/${label}.disassembly.rich.stderr.txt" \
+        "${OUT_DIR}/${label}.disassembly.capability_selected.stderr.txt" \
         "${LLVM_OBJDUMP}" \
-        --disassemble \
-        --mcpu="${ARCH}" \
-        --show-raw-insn \
-        --symbolize-operands \
-        "${file}"
+        "${disassembly_args[@]}"
     if (( LAST_STATUS != 0 )); then
-        echo "WARNING: rich objdump options failed; retrying the portable gfx1250 form." >&2
+        echo "WARNING: capability-selected objdump command genuinely failed; retrying the portable gfx1250 form." >&2
         run_capture_stdout \
             "${label}_disassemble_fallback" \
             "${disassembly}" \
@@ -1118,6 +1222,8 @@ inspect_elf() {
             "${LLVM_READELF}" -h -S -s -n -W "${file}"
         if (( LAST_STATUS != 0 )); then
             ((METADATA_TOOL_FAILURES += 1))
+        else
+            ((METADATA_NOTE_DECODES += 1))
         fi
     fi
 
@@ -1134,16 +1240,25 @@ inspect_elf() {
             "${file}"
         if (( LAST_STATUS != 0 )); then
             ((METADATA_TOOL_FAILURES += 1))
+        else
+            ((METADATA_NOTE_DECODES += 1))
         fi
 
-        run_capture_stdout \
-            "${label}_readobj_amdgpu_metadata" \
-            "${OUT_DIR}/${label}.readobj.amdgpu_metadata.txt" \
-            "${OUT_DIR}/${label}.readobj.amdgpu_metadata.stderr.txt" \
-            "${LLVM_READOBJ}" --amdgpu-metadata "${file}"
-        if (( LAST_STATUS != 0 )); then
-            echo "WARNING: llvm-readobj --amdgpu-metadata did not succeed for ${label}." >&2
-            ((METADATA_TOOL_FAILURES += 1))
+        if (( LLVM_READOBJ_AMDGPU_METADATA_SUPPORTED )); then
+            run_capture_stdout \
+                "${label}_readobj_amdgpu_metadata" \
+                "${OUT_DIR}/${label}.readobj.amdgpu_metadata.txt" \
+                "${OUT_DIR}/${label}.readobj.amdgpu_metadata.stderr.txt" \
+                "${LLVM_READOBJ}" --amdgpu-metadata "${file}"
+            if (( LAST_STATUS != 0 )); then
+                echo "WARNING: supported llvm-readobj --amdgpu-metadata failed for ${label}." >&2
+                ((METADATA_TOOL_FAILURES += 1))
+            fi
+        else
+            ((METADATA_SPECIALIZED_SKIPS += 1))
+            printf 'SKIP: llvm-readobj --amdgpu-metadata is unsupported; generic --notes/readelf decoding was retained for %s.\n' \
+                "${label}" \
+                | tee "${OUT_DIR}/${label}.readobj.amdgpu_metadata.SKIP.txt"
         fi
 
         run_capture_stdout \
