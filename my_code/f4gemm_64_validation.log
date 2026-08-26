@@ -16,7 +16,7 @@ Only existing override/auto-discovered directories were added; caller entries we
 ================================================================================
 0. Invocation context
 ================================================================================
-date: 2026-08-26T04:47:29+00:00
+date: 2026-08-26T04:49:14+00:00
 host: heliosr-2b805-c9-3
 pwd: /data/yanguahe/code/wk_sp1/aiter
 script: my_code/run_validate_f4gemm_64x64_isa.sh
@@ -47,15 +47,15 @@ llvm-readobj	FOUND	llvm-readobj	/data/yanguahe/code/wk_sp1/llvm-project/mlir_ins
 llvm-nm	FOUND	llvm-nm	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
 
 COMMAND [ldd_clang]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
-	linux-vdso.so.1 (0x000079be333d4000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000079be333ac000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000079be332d9000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000079be27782000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000079be27699000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000079be332a9000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000079be27487000)
-	/lib64/ld-linux-x86-64.so.2 (0x000079be333d6000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000079be332a4000)
+	linux-vdso.so.1 (0x00007ca44d464000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007ca44d43c000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007ca44d369000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007ca441782000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007ca44d280000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007ca441754000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ca441542000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007ca44d466000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007ca44d279000)
 STATUS  [ldd_clang]: 0
 
 COMMAND [version_clang]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang --version
@@ -68,15 +68,15 @@ STATUS  [version_clang]: 0
 clang	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
 
 COMMAND [ldd_clangxx]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
-	linux-vdso.so.1 (0x00007b8a91c6b000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007b8a91c43000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007b8a91b70000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007b8a85f82000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007b8a91a87000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007b8a85f54000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007b8a85d42000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007b8a91c6d000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007b8a91a80000)
+	linux-vdso.so.1 (0x000077c574f20000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000077c574ef8000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000077c56952d000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000077c5692af000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000077c5691c6000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000077c574ec8000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000077c568fb4000)
+	/lib64/ld-linux-x86-64.so.2 (0x000077c574f22000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000077c574ec3000)
 STATUS  [ldd_clangxx]: 0
 
 COMMAND [version_clangxx]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++ --version
@@ -89,15 +89,15 @@ STATUS  [version_clangxx]: 0
 clang++	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
 
 COMMAND [ldd_llvm-mc]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
-	linux-vdso.so.1 (0x00007d5b176fc000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007d5b176d4000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007d5b1592d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007d5b156af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007d5b155c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007d5b176a4000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007d5b153b4000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007d5b176fe000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007d5b1769f000)
+	linux-vdso.so.1 (0x000074af7bc0c000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000074af7bbe4000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000074af7bb11000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000074af79b82000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000074af79a99000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000074af7bae1000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000074af79887000)
+	/lib64/ld-linux-x86-64.so.2 (0x000074af7bc0e000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000074af7badc000)
 STATUS  [ldd_llvm-mc]: 0
 
 COMMAND [version_llvm-mc]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc --version
@@ -116,15 +116,15 @@ STATUS  [version_llvm-mc]: 0
 llvm-mc	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
 
 COMMAND [ldd_ld_lld]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
-	linux-vdso.so.1 (0x000076abaeac5000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000076abaea9d000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000076aba712d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000076aba6eaf000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000076aba6dc6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000076abaea6d000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000076aba6bb4000)
-	/lib64/ld-linux-x86-64.so.2 (0x000076abaeac7000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000076abaea68000)
+	linux-vdso.so.1 (0x00007ce42ac33000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007ce42ac0b000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007ce42332d000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007ce4230af000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007ce422fc6000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007ce42abdb000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007ce422db4000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007ce42ac35000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007ce42abd6000)
 STATUS  [ldd_ld_lld]: 0
 
 COMMAND [version_ld_lld]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld --version
@@ -133,15 +133,15 @@ STATUS  [version_ld_lld]: 0
 ld.lld	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
 
 COMMAND [ldd_llvm-objdump]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
-	linux-vdso.so.1 (0x00007aa5452e9000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007aa5452c1000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007aa5451ee000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007aa543382000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007aa543299000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007aa5451be000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007aa543087000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007aa5452eb000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007aa5451b9000)
+	linux-vdso.so.1 (0x000079edac4ba000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000079edac492000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000079edac3bf000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000079edaa582000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000079edaa499000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000079edaa46b000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000079edaa259000)
+	/lib64/ld-linux-x86-64.so.2 (0x000079edac4bc000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000079edac3b8000)
 STATUS  [ldd_llvm-objdump]: 0
 
 COMMAND [version_llvm-objdump]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --version
@@ -161,15 +161,15 @@ STATUS  [version_llvm-objdump]: 0
 llvm-objdump	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
 
 COMMAND [ldd_llvm-readelf]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
-	linux-vdso.so.1 (0x000074fe59a5a000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000074fe59a32000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000074fe58f2d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000074fe58caf000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000074fe58bc6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000074fe58b98000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000074fe58986000)
-	/lib64/ld-linux-x86-64.so.2 (0x000074fe59a5c000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000074fe59a2b000)
+	linux-vdso.so.1 (0x00007e58b4a3b000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007e58b3fe4000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007e58b3f11000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007e58b3c93000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007e58b3baa000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007e58b3b7c000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007e58b396a000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007e58b4a3d000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007e58b4a28000)
 STATUS  [ldd_llvm-readelf]: 0
 
 COMMAND [version_llvm-readelf]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf --version
@@ -180,15 +180,15 @@ STATUS  [version_llvm-readelf]: 0
 llvm-readelf	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
 
 COMMAND [ldd_llvm-readobj]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
-	linux-vdso.so.1 (0x00007824b0292000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007824b026a000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007824af72d000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007824af4af000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007824af3c6000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007824b023a000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007824af1b4000)
-	/lib64/ld-linux-x86-64.so.2 (0x00007824b0294000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007824b0235000)
+	linux-vdso.so.1 (0x00007334a057a000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007334a0552000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007334a047f000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000073349f782000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000073349f699000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007334a044f000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000073349f487000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007334a057c000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007334a044a000)
 STATUS  [ldd_llvm-readobj]: 0
 
 COMMAND [version_llvm-readobj]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --version
@@ -199,15 +199,15 @@ STATUS  [version_llvm-readobj]: 0
 llvm-readobj	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
 
 COMMAND [ldd_llvm-nm]: ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
-	linux-vdso.so.1 (0x000076d85b9c4000)
-	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x000076d85b99c000)
-	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x000076d85b8c9000)
-	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x000076d859782000)
-	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000076d859699000)
-	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000076d85b899000)
-	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000076d859487000)
-	/lib64/ld-linux-x86-64.so.2 (0x000076d85b9c6000)
-	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000076d85b894000)
+	linux-vdso.so.1 (0x00007446fb152000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007446fb12a000)
+	librocm_sysdeps_zstd.so.1 => /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1 (0x00007446fb057000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007446f8f82000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007446f8e99000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007446fb027000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007446f8c87000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007446fb154000)
+	libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x00007446fb022000)
 STATUS  [ldd_llvm-nm]: 0
 
 COMMAND [version_llvm-nm]: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --version
