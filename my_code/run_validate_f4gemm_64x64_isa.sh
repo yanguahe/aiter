@@ -1520,10 +1520,35 @@ def categories(records):
     )
 
 
+def parse_integer_literal(token):
+    token = token.strip()
+    sign = -1 if token.startswith("-") else 1
+    unsigned = token[1:] if token[:1] in {"+", "-"} else token
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", unsigned):
+        return sign * int(unsigned[2:], 16)
+    if re.fullmatch(r"\d+", unsigned):
+        return sign * int(unsigned, 10)
+    raise ValueError(f"unsupported integer literal: {token!r}")
+
+
+def remove_disassembly_pc_fields(line):
+    line = re.sub(
+        r"^\s*[0-9a-fA-F]{8,16}\s+<[^>]+>:\s*",
+        "",
+        line,
+    )
+    line = re.sub(
+        r"^\s*[0-9a-fA-F]{4,16}:\s+(?:[0-9a-fA-F]{2,16}\s+)+",
+        "",
+        line,
+    )
+    return line
+
+
 def literal_counts(text):
     counter = Counter()
     for raw in text.splitlines():
-        clean = strip_comments(raw)
+        clean = remove_disassembly_pc_fields(strip_comments(raw))
         clean = re.sub(r"\b(?:s|v|ttmp)\d+\b", " ", clean, flags=re.IGNORECASE)
         clean = re.sub(
             r"\b[sv]\[\s*\d+\s*:\s*\d+\s*\]",
@@ -1532,11 +1557,34 @@ def literal_counts(text):
             flags=re.IGNORECASE,
         )
         for token in re.findall(
-            r"(?<![A-Za-z0-9_])(?:0x[0-9a-fA-F]+|\d+)(?![A-Za-z0-9_])",
+            r"(?<![A-Za-z0-9_])(?:-?0x[0-9a-fA-F]+|-?\d+)(?![A-Za-z0-9_])",
             clean,
         ):
-            counter[int(token, 0)] += 1
+            counter[parse_integer_literal(token)] += 1
     return counter
+
+
+def run_literal_parser_self_tests():
+    cases = {
+        "0000000000001900": 1900,
+        "172032": 172032,
+        "-17": -17,
+        "0x2A000": 0x2A000,
+        "-0x2a": -42,
+    }
+    for token, expected in cases.items():
+        actual = parse_integer_literal(token)
+        assert actual == expected, (token, expected, actual)
+    sample = (
+        "0000000000001900 <kernel>:\n"
+        "  s_mov_b32 s0, 42 // 000000001900: B0804009 00000002\n"
+        "  s_add_i32 s1, s1, -7\n"
+        "  s_mov_b32 s2, 0x2a\n"
+    )
+    counts = literal_counts(sample)
+    assert counts[1900] == 0, counts
+    assert counts[42] == 2, counts
+    assert counts[-7] == 1, counts
 
 
 def kernel_symbols(text):
@@ -1728,8 +1776,6 @@ def design_analysis(target_text, target_report):
         warnings.append("HEURISTIC WARNING: 64 tile/wave offset literal was not found")
     if counts["s_wait_alu"] == 0:
         warnings.append("s_wait_alu is absent")
-    if counts["tensor_store_from_lds"] == 0:
-        warnings.append("output tensor_store_from_lds candidate is absent")
     if not first_last_two_rounds:
         warnings.append(
             "HEURISTIC WARNING: nearby-barrier search did not find two output "
@@ -1800,11 +1846,9 @@ def design_analysis(target_text, target_report):
         ),
         "output_tdm_store_count": counts["tensor_store_from_lds"],
         "output_tdm_shape_interpretation": (
-            "one-store candidate"
+            "CONTRACT PASS: exactly one output TDM store"
             if counts["tensor_store_from_lds"] == 1
-            else "two-store fallback-like"
-            if counts["tensor_store_from_lds"] == 2
-            else "unexpected static store count"
+            else "CONTRACT FAIL: expected exactly one output TDM store"
         ),
         "output_store_protocol_windows": protocols,
         "two_output_wg_rounds_statically_detected": first_last_two_rounds,
@@ -1885,6 +1929,99 @@ def metadata_analysis(out_dir, target_path):
         "old_vgpr_hits": old_vgpr_hits,
         "resource_lines": resource_lines,
         "warnings": warnings,
+    }
+
+
+def descriptor_values(text, directive):
+    pattern = re.compile(
+        rf"(?mi)^\s*\.{re.escape(directive)}\s*:?\s*(-?(?:0x[0-9a-f]+|\d+))\b"
+    )
+    return [parse_integer_literal(token) for token in pattern.findall(text)]
+
+
+def contract_analysis(target_text, reports, metadata):
+    target_report = reports.get("target_source")
+    reference_report = reports.get("reference_source")
+    disassembly_reports = {
+        label: report
+        for label, report in reports.items()
+        if report["kind"] == "disassembly"
+    }
+    group_values = descriptor_values(
+        target_text, "amdhsa_group_segment_fixed_size"
+    )
+    next_vgpr_values = descriptor_values(target_text, "amdhsa_next_free_vgpr")
+    source_store_count = (
+        target_report["counts"]["tensor_store_from_lds"] if target_report else None
+    )
+    disassembly_store_counts = {
+        label: report["counts"]["tensor_store_from_lds"]
+        for label, report in disassembly_reports.items()
+    }
+    disassembly_symbol_occurrences = {
+        label: report["new_symbol_occurrences"]
+        for label, report in disassembly_reports.items()
+    }
+    unchanged_reference_copy = bool(
+        target_report
+        and reference_report
+        and target_report["sha256"] == reference_report["sha256"]
+    )
+    gates = {
+        "required_symbol_in_target_source": bool(
+            target_report and target_report["new_symbol_occurrences"] > 0
+        ),
+        "required_symbol_in_every_produced_disassembly": bool(
+            disassembly_reports
+            and all(value > 0 for value in disassembly_symbol_occurrences.values())
+        ),
+        "target_group_segment_exactly_172032": group_values == [172032],
+        "target_source_exactly_one_tensor_store_from_lds": source_store_count == 1,
+        "every_produced_disassembly_exactly_one_tensor_store_from_lds": bool(
+            disassembly_reports
+            and all(value == 1 for value in disassembly_store_counts.values())
+        ),
+    }
+    failures = [
+        name for name, passed in gates.items() if not passed
+    ]
+    old_findings = {
+        "old_256_symbol_in_target_source": bool(
+            target_report and target_report["old_symbol_occurrences"] > 0
+        ),
+        "old_256_symbol_in_produced_disassembly": {
+            label: report["old_symbol_occurrences"]
+            for label, report in disassembly_reports.items()
+            if report["old_symbol_occurrences"]
+        },
+        "old_group_segment_327680_values": [
+            value for value in group_values if value == 327680
+        ],
+        "old_next_free_vgpr_1024_values": [
+            value for value in next_vgpr_values if value == 1024
+        ],
+        "metadata_old_symbol_hit_count": len(metadata["old_symbol_hits"]),
+        "metadata_old_lds_hit_count": len(metadata["old_lds_hits"]),
+        "metadata_old_vgpr_hit_count": len(metadata["old_vgpr_hits"]),
+    }
+    return {
+        "contract_symbol": NEW_SYMBOL,
+        "contract_group_segment_bytes": 172032,
+        "contract_tensor_store_from_lds_count": 1,
+        "unchanged_reference_copy": unchanged_reference_copy,
+        "target_group_segment_values": group_values,
+        "target_next_free_vgpr_values": next_vgpr_values,
+        "target_source_tensor_store_from_lds_count": source_store_count,
+        "produced_disassembly_tensor_store_from_lds_counts": (
+            disassembly_store_counts
+        ),
+        "produced_disassembly_required_symbol_occurrences": (
+            disassembly_symbol_occurrences
+        ),
+        "gates": gates,
+        "failure_count": len(failures),
+        "failures": failures,
+        "old_contract_findings": old_findings,
     }
 
 
@@ -1986,6 +2123,8 @@ def print_hits(title, hits, limit=200):
 
 
 def main():
+    run_literal_parser_self_tests()
+    print("Embedded literal-parser self-tests: PASS")
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--out-dir", required=True)
@@ -2079,6 +2218,12 @@ def main():
         encoding="utf-8",
     )
 
+    contract = contract_analysis(target_text, reports, metadata)
+    (out_dir / "target_contract_gates.json").write_text(
+        json.dumps(contract, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     routes = route_analysis(manifest, reports)
     (out_dir / "route_comparison.json").write_text(
         json.dumps(routes, indent=2, sort_keys=True) + "\n",
@@ -2125,6 +2270,17 @@ def main():
     else:
         print("  none")
 
+    print("\nHARD TARGET-CONTRACT GATES")
+    print(f"  unchanged_reference_copy: {contract['unchanged_reference_copy']}")
+    for name, passed in contract["gates"].items():
+        print(f"  {'PASS' if passed else 'FAIL'}: {name}")
+    print(f"  failure_count: {contract['failure_count']}")
+    for failure in contract["failures"]:
+        print(f"  CONTRACT FAILURE: {failure}")
+    print("  PROMINENT OLD-CONTRACT FINDINGS:")
+    for name, value in contract["old_contract_findings"].items():
+        print(f"    {name}: {value}")
+
     print("\nDESIGN HEURISTICS (SEARCH AIDS ONLY; NOT SEMANTIC PROOF)")
     for key, value in design.items():
         if key != "warnings":
@@ -2153,6 +2309,11 @@ def main():
         "DESIGN_WARNINGS": len(design.get("warnings", ())),
         "METADATA_WARNINGS": len(metadata["warnings"]),
         "ROUTE_WARNINGS": len(routes["warnings"]),
+        "ROUTE_COMPARISON_AVAILABLE": int(
+            routes.get("comparison", {}).get("available", False)
+        ),
+        "CONTRACT_FAILURES": contract["failure_count"],
+        "UNCHANGED_REFERENCE_COPY": int(contract["unchanged_reference_copy"]),
         "TARGET_SOURCE_AUDITED": int("target_source" in reports),
         "REFERENCE_SOURCE_AUDITED": int("reference_source" in reports),
         "DISASSEMBLIES_AUDITED": sum(
@@ -2173,6 +2334,7 @@ def main():
         "static_count.tsv",
         "design_invariants.json",
         "metadata_resource_analysis.json",
+        "target_contract_gates.json",
         "route_comparison.json",
         "analysis_status.env",
     ):
@@ -2190,6 +2352,17 @@ audit_args=(
     --out-dir "${OUT_DIR}"
     --target "${OUT_DIR}/target.original.s"
 )
+analysis_outputs=(
+    "${OUT_DIR}/static_count.json"
+    "${OUT_DIR}/static_count.tsv"
+    "${OUT_DIR}/design_invariants.json"
+    "${OUT_DIR}/metadata_resource_analysis.json"
+    "${OUT_DIR}/target_contract_gates.json"
+    "${OUT_DIR}/route_comparison.json"
+    "${OUT_DIR}/analysis_status.env"
+)
+rm -f -- "${analysis_outputs[@]}"
+static_audit_unavailable=0
 if (( target_exists )); then
     run_capture_stdout \
         "static_audit" \
@@ -2199,13 +2372,32 @@ if (( target_exists )); then
     static_audit_status="${LAST_STATUS}"
 else
     static_audit_status=1
+    static_audit_unavailable=1
     echo "WARNING: static audit skipped because target source is unavailable."
+fi
+
+ANALYSIS_OUTPUTS_MISSING=0
+for analysis_output in "${analysis_outputs[@]}"; do
+    if [[ ! -s "${analysis_output}" ]]; then
+        echo "ERROR: required analysis artifact is missing or empty: ${analysis_output}" >&2
+        ((ANALYSIS_OUTPUTS_MISSING += 1))
+    fi
+done
+ANALYSIS_INTERNAL_FAILURE=0
+if (( static_audit_unavailable == 0 )) \
+    && (( static_audit_status != 0 || ANALYSIS_OUTPUTS_MISSING != 0 )); then
+    ANALYSIS_INTERNAL_FAILURE=1
+    HARD_FAIL=1
+    echo "ERROR: required embedded analysis failed internally; validation cannot pass." >&2
 fi
 
 STATIC_WARNINGS=0
 DESIGN_WARNINGS=0
 METADATA_WARNINGS=0
 ROUTE_WARNINGS=0
+ROUTE_COMPARISON_AVAILABLE=0
+CONTRACT_FAILURES=0
+UNCHANGED_REFERENCE_COPY=0
 UNRESOLVED_BRANCHES=0
 TARGET_SOURCE_AUDITED=0
 REFERENCE_SOURCE_AUDITED=0
@@ -2217,6 +2409,9 @@ if [[ -f "${OUT_DIR}/analysis_status.env" ]]; then
             DESIGN_WARNINGS) DESIGN_WARNINGS="${value}" ;;
             METADATA_WARNINGS) METADATA_WARNINGS="${value}" ;;
             ROUTE_WARNINGS) ROUTE_WARNINGS="${value}" ;;
+            ROUTE_COMPARISON_AVAILABLE) ROUTE_COMPARISON_AVAILABLE="${value}" ;;
+            CONTRACT_FAILURES) CONTRACT_FAILURES="${value}" ;;
+            UNCHANGED_REFERENCE_COPY) UNCHANGED_REFERENCE_COPY="${value}" ;;
             UNRESOLVED_BRANCHES) UNRESOLVED_BRANCHES="${value}" ;;
             TARGET_SOURCE_AUDITED) TARGET_SOURCE_AUDITED="${value}" ;;
             REFERENCE_SOURCE_AUDITED) REFERENCE_SOURCE_AUDITED="${value}" ;;
@@ -2226,24 +2421,25 @@ if [[ -f "${OUT_DIR}/analysis_status.env" ]]; then
 fi
 
 metadata_level="PASS"
-metadata_detail="ELF/source metadata and resource reports collected"
+metadata_detail="${METADATA_NOTE_DECODES} generic ELF note decode(s) succeeded; ${METADATA_SPECIALIZED_SKIPS} unsupported specialized flag invocation(s) skipped"
 if (( VALID_OBJECT_COUNT == 0 )); then
     metadata_level="WARN"
     metadata_detail="SKIP: no object/code object exists; ELF metadata/resource tools were not invoked"
-elif (( static_audit_status != 0 )); then
-    metadata_level="WARN"
-    metadata_detail="metadata analysis program failed with status ${static_audit_status}"
-elif (( METADATA_TOOL_FAILURES != 0 || METADATA_WARNINGS != 0 )); then
-    metadata_level="WARN"
-    metadata_detail="${METADATA_TOOL_FAILURES} tool command failure(s), ${METADATA_WARNINGS} resource warning(s)"
+elif (( ANALYSIS_INTERNAL_FAILURE != 0 )); then
+    metadata_level="FAIL"
+    metadata_detail="ANALYSIS FAILURE: Python metadata/resource analysis crashed or required outputs are missing"
+elif (( METADATA_TOOL_FAILURES != 0 || METADATA_NOTE_DECODES == 0 )); then
+    metadata_level="FAIL"
+    metadata_detail="${METADATA_TOOL_FAILURES} required generic metadata command failure(s), ${METADATA_NOTE_DECODES} successful note decode(s)"
+    HARD_FAIL=1
 fi
 record_experiment "6. Metadata/resources" "${metadata_level}" "${metadata_detail}"
 
 audit_level="PASS"
 audit_detail="target source, reference source, and ${DISASSEMBLIES_AUDITED} produced disassembly input(s) audited"
-if (( static_audit_status != 0 )); then
-    audit_level="WARN"
-    audit_detail="embedded static audit failed with status ${static_audit_status}"
+if (( ANALYSIS_INTERNAL_FAILURE != 0 )); then
+    audit_level="FAIL"
+    audit_detail="ANALYSIS FAILURE: embedded opcode parser crashed or required outputs are missing"
 elif (( DISASSEMBLIES_AUDITED == 0 )); then
     audit_level="WARN"
     audit_detail="SOURCE-ONLY: no produced disassembly exists; target=${TARGET_SOURCE_AUDITED}, reference=${REFERENCE_SOURCE_AUDITED} source audit(s)"
@@ -2256,11 +2452,21 @@ elif (( STATIC_WARNINGS != 0 || UNRESOLVED_BRANCHES != 0 )); then
 fi
 record_experiment "7. Static opcode audit" "${audit_level}" "${audit_detail}"
 
-design_level="WARN"
-design_detail="HEURISTIC ONLY: literal presence, nearby barriers, and raw signal/wait counts are not semantic proof"
-if (( static_audit_status != 0 )); then
-    design_detail="design-invariant heuristic analysis unavailable"
+design_level="PASS"
+design_detail="all hard target-contract gates passed; heuristic searches are not semantic proof"
+if (( ANALYSIS_INTERNAL_FAILURE != 0 )); then
+    design_level="FAIL"
+    design_detail="ANALYSIS FAILURE: design/contract analysis crashed or required outputs are missing"
+elif (( CONTRACT_FAILURES != 0 )); then
+    design_level="FAIL"
+    if (( UNCHANGED_REFERENCE_COPY != 0 )); then
+        design_detail="INCOMPLETE unchanged reference-copy target; ${CONTRACT_FAILURES} hard final-contract gate(s) failed"
+    else
+        design_detail="${CONTRACT_FAILURES} hard final-target contract gate(s) failed"
+    fi
+    HARD_FAIL=1
 elif (( DESIGN_WARNINGS != 0 )); then
+    design_level="WARN"
     design_detail="${DESIGN_WARNINGS} HEURISTIC WARNING(S); not hard failures or semantic proof; see design_invariants.json"
 fi
 record_experiment "8. Design invariants" "${design_level}" "${design_detail}"
