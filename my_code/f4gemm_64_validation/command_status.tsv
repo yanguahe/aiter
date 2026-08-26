@@ -1,14 +1,65 @@
 name	status	command
-version_clang	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang --version
-version_clangxx	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++ --version
-version_llvm-mc	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc --version
-version_ld_lld	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld --version
-version_llvm-objdump	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --version
-version_llvm-readelf	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf --version
-version_llvm-readobj	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --version
-version_llvm-nm	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --version
+discover_llvm_runtime_libraries	0	/opt/venv/bin/python3 - '' /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_runtime_path.value <embedded-python>
+ldd_clang	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
+version_clang	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang --version
+ldd_clangxx	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
+version_clangxx	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++ --version
+ldd_llvm-mc	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
+version_llvm-mc	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc --version
+ldd_ld_lld	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
+version_ld_lld	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld --version
+ldd_llvm-objdump	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
+version_llvm-objdump	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --version
+ldd_llvm-readelf	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
+version_llvm-readelf	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf --version
+ldd_llvm-readobj	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
+version_llvm-readobj	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --version
+ldd_llvm-nm	0	ldd /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
+version_llvm-nm	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --version
 cmp_target_reference	0	cmp -s -- /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s
 input_probe	0	/opt/venv/bin/python3 - /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s <embedded-python>
-assemble_llvm_mc	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1250 -filetype=obj /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
-assemble_clang	127	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
-static_audit	0	/opt/venv/bin/python3 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py --manifest /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv --out-dir /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation --target /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
+assemble_llvm_mc	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc -triple=amdgcn-amd-amdhsa -mcpu=gfx1250 -filetype=obj /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+assemble_clang	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.assembly.s -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+link_ld_lld	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld -shared --no-undefined -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+link_clang_driver	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -nostdlib -Wl\,--no-undefined -shared /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o -o /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+llvm_mc_object_file_header	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -f /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_disassemble_rich	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --disassemble --mcpu=gfx1250 --show-raw-insn --symbolize-operands /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_disassemble_fallback	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -d --mcpu=gfx1250 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_objdump_sections_symbols	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --section-headers --syms /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_readelf	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf -h -S -s -n -W /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_readobj	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --file-headers --sections --symbols --notes /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_readobj_amdgpu_metadata	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --amdgpu-metadata /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_readobj_relocations	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --relocations /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_nm_defined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --defined-only --print-size --size-sort /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object_nm_undefined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --undefined-only /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+clang_object_file_header	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -f /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_disassemble_rich	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --disassemble --mcpu=gfx1250 --show-raw-insn --symbolize-operands /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_disassemble_fallback	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -d --mcpu=gfx1250 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_objdump_sections_symbols	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --section-headers --syms /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_readelf	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf -h -S -s -n -W /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_readobj	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --file-headers --sections --symbols --notes /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_readobj_amdgpu_metadata	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --amdgpu-metadata /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_readobj_relocations	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --relocations /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_nm_defined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --defined-only --print-size --size-sort /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object_nm_undefined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --undefined-only /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+lld_code_object_file_header	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -f /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_disassemble_rich	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --disassemble --mcpu=gfx1250 --show-raw-insn --symbolize-operands /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_disassemble_fallback	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -d --mcpu=gfx1250 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_objdump_sections_symbols	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --section-headers --syms /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_readelf	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf -h -S -s -n -W /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_readobj	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --file-headers --sections --symbols --notes /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_readobj_amdgpu_metadata	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --amdgpu-metadata /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_readobj_relocations	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --relocations /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_nm_defined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --defined-only --print-size --size-sort /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object_nm_undefined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --undefined-only /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+clang_code_object_file_header	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -f /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_disassemble_rich	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --disassemble --mcpu=gfx1250 --show-raw-insn --symbolize-operands /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_disassemble_fallback	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump -d --mcpu=gfx1250 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_objdump_sections_symbols	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump --section-headers --syms /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_readelf	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf -h -S -s -n -W /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_readobj	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --file-headers --sections --symbols --notes /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_readobj_amdgpu_metadata	1	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --amdgpu-metadata /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_readobj_relocations	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj --relocations /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_nm_defined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --defined-only --print-size --size-sort /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object_nm_undefined	0	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm --undefined-only /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+static_audit	1	/opt/venv/bin/python3 /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/f4gemm_static_audit.py --manifest /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/audit_inputs.tsv --out-dir /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation --target /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s

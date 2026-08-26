@@ -1,0 +1,13 @@
+LLVM runtime library discovery:
+  FOUND [auto:/opt/venv/lib/python*/site-packages/_rocm_sdk_core/lib] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib
+  FOUND [auto:/opt/venv/lib/python*/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps
+  FOUND [auto:/opt/venv/lib/python*/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib
+  FOUND [auto:zstd-parent:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/rocm_sysdeps/lib
+  FOUND [auto:zstd-parent:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib
+  FOUND [auto:standard] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib
+  MISSING [auto:standard] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib64
+  MISSING [auto:standard] /data/yanguahe/code/wk_sp1/llvm-project/lib
+  MISSING [auto:standard] /data/yanguahe/code/wk_sp1/llvm-project/lib64
+  FOUND [caller:LD_LIBRARY_PATH] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib
+Final LD_LIBRARY_PATH: /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/rocm_sysdeps/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib
+Only existing override/auto-discovered directories were added; caller entries were preserved.

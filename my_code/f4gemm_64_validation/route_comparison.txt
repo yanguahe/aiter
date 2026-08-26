@@ -1,5 +1,0 @@
-route comparison JSON: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/route_comparison.json
-comparison:
-  available: False
-WARNING: two-route object comparison is unavailable
-NOTE: whole-ELF differences alone are non-semantic and are not a failure.

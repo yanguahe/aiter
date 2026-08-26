@@ -1,0 +1,11 @@
+
+File: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+Format: elf64-amdgpu
+Arch: amdgcn
+AddressSize: 64bit
+LoadName: <Not found>
+Relocations [
+  Section (4) .rela.rodata {
+    0x10 R_AMDGPU_REL64 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps 0x10
+  }
+]

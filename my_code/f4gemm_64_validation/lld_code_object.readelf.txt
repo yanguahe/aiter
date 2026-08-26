@@ -1,0 +1,152 @@
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 40 04 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            AMDGPU - HSA
+  ABI Version:                       4
+  Type:                              DYN (Shared object file)
+  Machine:                           EM_AMDGPU
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          45616 (bytes into file)
+  Flags:                             0x549, gfx1250, xnack, sramecc
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         8
+  Size of section headers:           64 (bytes)
+  Number of section headers:         15
+  Section header string table index: 13
+There are 15 section headers, starting at offset 0xb230:
+
+Section Headers:
+  [Nr] Name              Type            Address          Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            0000000000000000 000000 000000 00      0   0  0
+  [ 1] .note             NOTE            0000000000000200 000200 000514 00   A  0   0  4
+  [ 2] .dynsym           DYNSYM          0000000000000718 000718 000048 18   A  5   1  8
+  [ 3] .gnu.hash         GNU_HASH        0000000000000760 000760 000024 00   A  2   0  8
+  [ 4] .hash             HASH            0000000000000784 000784 000020 04   A  2   0  4
+  [ 5] .dynstr           STRTAB          00000000000007a4 0007a4 000060 00   A  0   0  1
+  [ 6] .rodata           PROGBITS        0000000000000840 000840 000040 00   A  0   0 64
+  [ 7] .text             PROGBITS        0000000000001900 000900 00a300 00  AX  0   0 256
+  [ 8] .dynamic          DYNAMIC         000000000000cc00 00ac00 000070 10  WA  5   0  8
+  [ 9] .relro_padding    NOBITS          000000000000cc70 00ac70 000390 00  WA  0   0  1
+  [10] .AMDGPU.gpr_maximums PROGBITS     0000000000000000 00ac70 000000 00      0   0  1
+  [11] .comment          PROGBITS        0000000000000000 00ac70 000067 01  MS  0   0  1
+  [12] .symtab           SYMTAB          0000000000000000 00acd8 0001b0 18     14  16  8
+  [13] .shstrtab         STRTAB          0000000000000000 00ae88 000085 00      0   0  1
+  [14] .strtab           STRTAB          0000000000000000 00af0d 000320 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  R (retain), p (processor specific)
+
+Symbol table '.dynsym' contains 3 entries:
+   Num:    Value          Size Type    Bind   Vis       Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   UND 
+     1: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+     2: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+
+Symbol table '.symtab' contains 18 entries:
+   Num:    Value          Size Type    Bind   Vis       Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   UND 
+     1: 0000000000000400     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+     2: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+     3: 0000000000000068     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+     4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+     5: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+     6: 0000000000000001     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+     7: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+     8: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+     9: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+    10: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+    11: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS amdgpu.max_num_vgpr
+    12: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS amdgpu.max_num_agpr
+    13: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS amdgpu.max_num_sgpr
+    14: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT   ABS amdgpu.max_num_named_barrier
+    15: 000000000000cc00     0 NOTYPE  LOCAL  HIDDEN      8 _DYNAMIC
+    16: 0000000000001900 41320 FUNC    GLOBAL PROTECTED   7 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+    17: 0000000000000840    64 OBJECT  GLOBAL PROTECTED   6 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+Displaying notes found in: .note
+  Owner                Data size 	Description
+  AMDGPU               0x000004ff	NT_AMDGPU_METADATA (AMDGPU Metadata)
+    AMDGPU Metadata:
+        ---
+amdhsa.kernels:
+  - .args:
+      - .actual_access:  read_write
+        .address_space:  global
+        .offset:         0
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         8
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         16
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         24
+        .size:           8
+        .value_kind:     global_buffer
+      - .actual_access:  read_only
+        .address_space:  global
+        .offset:         32
+        .size:           8
+        .value_kind:     global_buffer
+      - .offset:         40
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         44
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         48
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         52
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         56
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         60
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         64
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         68
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         72
+        .size:           4
+        .value_kind:     by_value
+      - .offset:         76
+        .size:           4
+        .value_kind:     by_value
+    .group_segment_fixed_size: 327680
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 80
+    .max_flat_workgroup_size: 128
+    .name:           f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+    .private_segment_fixed_size: 0
+    .sgpr_count:     106
+    .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd
+    .uniform_work_group_size: 1
+    .uses_dynamic_stack: false
+    .vgpr_count:     1024
+    .wavefront_size: 32
+    .workgroup_processor_mode: 1
+amdhsa.target:   amdgcn-amd-amdhsa--gfx1250
+amdhsa.version:
+  - 1
+  - 2
+...
+

@@ -1,0 +1,8 @@
+
+File: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+Format: elf64-amdgpu
+Arch: amdgcn
+AddressSize: 64bit
+LoadName: <Not found>
+Relocations [
+]

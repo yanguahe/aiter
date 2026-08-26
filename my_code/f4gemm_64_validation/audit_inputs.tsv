@@ -1,3 +1,11 @@
 label	kind	path
 target_source	source	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.original.s
 reference_source	source	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/reference.original.s
+llvm_mc_object	object	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o
+llvm_mc_object	disassembly	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/llvm_mc_object.disassembly.txt
+clang_object	object	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.o
+clang_object	disassembly	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_object.disassembly.txt
+lld_code_object	code_object	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.ld_lld.co
+lld_code_object	disassembly	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/lld_code_object.disassembly.txt
+clang_code_object	code_object	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.clang.co
+clang_code_object	disassembly	/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/clang_code_object.disassembly.txt

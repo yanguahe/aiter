@@ -1,0 +1,32 @@
+
+/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o:	file format elf64-amdgpu
+
+Sections:
+Idx Name                 Size     VMA              Type
+  0                      00000000 0000000000000000 
+  1 .strtab              00000365 0000000000000000 
+  2 .text                0000a300 0000000000000000 TEXT
+  3 .rodata              00000040 0000000000000000 DATA
+  4 .rela.rodata         00000018 0000000000000000 
+  5 .AMDGPU.gpr_maximums 00000000 0000000000000000 
+  6 .note.GNU-stack      00000000 0000000000000000 
+  7 .note                00000514 0000000000000000 DATA
+  8 .symtab              00000198 0000000000000000 
+
+SYMBOL TABLE:
+0000000000000400 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_vgpr
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_agpr
+0000000000000068 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.numbered_sgpr
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.num_named_barrier
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.private_seg_size
+0000000000000001 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_vcc
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.uses_flat_scratch
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_dyn_sized_stack
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_recursion
+0000000000000000 l       *ABS*	0000000000000000 f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.has_indirect_call
+0000000000000000 l       *ABS*	0000000000000000 amdgpu.max_num_vgpr
+0000000000000000 l       *ABS*	0000000000000000 amdgpu.max_num_agpr
+0000000000000000 l       *ABS*	0000000000000000 amdgpu.max_num_sgpr
+0000000000000000 l       *ABS*	0000000000000000 amdgpu.max_num_named_barrier
+0000000000000000 g     F .text	000000000000a168 .protected f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps
+0000000000000000 g     O .rodata	0000000000000040 .protected f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.kd

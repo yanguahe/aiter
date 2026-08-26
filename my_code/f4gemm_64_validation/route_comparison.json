@@ -1,9 +1,0 @@
-{
-  "comparison": {
-    "available": false
-  },
-  "routes": {},
-  "warnings": [
-    "two-route object comparison is unavailable"
-  ]
-}

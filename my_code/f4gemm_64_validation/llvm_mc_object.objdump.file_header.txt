@@ -1,0 +1,4 @@
+
+/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_64_validation/target.llvm-mc.o:	file format elf64-amdgpu
+architecture: amdgcn
+start address: 0x0000000000000000

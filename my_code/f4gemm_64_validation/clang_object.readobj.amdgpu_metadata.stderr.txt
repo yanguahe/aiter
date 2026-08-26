@@ -1,0 +1,1 @@
+/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj: error: unknown argument '--amdgpu-metadata'

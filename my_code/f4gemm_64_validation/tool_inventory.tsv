@@ -1,9 +1,9 @@
-requested_name	state	executable_name	path
-clang	FOUND	clang	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
-clang++	FOUND	clang++	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
-llvm-mc	FOUND	llvm-mc	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
-ld.lld	FOUND	ld.lld	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
-llvm-objdump	FOUND	llvm-objdump	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
-llvm-readelf	FOUND	llvm-readelf	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
-llvm-readobj	FOUND	llvm-readobj	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
-llvm-nm	FOUND	llvm-nm	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm
+requested_name	exists	executable	launchable	version_status	ldd_not_found	path
+clang	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang
+clang++	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang++
+llvm-mc	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-mc
+ld.lld	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld
+llvm-objdump	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-objdump
+llvm-readelf	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readelf
+llvm-readobj	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-readobj
+llvm-nm	YES	YES	YES	0	NO	/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/llvm-nm

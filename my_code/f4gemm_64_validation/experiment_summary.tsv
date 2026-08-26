@@ -1,11 +1,11 @@
 experiment	result	detail
-1. Toolchain inventory	WARN	8 tool version command(s) failed
+1. Toolchain inventory	PASS	core tools exist and launch; dependency/version probes passed
 2. Input integrity	WARN	target is byte-for-byte identical to reference
-3. Assembly routes	FAIL	no assembler route produced a valid object
-4. Code-object link	WARN	link skipped because no object assembled
-5. Disassembly	FAIL	no valid object was available to disassemble
-6. Metadata/resources	WARN	0 tool command failure(s), 5 resource warning(s)
-7. Static opcode audit	PASS	source/disassembly opcode, labels, branches, and constants audited
-8. Design invariants	WARN	9 incomplete-rewrite/design warning(s); see design_invariants.json
+3. Assembly routes	PASS	llvm-mc and clang each produced a valid object from the exact copied source
+4. Code-object link	PASS	loadable-style shared AMDHSA code object produced
+5. Disassembly	PASS	4 produced ELF file(s) fully disassembled
+6. Metadata/resources	WARN	metadata analysis program failed with status 1
+7. Static opcode audit	WARN	embedded static audit failed with status 1
+8. Design invariants	WARN	design-invariant heuristic analysis unavailable
 9. Existing tooling	WARN	SKIP: no applicable read-only/static CLI mode exists for the requested kernel
-10. Round-trip sanity	FAIL	object, ELF, or disassembly validity failed
+10. Round-trip sanity	PASS	ELF/disassembly sanity passed; no unresolved symbols reported

@@ -1,1 +1,1 @@
-/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/ld.lld: error while loading shared libraries: librocm_sysdeps_zstd.so.1: cannot open shared object file: No such file or directory
+LLD 23.0.0 (git@github.com:yanguahe/llvm-project.git 864d053a6ddbcff7c5816384626332d40d0eb399) (compatible with GNU linkers)

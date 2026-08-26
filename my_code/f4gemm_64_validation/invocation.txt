@@ -1,4 +1,4 @@
-date: 2026-08-26T04:22:42+00:00
+date: 2026-08-26T04:47:39+00:00
 host: heliosr-2b805-c9-3
 pwd: /data/yanguahe/code/wk_sp1/aiter
 script: my_code/run_validate_f4gemm_64x64_isa.sh
@@ -7,6 +7,8 @@ architecture: gfx1250
 target triple: amdgcn-amd-amdhsa
 code object version: 6
 LLVM_BIN: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin
+LLVM_RUNTIME_LIBS: <unset>
+LD_LIBRARY_PATH: /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/rocm_sysdeps/lib:/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib
 REPO_ROOT: /data/yanguahe/code/wk_sp1/aiter
 TARGET_S: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps.s
 REFERENCE_S: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s

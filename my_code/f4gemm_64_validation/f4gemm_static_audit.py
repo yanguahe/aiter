@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 OLD_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
-NEW_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_64x64_4x4_ps"
+NEW_SYMBOL = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
 
 CATEGORY_NAMES = (
     "wmma",
@@ -370,45 +370,59 @@ def design_analysis(target_text, target_report):
     missing_ring = [name for name, count in ring_presence.items() if count == 0]
     if missing_ring:
         warnings.append(
-            "expected packed-ring literals missing: " + ", ".join(missing_ring)
+            "HEURISTIC WARNING: expected packed-ring literals missing: "
+            + ", ".join(missing_ring)
         )
     if literals[0x2A000] == 0 and not re.search(r"\b172032\b", target_text):
-        warnings.append("candidate fixed-LDS end/resource 0x2A000 (172032) is absent")
+        warnings.append(
+            "HEURISTIC WARNING: candidate fixed-LDS end/resource literal "
+            "0x2A000 (172032) is absent"
+        )
     if literals[0x22000] == 0:
-        warnings.append("input-ring/output-staging boundary 0x22000 is absent")
+        warnings.append(
+            "HEURISTIC WARNING: input-ring/output-staging boundary literal "
+            "0x22000 is absent"
+        )
     if literals[0x80] == 0 and not re.search(r"(?<!\w)128(?!\w)", target_text):
-        warnings.append("128 tile/wave offset literal was not found")
+        warnings.append("HEURISTIC WARNING: 128 tile/wave offset literal was not found")
     if literals[0x40] == 0 and not re.search(r"(?<!\w)64(?!\w)", target_text):
-        warnings.append("64 tile/wave offset literal was not found")
+        warnings.append("HEURISTIC WARNING: 64 tile/wave offset literal was not found")
     if counts["s_wait_alu"] == 0:
         warnings.append("s_wait_alu is absent")
     if counts["tensor_store_from_lds"] == 0:
         warnings.append("output tensor_store_from_lds candidate is absent")
     if not first_last_two_rounds:
         warnings.append(
-            "two output WG barrier rounds (before first and after last output TDM) "
-            "were not statically found"
+            "HEURISTIC WARNING: nearby-barrier search did not find two output "
+            "WG rounds (before first and after last output TDM); this is not "
+            "semantic proof"
         )
     if counts["wg_barrier_signal"] != counts["wg_barrier_wait"]:
         warnings.append(
-            "WG barrier signal/wait static counts are not balanced "
-            f"({counts['wg_barrier_signal']} vs {counts['wg_barrier_wait']})"
+            "HEURISTIC WARNING: raw WG barrier signal/wait counts are not "
+            f"balanced ({counts['wg_barrier_signal']} vs "
+            f"{counts['wg_barrier_wait']}); counts do not prove protocol semantics"
         )
     if counts["cluster_barrier_signal"] == 0 or counts["cluster_barrier_wait"] == 0:
-        warnings.append("cluster barrier signal/wait presence is incomplete")
+        warnings.append(
+            "HEURISTIC WARNING: raw cluster barrier signal/wait presence is incomplete"
+        )
     if counts["cluster_barrier_signal"] != counts["cluster_barrier_wait"]:
         warnings.append(
-            "cluster barrier signal/wait static counts are not balanced "
-            f"({counts['cluster_barrier_signal']} vs "
-            f"{counts['cluster_barrier_wait']})"
+            "HEURISTIC WARNING: raw cluster barrier signal/wait counts are not "
+            f"balanced ({counts['cluster_barrier_signal']} vs "
+            f"{counts['cluster_barrier_wait']}); counts do not prove protocol semantics"
         )
     present_old = [name for name, count in old_presence.items() if count]
     if present_old:
-        warnings.append("old-only ring/LDS literals remain: " + ", ".join(present_old))
+        warnings.append(
+            "HEURISTIC WARNING: old-only ring/LDS literals remain: "
+            + ", ".join(present_old)
+        )
     if target_report["old_symbol_occurrences"]:
         warnings.append("original 256x256 kernel symbol remains")
     if target_report["new_symbol_occurrences"] == 0:
-        warnings.append("new 64x64 kernel symbol is absent")
+        warnings.append("new 128x128 contract kernel symbol is absent")
     if re.search(
         r"(?mi)^\s*\.amdhsa_group_segment_fixed_size\s+327680\b",
         target_text,
@@ -421,6 +435,10 @@ def design_analysis(target_text, target_report):
         warnings.append("old next_free_vgpr=1024 descriptor remains")
 
     return {
+        "heuristic_notice": (
+            "Literal presence, nearby-barrier windows, and raw barrier counts are "
+            "search aids only; they are not semantic proof and never hard failures."
+        ),
         "new_ring_address_occurrences": ring_presence,
         "old_only_ring_address_occurrences": old_presence,
         "output_staging_boundary_0x22000_occurrences": literals[0x22000],
@@ -512,7 +530,7 @@ def metadata_analysis(out_dir, target_path):
     if old_symbol_hits:
         warnings.append("original 256x256 kernel symbol remains in source/ELF reports")
     if not new_symbol_hits:
-        warnings.append("64x64 kernel symbol is absent from source/ELF reports")
+        warnings.append("128x128 contract kernel symbol is absent from source/ELF reports")
     if old_lds_hits:
         warnings.append("old 327680-byte (0x50000) LDS resource remains")
     if old_vgpr_hits:
@@ -768,7 +786,7 @@ def main():
     else:
         print("  none")
 
-    print("\nDESIGN INVARIANTS")
+    print("\nDESIGN HEURISTICS (SEARCH AIDS ONLY; NOT SEMANTIC PROOF)")
     for key, value in design.items():
         if key != "warnings":
             print(f"  {key}: {value}")
@@ -780,7 +798,7 @@ def main():
 
     print("\nMETADATA / RESOURCE INSPECTION")
     print_hits("Old 256x256 symbol hits:", metadata["old_symbol_hits"])
-    print_hits("New 64x64 symbol hits:", metadata["new_symbol_hits"])
+    print_hits("New 128x128 contract symbol hits:", metadata["new_symbol_hits"])
     print_hits("Old 327680-byte LDS hits:", metadata["old_lds_hits"])
     print_hits("Candidate 172032-byte LDS hits:", metadata["candidate_lds_hits"])
     print_hits("Old 1024-VGPR hits:", metadata["old_vgpr_hits"])
@@ -796,6 +814,11 @@ def main():
         "DESIGN_WARNINGS": len(design.get("warnings", ())),
         "METADATA_WARNINGS": len(metadata["warnings"]),
         "ROUTE_WARNINGS": len(routes["warnings"]),
+        "TARGET_SOURCE_AUDITED": int("target_source" in reports),
+        "REFERENCE_SOURCE_AUDITED": int("reference_source" in reports),
+        "DISASSEMBLIES_AUDITED": sum(
+            1 for report in reports.values() if report["kind"] == "disassembly"
+        ),
         "UNRESOLVED_BRANCHES": sum(
             len(report["unresolved_symbolic_branches"])
             for report in reports.values()
