@@ -90,13 +90,13 @@ _STAGE1_ACT_ID = {
 }
 _GEMM_SUMMARY_COLUMNS = (
     "gemm1 executed",
-    "gemm1 requested read",
+    "gemm1 effective read",
     "gemm1 output write",
-    "gemm1 R+W",
+    "gemm1 effective R+W",
     "gemm2 executed",
-    "gemm2 requested read",
+    "gemm2 effective read",
     "gemm2 output write",
-    "gemm2 R+W",
+    "gemm2 effective R+W",
 )
 _TDM_KERNEL_RE = re.compile(
     r"a8w4_tdm_(?P<a_format>fp4|fp8)"
@@ -123,7 +123,7 @@ def _empty_gemm_summary() -> dict[str, str]:
     return {column: "N/A" for column in _GEMM_SUMMARY_COLUMNS}
 
 
-def _calculate_tdm_stage_metrics(
+def _calculate_effective_stage_metrics(
     *,
     route_counts: list[int],
     tile_m: int,
@@ -139,20 +139,19 @@ def _calculate_tdm_stage_metrics(
     stage1_act: int,
     quant_out: int,
 ) -> dict[str, int | float | str]:
-    """Pure-Python requested-byte/work accounting for one grouped TDM stage.
+    """Pure-Python executed-work and unique-logical-byte accounting.
 
-    Each real expert M tile requests a complete B/B-scale N×K surface. A payload
-    is row-OOB clamped to valid routes, while A scale is not and therefore uses
-    tile-aligned rows. Sentinel tiles outside these per-expert tiles never enter
-    this accounting. Values are logical kernel requests, not cache/HBM
-    transactions; expert-map/launch metadata is intentionally excluded.
+    Compute uses tile-aligned rows actually executed by WMMA. Effective traffic
+    instead counts each valid A row and each active expert's B/bias surface once,
+    independent of M/N tiling and cluster multicast. It is a useful-work metric,
+    not requested bytes or measured HBM traffic; LDS and metadata are excluded.
     """
     if not route_counts or any(count < 0 for count in route_counts):
         raise ValueError("route_counts must contain non-negative expert counts")
     if min(tile_m, tile_n, tile_k, n, k, output_n) <= 0:
         raise ValueError("tile and problem dimensions must be positive")
-    if cluster_n != 1:
-        raise ValueError("cluster_n > 1 multicast accounting is not supported")
+    if cluster_n < 1:
+        raise ValueError("cluster_n must be positive")
     if n % tile_n or k % tile_k:
         raise ValueError("N and K must be exact multiples of the observed tiles")
     if a_format not in ("fp4", "fp8"):
@@ -167,24 +166,28 @@ def _calculate_tdm_stage_metrics(
         raise ValueError("fused quant output requires bias-free A8W4 stage1")
 
     active_m_tiles = sum((count + tile_m - 1) // tile_m for count in route_counts)
+    active_experts = sum(count > 0 for count in route_counts)
     valid_rows = sum(route_counts)
     aligned_rows = active_m_tiles * tile_m
-    n_tiles = n // tile_n
 
-    # Kernel source: A_PACK=2 for FP4 and 1 for FP8; B is always packed FP4.
-    # The guarded cluster_n==1 case requests one A surface per N tile.
+    # Unique logical A/scale rows are counted once; B/scale surfaces once per
+    # active expert. tile_n, M-tile replication, alignment padding, and cluster
+    # multicast intentionally do not affect effective bytes.
     a_row_bytes = k // 2 if a_format == "fp4" else k
-    a_payload_bytes = valid_rows * a_row_bytes * n_tiles
-    a_scale_bytes = aligned_rows * (k // SCALE_BLOCK) * n_tiles
-    b_payload_bytes = active_m_tiles * n * (k // 2)
-    b_scale_bytes = active_m_tiles * n * (k // SCALE_BLOCK)
-    tdm_read_bytes = (
-        a_payload_bytes + a_scale_bytes + b_payload_bytes + b_scale_bytes
+    a_payload_bytes = valid_rows * a_row_bytes
+    a_scale_bytes = valid_rows * (k // SCALE_BLOCK)
+    b_payload_bytes = active_experts * n * (k // 2)
+    b_scale_bytes = active_experts * n * (k // SCALE_BLOCK)
+    # The wrapper converts bias to the BF16 output dtype. Count one logical
+    # bias vector per active expert, not its repeated per-row kernel loads.
+    bias_read_bytes = active_experts * n * 2 if has_bias else 0
+    effective_read_bytes = (
+        a_payload_bytes
+        + a_scale_bytes
+        + b_payload_bytes
+        + b_scale_bytes
+        + bias_read_bytes
     )
-    # Bias uses direct global_load vectors (not TDM) and is repeated for every
-    # aligned row/N tile, so it belongs in generic "requested read", not TDM.
-    bias_read_bytes = aligned_rows * n * 2 if has_bias else 0
-    requested_read_bytes = tdm_read_bytes + bias_read_bytes
 
     if quant_out:
         if output_n % SCALE_BLOCK:
@@ -197,18 +200,19 @@ def _calculate_tdm_stage_metrics(
     else:
         # This test always requests BF16 fused_moe output. In the biased A8W4
         # path GEMM1 is qout0, so its later standalone quant kernel is outside
-        # this GEMM kernel's requested writes and timing.
+        # this GEMM kernel's logical output writes and timing.
         output_payload_bytes = valid_rows * output_n * 2
         output_scale_bytes = 0
         output_kind = "BF16"
     output_write_bytes = output_payload_bytes + output_scale_bytes
     executed_flops = 2 * aligned_rows * n * k
-    read_write_bytes = requested_read_bytes + output_write_bytes
+    effective_read_write_bytes = effective_read_bytes + output_write_bytes
 
     return {
         "valid_rows": valid_rows,
         "aligned_rows": aligned_rows,
         "active_m_tiles": active_m_tiles,
+        "active_experts": active_experts,
         "a_payload_bytes": a_payload_bytes,
         "a_scale_bytes": a_scale_bytes,
         "b_payload_bytes": b_payload_bytes,
@@ -218,27 +222,28 @@ def _calculate_tdm_stage_metrics(
         "output_scale_bytes": output_scale_bytes,
         "output_kind": output_kind,
         "executed_flops": executed_flops,
-        "tdm_read_bytes": tdm_read_bytes,
-        "requested_read_bytes": requested_read_bytes,
+        "effective_read_bytes": effective_read_bytes,
         "output_write_bytes": output_write_bytes,
-        "read_write_bytes": read_write_bytes,
+        "effective_read_write_bytes": effective_read_write_bytes,
         "executed_tflops": executed_flops / latency_us / 1e6,
-        "requested_read_tbps": requested_read_bytes / latency_us / 1e6,
+        "effective_read_tbps": effective_read_bytes / latency_us / 1e6,
         "output_write_tbps": output_write_bytes / latency_us / 1e6,
-        "read_write_tbps": read_write_bytes / latency_us / 1e6,
+        "effective_read_write_tbps": effective_read_write_bytes / latency_us / 1e6,
     }
 
 
-def _format_tdm_stage_metrics(stage: dict[str, int | float | str]) -> tuple[str, ...]:
+def _format_effective_stage_metrics(
+    stage: dict[str, int | float | str],
+) -> tuple[str, ...]:
     return (
         f"{stage['executed_flops']:,} FLOP \u2192 "
         f"{stage['executed_tflops']:,.1f} TFLOP/s",
-        f"{stage['requested_read_bytes']:,} B \u2192 "
-        f"{stage['requested_read_tbps']:.3f} TB/s",
+        f"{stage['effective_read_bytes']:,} B \u2192 "
+        f"{stage['effective_read_tbps']:.3f} TB/s",
         f"{stage['output_write_bytes']:,} B ({stage['output_kind']}) \u2192 "
         f"{stage['output_write_tbps']:.3f} TB/s",
-        f"{stage['read_write_bytes']:,} B \u2192 "
-        f"{stage['read_write_tbps']:.3f} TB/s",
+        f"{stage['effective_read_write_bytes']:,} B \u2192 "
+        f"{stage['effective_read_write_tbps']:.3f} TB/s",
     )
 
 
@@ -343,7 +348,7 @@ def _extract_profiled_gemm_timings(
     return timings, kernels, "; ".join(debug) or None
 
 
-def _build_tdm_summary(
+def _build_effective_summary(
     *,
     profiled_kernels: dict[str, dict[str, int | float | str | bool]],
     route_counts: list[int],
@@ -355,10 +360,10 @@ def _build_tdm_summary(
     model_dim: int,
     inter_dim: int,
 ) -> dict[str, str]:
-    """Build eight A4W4/A8W4 accounting columns or eight explicit N/A values.
+    """Build eight A4W4/A8W4 effective columns or explicit N/A values.
 
-    Bias reads are included as direct-global requested bytes. Cluster multicast,
-    incomplete profiler matches, inconsistent bias/format flags, and unsupported
+    Effective bytes are tile/cluster-independent unique logical traffic.
+    Incomplete profiler matches, inconsistent bias/format flags, and unsupported
     fused-quant modes remain guarded rather than estimated.
     """
     empty = _empty_gemm_summary()
@@ -380,7 +385,7 @@ def _build_tdm_summary(
         return empty
 
     try:
-        stage1 = _calculate_tdm_stage_metrics(
+        stage1 = _calculate_effective_stage_metrics(
             route_counts=route_counts,
             tile_m=int(gemm1["tile_m"]),
             tile_n=int(gemm1["tile_n"]),
@@ -395,7 +400,7 @@ def _build_tdm_summary(
             stage1_act=int(gemm1["stage1_act"]),
             quant_out=int(gemm1["quant_out"]),
         )
-        stage2 = _calculate_tdm_stage_metrics(
+        stage2 = _calculate_effective_stage_metrics(
             route_counts=route_counts,
             tile_m=int(gemm2["tile_m"]),
             tile_n=int(gemm2["tile_n"]),
@@ -416,15 +421,16 @@ def _build_tdm_summary(
     return dict(
         zip(
             _GEMM_SUMMARY_COLUMNS,
-            _format_tdm_stage_metrics(stage1) + _format_tdm_stage_metrics(stage2),
+            _format_effective_stage_metrics(stage1)
+            + _format_effective_stage_metrics(stage2),
         )
     )
 
 
-def test_a4w4_tdm_stage_metrics_fixture():
+def test_a4w4_effective_stage_metrics_fixture():
     """CPU-only arithmetic fixture for the 512-token balanced benchmark."""
     route_counts = [32] * 96
-    gemm1 = _calculate_tdm_stage_metrics(
+    gemm1 = _calculate_effective_stage_metrics(
         route_counts=route_counts,
         tile_m=64,
         tile_n=256,
@@ -439,7 +445,7 @@ def test_a4w4_tdm_stage_metrics_fixture():
         stage1_act=1,
         quant_out=0,
     )
-    gemm2 = _calculate_tdm_stage_metrics(
+    gemm2 = _calculate_effective_stage_metrics(
         route_counts=route_counts,
         tile_m=64,
         tile_n=256,
@@ -457,20 +463,72 @@ def test_a4w4_tdm_stage_metrics_fixture():
 
     assert gemm1["valid_rows"] == 3072
     assert gemm1["aligned_rows"] == 6144
-    assert _format_tdm_stage_metrics(gemm1) == (
+    assert _format_effective_stage_metrics(gemm1) == (
         "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
-        "2,543,321,088 B \u2192 17.577 TB/s",
+        "2,257,747,968 B \u2192 15.603 TB/s",
         "18,874,368 B (BF16) \u2192 0.130 TB/s",
-        "2,562,195,456 B \u2192 17.707 TB/s",
+        "2,276,622,336 B \u2192 15.733 TB/s",
     )
     assert gemm2["valid_rows"] == 3072
     assert gemm2["aligned_rows"] == 6144
-    assert _format_tdm_stage_metrics(gemm2) == (
+    assert _format_effective_stage_metrics(gemm2) == (
         "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
-        "1,271,660,544 B \u2192 16.710 TB/s",
+        "1,128,038,400 B \u2192 14.823 TB/s",
         "44,040,192 B (BF16) \u2192 0.579 TB/s",
-        "1,315,700,736 B \u2192 17.289 TB/s",
+        "1,172,078,592 B \u2192 15.402 TB/s",
     )
+
+
+def test_effective_bytes_are_tile_independent_fixture():
+    """Empty experts, repeated M tiles, tile_n, and cluster do not change bytes."""
+    common = {
+        "route_counts": [0, 1, 65, 0, 128],
+        "n": 256,
+        "k": 256,
+        "output_n": 128,
+        "latency_us": 10.0,
+        "a_format": "fp8",
+        "has_bias": True,
+        "stage1_act": 1,
+        "quant_out": 0,
+    }
+    fine_tiles = _calculate_effective_stage_metrics(
+        **common,
+        tile_m=16,
+        tile_n=64,
+        tile_k=128,
+        cluster_n=1,
+    )
+    coarse_tiles_multicast = _calculate_effective_stage_metrics(
+        **common,
+        tile_m=64,
+        tile_n=256,
+        tile_k=256,
+        cluster_n=4,
+    )
+    effective_keys = (
+        "valid_rows",
+        "active_experts",
+        "a_payload_bytes",
+        "a_scale_bytes",
+        "b_payload_bytes",
+        "b_scale_bytes",
+        "bias_read_bytes",
+        "output_write_bytes",
+        "effective_read_bytes",
+        "effective_read_write_bytes",
+        "effective_read_tbps",
+        "output_write_tbps",
+        "effective_read_write_tbps",
+    )
+    assert {key: fine_tiles[key] for key in effective_keys} == {
+        key: coarse_tiles_multicast[key] for key in effective_keys
+    }
+    assert fine_tiles["valid_rows"] == 194
+    assert fine_tiles["active_experts"] == 3
+    assert fine_tiles["aligned_rows"] == 224
+    assert coarse_tiles_multicast["aligned_rows"] == 320
+    assert fine_tiles["executed_flops"] != coarse_tiles_multicast["executed_flops"]
 
 
 def test_profiled_grouped_gemm_timing_extraction_fixture():
@@ -526,7 +584,7 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     assert a8_kernels["gemm1"]["has_bias"] is True
     assert a8_kernels["gemm2"]["stage1_act"] == 0
     assert a8_debug is None
-    a8_summary = _build_tdm_summary(
+    a8_summary = _build_effective_summary(
         profiled_kernels=a8_kernels,
         route_counts=[64] * 384,
         data_format="a8w4",
@@ -539,15 +597,15 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     )
     assert tuple(a8_summary.values()) == (
         "541,165,879,296 FLOP \u2192 1,090.6 TFLOP/s",
-        "10,149,691,392 B \u2192 20.455 TB/s",
+        "2,428,895,232 B \u2192 4.895 TB/s",
         "37,748,736 B (BF16) \u2192 0.076 TB/s",
-        "10,187,440,128 B \u2192 20.531 TB/s",
+        "2,466,643,968 B \u2192 4.971 TB/s",
         "270,582,939,648 FLOP \u2192 1,036.1 TFLOP/s",
-        "5,116,919,808 B \u2192 19.594 TB/s",
+        "1,147,994,112 B \u2192 4.396 TB/s",
         "352,321,536 B (BF16) \u2192 1.349 TB/s",
-        "5,469,241,344 B \u2192 20.943 TB/s",
+        "1,500,315,648 B \u2192 5.745 TB/s",
     )
-    a8_gemm1_metrics = _calculate_tdm_stage_metrics(
+    a8_gemm1_metrics = _calculate_effective_stage_metrics(
         route_counts=[64] * 384,
         tile_m=16,
         tile_n=256,
@@ -566,6 +624,7 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
         key: a8_gemm1_metrics[key]
         for key in (
             "aligned_rows",
+            "active_experts",
             "a_payload_bytes",
             "a_scale_bytes",
             "b_payload_bytes",
@@ -573,20 +632,25 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
             "bias_read_bytes",
             "output_payload_bytes",
             "output_scale_bytes",
+            "effective_read_bytes",
+            "effective_read_write_bytes",
             "executed_flops",
         )
     } == {
         "aligned_rows": 24576,
-        "a_payload_bytes": 1_056_964_608,
-        "a_scale_bytes": 33_030_144,
-        "b_payload_bytes": 8_455_716_864,
-        "b_scale_bytes": 528_482_304,
-        "bias_read_bytes": 75_497_472,
+        "active_experts": 384,
+        "a_payload_bytes": 176_160_768,
+        "a_scale_bytes": 5_505_024,
+        "b_payload_bytes": 2_113_929_216,
+        "b_scale_bytes": 132_120_576,
+        "bias_read_bytes": 1_179_648,
         "output_payload_bytes": 37_748_736,
         "output_scale_bytes": 0,
+        "effective_read_bytes": 2_428_895_232,
+        "effective_read_write_bytes": 2_466_643_968,
         "executed_flops": 541_165_879_296,
     }
-    a8_gemm2_metrics = _calculate_tdm_stage_metrics(
+    a8_gemm2_metrics = _calculate_effective_stage_metrics(
         route_counts=[64] * 384,
         tile_m=16,
         tile_n=512,
@@ -605,6 +669,7 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
         key: a8_gemm2_metrics[key]
         for key in (
             "aligned_rows",
+            "active_experts",
             "a_payload_bytes",
             "a_scale_bytes",
             "b_payload_bytes",
@@ -612,20 +677,25 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
             "bias_read_bytes",
             "output_payload_bytes",
             "output_scale_bytes",
+            "effective_read_bytes",
+            "effective_read_write_bytes",
             "executed_flops",
         )
     } == {
         "aligned_rows": 24576,
-        "a_payload_bytes": 264_241_152,
-        "a_scale_bytes": 8_257_536,
-        "b_payload_bytes": 4_227_858_432,
-        "b_scale_bytes": 264_241_152,
-        "bias_read_bytes": 352_321_536,
+        "active_experts": 384,
+        "a_payload_bytes": 18_874_368,
+        "a_scale_bytes": 589_824,
+        "b_payload_bytes": 1_056_964_608,
+        "b_scale_bytes": 66_060_288,
+        "bias_read_bytes": 5_505_024,
         "output_payload_bytes": 352_321_536,
         "output_scale_bytes": 0,
+        "effective_read_bytes": 1_147_994_112,
+        "effective_read_write_bytes": 1_500_315_648,
         "executed_flops": 270_582_939_648,
     }
-    fused_quant = _calculate_tdm_stage_metrics(
+    fused_quant = _calculate_effective_stage_metrics(
         route_counts=[16],
         tile_m=16,
         tile_n=64,
@@ -666,7 +736,7 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     )
     assert a4_timings == {"gemm1_us": 144.7, "gemm2_us": 76.1}
     assert a4_debug is None
-    a4_summary = _build_tdm_summary(
+    a4_summary = _build_effective_summary(
         profiled_kernels=a4_kernels,
         route_counts=[32] * 96,
         data_format="a4w4",
@@ -680,13 +750,13 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     assert tuple(a4_summary) == _GEMM_SUMMARY_COLUMNS
     assert tuple(a4_summary.values()) == (
         "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
-        "2,543,321,088 B \u2192 17.577 TB/s",
+        "2,257,747,968 B \u2192 15.603 TB/s",
         "18,874,368 B (BF16) \u2192 0.130 TB/s",
-        "2,562,195,456 B \u2192 17.707 TB/s",
+        "2,276,622,336 B \u2192 15.733 TB/s",
         "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
-        "1,271,660,544 B \u2192 16.710 TB/s",
+        "1,128,038,400 B \u2192 14.823 TB/s",
         "44,040,192 B (BF16) \u2192 0.579 TB/s",
-        "1,315,700,736 B \u2192 17.289 TB/s",
+        "1,172,078,592 B \u2192 15.402 TB/s",
     )
 
     duplicate_records = a8_records + [
@@ -1261,7 +1331,7 @@ def run_moe(
         metrics.update(profiled_kernel_us)
         if timing_debug:
             print(f"[bench kernel timing] {timing_debug}", flush=True)
-        gemm_summary = _build_tdm_summary(
+        gemm_summary = _build_effective_summary(
             profiled_kernels=profiled_kernels,
             route_counts=route_counts,
             data_format=data_format,
