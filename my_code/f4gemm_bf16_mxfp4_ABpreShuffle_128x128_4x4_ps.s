@@ -885,40 +885,40 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b32 v83, v80 offset:128                            ; 000000003644: D8D80080 53000050
 	ds_load_b32 v84, v80 offset:256                            ; 00000000364C: D8D80100 54000050
 	ds_load_b32 v85, v80 offset:384                            ; 000000003654: D8D80180 55000050
-	s_set_vgpr_msb 64                                          ; 00000000365C: BF860040
-	ds_load_b128 v[8:11], v76                   
-	ds_load_b128 v[12:15], v76 offset:512       
-	ds_load_b128 v[16:19], v76 offset:2048      
-	ds_load_b128 v[20:23], v76 offset:2560      
-	ds_load_b128 v[24:27], v76 offset:1024      
-	ds_load_b128 v[28:31], v76 offset:1536      
-	ds_load_b128 v[32:35], v76 offset:3072      
-	ds_load_b128 v[36:39], v76 offset:3584      
-	ds_load_b128 v[40:43], v76 offset:4096      
-	ds_load_b128 v[44:47], v76 offset:4608      
-	ds_load_b128 v[48:51], v76 offset:6144      
-	ds_load_b128 v[52:55], v76 offset:6656      
-	ds_load_b128 v[56:59], v76 offset:5120      
-	ds_load_b128 v[60:63], v76 offset:5632      
-	ds_load_b128 v[64:67], v76 offset:7168      
-	ds_load_b128 v[68:71], v76 offset:7680      
 	s_set_vgpr_msb 0
-	ds_load_b128 v[192:195], v72                   
-	ds_load_b128 v[196:199], v72 offset:512       
-	ds_load_b128 v[200:203], v72 offset:1024      
-	ds_load_b128 v[204:207], v72 offset:1536      
-	ds_load_b128 v[208:211], v72 offset:2048      
-	ds_load_b128 v[212:215], v72 offset:2560      
-	ds_load_b128 v[216:219], v72 offset:3072      
-	ds_load_b128 v[220:223], v72 offset:3584      
-	ds_load_b128 v[224:227], v72 offset:4096      
-	ds_load_b128 v[228:231], v72 offset:4608      
-	ds_load_b128 v[232:235], v72 offset:5120      
-	ds_load_b128 v[236:239], v72 offset:5632      
-	ds_load_b128 v[240:243], v72 offset:6144      
-	ds_load_b128 v[244:247], v72 offset:6656      
-	ds_load_b128 v[248:251], v72 offset:7168      
-	ds_load_b128 v[252:255], v72 offset:7680      
+	ds_load_b128 v[192:195], v76
+	ds_load_b128 v[196:199], v76 offset:512
+	ds_load_b128 v[200:203], v76 offset:2048
+	ds_load_b128 v[204:207], v76 offset:2560
+	ds_load_b128 v[208:211], v76 offset:1024
+	ds_load_b128 v[212:215], v76 offset:1536
+	ds_load_b128 v[216:219], v76 offset:3072
+	ds_load_b128 v[220:223], v76 offset:3584
+	ds_load_b128 v[224:227], v76 offset:4096
+	ds_load_b128 v[228:231], v76 offset:4608
+	ds_load_b128 v[232:235], v76 offset:6144
+	ds_load_b128 v[236:239], v76 offset:6656
+	ds_load_b128 v[240:243], v76 offset:5120
+	ds_load_b128 v[244:247], v76 offset:5632
+	ds_load_b128 v[248:251], v76 offset:7168
+	ds_load_b128 v[252:255], v76 offset:7680
+	s_set_vgpr_msb 0
+	ds_load_b128 v[8:11], v72
+	ds_load_b128 v[12:15], v72 offset:512
+	ds_load_b128 v[16:19], v72 offset:1024
+	ds_load_b128 v[20:23], v72 offset:1536
+	ds_load_b128 v[24:27], v72 offset:2048
+	ds_load_b128 v[28:31], v72 offset:2560
+	ds_load_b128 v[32:35], v72 offset:3072
+	ds_load_b128 v[36:39], v72 offset:3584
+	ds_load_b128 v[40:43], v72 offset:4096
+	ds_load_b128 v[44:47], v72 offset:4608
+	ds_load_b128 v[48:51], v72 offset:5120
+	ds_load_b128 v[52:55], v72 offset:5632
+	ds_load_b128 v[56:59], v72 offset:6144
+	ds_load_b128 v[60:63], v72 offset:6656
+	ds_load_b128 v[64:67], v72 offset:7168
+	ds_load_b128 v[68:71], v72 offset:7680
 	s_mov_b32 s33, 0x1e000                                     ; 000000003764: BEA100FF 00048000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000376C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000003778: 8018FF3A 00000400
@@ -1530,40 +1530,40 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b32 v83, v80 offset:128                            ; 000000004EF8: D8D80080 53000050
 	ds_load_b32 v84, v80 offset:256                            ; 000000004F00: D8D80100 54000050
 	ds_load_b32 v85, v80 offset:384                            ; 000000004F08: D8D80180 55000050
-	s_set_vgpr_msb 64                                          ; 000000004F10: BF860040
-	ds_load_b128 v[8:11], v76                   
-	ds_load_b128 v[12:15], v76 offset:512       
-	ds_load_b128 v[16:19], v76 offset:2048      
-	ds_load_b128 v[20:23], v76 offset:2560      
-	ds_load_b128 v[24:27], v76 offset:1024      
-	ds_load_b128 v[28:31], v76 offset:1536      
-	ds_load_b128 v[32:35], v76 offset:3072      
-	ds_load_b128 v[36:39], v76 offset:3584      
-	ds_load_b128 v[40:43], v76 offset:4096      
-	ds_load_b128 v[44:47], v76 offset:4608      
-	ds_load_b128 v[48:51], v76 offset:6144      
-	ds_load_b128 v[52:55], v76 offset:6656      
-	ds_load_b128 v[56:59], v76 offset:5120      
-	ds_load_b128 v[60:63], v76 offset:5632      
-	ds_load_b128 v[64:67], v76 offset:7168      
-	ds_load_b128 v[68:71], v76 offset:7680      
 	s_set_vgpr_msb 0
-	ds_load_b128 v[192:195], v72                   
-	ds_load_b128 v[196:199], v72 offset:512       
-	ds_load_b128 v[200:203], v72 offset:1024      
-	ds_load_b128 v[204:207], v72 offset:1536      
-	ds_load_b128 v[208:211], v72 offset:2048      
-	ds_load_b128 v[212:215], v72 offset:2560      
-	ds_load_b128 v[216:219], v72 offset:3072      
-	ds_load_b128 v[220:223], v72 offset:3584      
-	ds_load_b128 v[224:227], v72 offset:4096      
-	ds_load_b128 v[228:231], v72 offset:4608      
-	ds_load_b128 v[232:235], v72 offset:5120      
-	ds_load_b128 v[236:239], v72 offset:5632      
-	ds_load_b128 v[240:243], v72 offset:6144      
-	ds_load_b128 v[244:247], v72 offset:6656      
-	ds_load_b128 v[248:251], v72 offset:7168      
-	ds_load_b128 v[252:255], v72 offset:7680      
+	ds_load_b128 v[192:195], v76
+	ds_load_b128 v[196:199], v76 offset:512
+	ds_load_b128 v[200:203], v76 offset:2048
+	ds_load_b128 v[204:207], v76 offset:2560
+	ds_load_b128 v[208:211], v76 offset:1024
+	ds_load_b128 v[212:215], v76 offset:1536
+	ds_load_b128 v[216:219], v76 offset:3072
+	ds_load_b128 v[220:223], v76 offset:3584
+	ds_load_b128 v[224:227], v76 offset:4096
+	ds_load_b128 v[228:231], v76 offset:4608
+	ds_load_b128 v[232:235], v76 offset:6144
+	ds_load_b128 v[236:239], v76 offset:6656
+	ds_load_b128 v[240:243], v76 offset:5120
+	ds_load_b128 v[244:247], v76 offset:5632
+	ds_load_b128 v[248:251], v76 offset:7168
+	ds_load_b128 v[252:255], v76 offset:7680
+	s_set_vgpr_msb 0
+	ds_load_b128 v[8:11], v72
+	ds_load_b128 v[12:15], v72 offset:512
+	ds_load_b128 v[16:19], v72 offset:1024
+	ds_load_b128 v[20:23], v72 offset:1536
+	ds_load_b128 v[24:27], v72 offset:2048
+	ds_load_b128 v[28:31], v72 offset:2560
+	ds_load_b128 v[32:35], v72 offset:3072
+	ds_load_b128 v[36:39], v72 offset:3584
+	ds_load_b128 v[40:43], v72 offset:4096
+	ds_load_b128 v[44:47], v72 offset:4608
+	ds_load_b128 v[48:51], v72 offset:5120
+	ds_load_b128 v[52:55], v72 offset:5632
+	ds_load_b128 v[56:59], v72 offset:6144
+	ds_load_b128 v[60:63], v72 offset:6656
+	ds_load_b128 v[64:67], v72 offset:7168
+	ds_load_b128 v[68:71], v72 offset:7680
 	s_mov_b32 s33, 0x11c00                                     ; 000000005018: BEA100FF 00023800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005020: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 00000000502C: 8018FF3A 00000400
@@ -1988,40 +1988,40 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b32 v83, v80 offset:128                            ; 0000000058EC: D8D80080 53000050
 	ds_load_b32 v84, v80 offset:256                            ; 0000000058F4: D8D80100 54000050
 	ds_load_b32 v85, v80 offset:384                            ; 0000000058FC: D8D80180 55000050
-	s_set_vgpr_msb 64                                          ; 000000005904: BF860040
-	ds_load_b128 v[8:11], v76                   
-	ds_load_b128 v[12:15], v76 offset:512       
-	ds_load_b128 v[16:19], v76 offset:2048      
-	ds_load_b128 v[20:23], v76 offset:2560      
-	ds_load_b128 v[24:27], v76 offset:1024      
-	ds_load_b128 v[28:31], v76 offset:1536      
-	ds_load_b128 v[32:35], v76 offset:3072      
-	ds_load_b128 v[36:39], v76 offset:3584      
-	ds_load_b128 v[40:43], v76 offset:4096      
-	ds_load_b128 v[44:47], v76 offset:4608      
-	ds_load_b128 v[48:51], v76 offset:6144      
-	ds_load_b128 v[52:55], v76 offset:6656      
-	ds_load_b128 v[56:59], v76 offset:5120      
-	ds_load_b128 v[60:63], v76 offset:5632      
-	ds_load_b128 v[64:67], v76 offset:7168      
-	ds_load_b128 v[68:71], v76 offset:7680      
 	s_set_vgpr_msb 0
-	ds_load_b128 v[192:195], v72                   
-	ds_load_b128 v[196:199], v72 offset:512       
-	ds_load_b128 v[200:203], v72 offset:1024      
-	ds_load_b128 v[204:207], v72 offset:1536      
-	ds_load_b128 v[208:211], v72 offset:2048      
-	ds_load_b128 v[212:215], v72 offset:2560      
-	ds_load_b128 v[216:219], v72 offset:3072      
-	ds_load_b128 v[220:223], v72 offset:3584      
-	ds_load_b128 v[224:227], v72 offset:4096      
-	ds_load_b128 v[228:231], v72 offset:4608      
-	ds_load_b128 v[232:235], v72 offset:5120      
-	ds_load_b128 v[236:239], v72 offset:5632      
-	ds_load_b128 v[240:243], v72 offset:6144      
-	ds_load_b128 v[244:247], v72 offset:6656      
-	ds_load_b128 v[248:251], v72 offset:7168      
-	ds_load_b128 v[252:255], v72 offset:7680      
+	ds_load_b128 v[192:195], v76
+	ds_load_b128 v[196:199], v76 offset:512
+	ds_load_b128 v[200:203], v76 offset:2048
+	ds_load_b128 v[204:207], v76 offset:2560
+	ds_load_b128 v[208:211], v76 offset:1024
+	ds_load_b128 v[212:215], v76 offset:1536
+	ds_load_b128 v[216:219], v76 offset:3072
+	ds_load_b128 v[220:223], v76 offset:3584
+	ds_load_b128 v[224:227], v76 offset:4096
+	ds_load_b128 v[228:231], v76 offset:4608
+	ds_load_b128 v[232:235], v76 offset:6144
+	ds_load_b128 v[236:239], v76 offset:6656
+	ds_load_b128 v[240:243], v76 offset:5120
+	ds_load_b128 v[244:247], v76 offset:5632
+	ds_load_b128 v[248:251], v76 offset:7168
+	ds_load_b128 v[252:255], v76 offset:7680
+	s_set_vgpr_msb 0
+	ds_load_b128 v[8:11], v72
+	ds_load_b128 v[12:15], v72 offset:512
+	ds_load_b128 v[16:19], v72 offset:1024
+	ds_load_b128 v[20:23], v72 offset:1536
+	ds_load_b128 v[24:27], v72 offset:2048
+	ds_load_b128 v[28:31], v72 offset:2560
+	ds_load_b128 v[32:35], v72 offset:3072
+	ds_load_b128 v[36:39], v72 offset:3584
+	ds_load_b128 v[40:43], v72 offset:4096
+	ds_load_b128 v[44:47], v72 offset:4608
+	ds_load_b128 v[48:51], v72 offset:5120
+	ds_load_b128 v[52:55], v72 offset:5632
+	ds_load_b128 v[56:59], v72 offset:6144
+	ds_load_b128 v[60:63], v72 offset:6656
+	ds_load_b128 v[64:67], v72 offset:7168
+	ds_load_b128 v[68:71], v72 offset:7680
 	s_mov_b32 s33, 0x1e000                                     ; 000000005A0C: BEA100FF 00048000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005A14: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000005A20: 8018FF3A 00000400
@@ -2447,40 +2447,40 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b32 v83, v80 offset:128                            ; 0000000062E8: D8D80080 53000050
 	ds_load_b32 v84, v80 offset:256                            ; 0000000062F0: D8D80100 54000050
 	ds_load_b32 v85, v80 offset:384                            ; 0000000062F8: D8D80180 55000050
-	s_set_vgpr_msb 64                                          ; 000000006300: BF860040
-	ds_load_b128 v[8:11], v76                   
-	ds_load_b128 v[12:15], v76 offset:512       
-	ds_load_b128 v[16:19], v76 offset:2048      
-	ds_load_b128 v[20:23], v76 offset:2560      
-	ds_load_b128 v[24:27], v76 offset:1024      
-	ds_load_b128 v[28:31], v76 offset:1536      
-	ds_load_b128 v[32:35], v76 offset:3072      
-	ds_load_b128 v[36:39], v76 offset:3584      
-	ds_load_b128 v[40:43], v76 offset:4096      
-	ds_load_b128 v[44:47], v76 offset:4608      
-	ds_load_b128 v[48:51], v76 offset:6144      
-	ds_load_b128 v[52:55], v76 offset:6656      
-	ds_load_b128 v[56:59], v76 offset:5120      
-	ds_load_b128 v[60:63], v76 offset:5632      
-	ds_load_b128 v[64:67], v76 offset:7168      
-	ds_load_b128 v[68:71], v76 offset:7680      
 	s_set_vgpr_msb 0
-	ds_load_b128 v[192:195], v72                   
-	ds_load_b128 v[196:199], v72 offset:512       
-	ds_load_b128 v[200:203], v72 offset:1024      
-	ds_load_b128 v[204:207], v72 offset:1536      
-	ds_load_b128 v[208:211], v72 offset:2048      
-	ds_load_b128 v[212:215], v72 offset:2560      
-	ds_load_b128 v[216:219], v72 offset:3072      
-	ds_load_b128 v[220:223], v72 offset:3584      
-	ds_load_b128 v[224:227], v72 offset:4096      
-	ds_load_b128 v[228:231], v72 offset:4608      
-	ds_load_b128 v[232:235], v72 offset:5120      
-	ds_load_b128 v[236:239], v72 offset:5632      
-	ds_load_b128 v[240:243], v72 offset:6144      
-	ds_load_b128 v[244:247], v72 offset:6656      
-	ds_load_b128 v[248:251], v72 offset:7168      
-	ds_load_b128 v[252:255], v72 offset:7680      
+	ds_load_b128 v[192:195], v76
+	ds_load_b128 v[196:199], v76 offset:512
+	ds_load_b128 v[200:203], v76 offset:2048
+	ds_load_b128 v[204:207], v76 offset:2560
+	ds_load_b128 v[208:211], v76 offset:1024
+	ds_load_b128 v[212:215], v76 offset:1536
+	ds_load_b128 v[216:219], v76 offset:3072
+	ds_load_b128 v[220:223], v76 offset:3584
+	ds_load_b128 v[224:227], v76 offset:4096
+	ds_load_b128 v[228:231], v76 offset:4608
+	ds_load_b128 v[232:235], v76 offset:6144
+	ds_load_b128 v[236:239], v76 offset:6656
+	ds_load_b128 v[240:243], v76 offset:5120
+	ds_load_b128 v[244:247], v76 offset:5632
+	ds_load_b128 v[248:251], v76 offset:7168
+	ds_load_b128 v[252:255], v76 offset:7680
+	s_set_vgpr_msb 0
+	ds_load_b128 v[8:11], v72
+	ds_load_b128 v[12:15], v72 offset:512
+	ds_load_b128 v[16:19], v72 offset:1024
+	ds_load_b128 v[20:23], v72 offset:1536
+	ds_load_b128 v[24:27], v72 offset:2048
+	ds_load_b128 v[28:31], v72 offset:2560
+	ds_load_b128 v[32:35], v72 offset:3072
+	ds_load_b128 v[36:39], v72 offset:3584
+	ds_load_b128 v[40:43], v72 offset:4096
+	ds_load_b128 v[44:47], v72 offset:4608
+	ds_load_b128 v[48:51], v72 offset:5120
+	ds_load_b128 v[52:55], v72 offset:5632
+	ds_load_b128 v[56:59], v72 offset:6144
+	ds_load_b128 v[60:63], v72 offset:6656
+	ds_load_b128 v[64:67], v72 offset:7168
+	ds_load_b128 v[68:71], v72 offset:7680
 	s_mov_b32 s33, 0x11c00                                     ; 000000006408: BEA100FF 00023800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000006410: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 00000000641C: 8018FF3A 00000400
@@ -2910,7 +2910,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_set_pc_i64 s[100:101]                                    ; 000000007154: BE804864
 .Lbranch_000000007158:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[32:47], v[192:207], v[24:31], v[32:47], v92, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -2922,7 +2922,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[96:111], v[208:223], v[64:71], v[96:111], v93, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[224:239], v[24:31], v[48:63], v94, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -2934,18 +2934,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s95
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:2048
-	ds_load_b32 v83, v80 offset:2176
-	ds_load_b32 v84, v80 offset:2304
-	ds_load_b32 v85, v80 offset:2432
+	ds_load_b32 v82, v80 offset:1024
+	ds_load_b32 v83, v80 offset:1152
+	ds_load_b32 v84, v80 offset:1280
+	ds_load_b32 v85, v80 offset:1408
 	ds_load_b128 v[8:11], v73
 	ds_load_b128 v[12:15], v73 offset:512
 	ds_load_b128 v[16:19], v73 offset:1024
@@ -2963,10 +2963,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v73 offset:6656
 	ds_load_b128 v[64:67], v73 offset:7168
 	ds_load_b128 v[68:71], v73 offset:7680
-	ds_load_b32 v92, v81 offset:2048
-	ds_load_b32 v93, v81 offset:2176
-	ds_load_b32 v94, v81 offset:2304
-	ds_load_b32 v95, v81 offset:2432
+	ds_load_b32 v92, v81 offset:1024
+	ds_load_b32 v93, v81 offset:1152
+	ds_load_b32 v94, v81 offset:1280
+	ds_load_b32 v95, v81 offset:1408
 	ds_load_b128 v[192:195], v77
 	ds_load_b128 v[196:199], v77 offset:512
 	ds_load_b128 v[200:203], v77 offset:2048
@@ -2999,7 +2999,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_000000008e4c
 .Lbranch_000000007890:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[32:47], v[192:207], v[24:31], v[32:47], v92, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3011,7 +3011,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[96:111], v[208:223], v[64:71], v[96:111], v93, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[224:239], v[24:31], v[48:63], v94, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3023,18 +3023,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s96
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:4096
-	ds_load_b32 v83, v80 offset:4224
-	ds_load_b32 v84, v80 offset:4352
-	ds_load_b32 v85, v80 offset:4480
+	ds_load_b32 v82, v80 offset:2048
+	ds_load_b32 v83, v80 offset:2176
+	ds_load_b32 v84, v80 offset:2304
+	ds_load_b32 v85, v80 offset:2432
 	ds_load_b128 v[8:11], v74
 	ds_load_b128 v[12:15], v74 offset:512
 	ds_load_b128 v[16:19], v74 offset:1024
@@ -3052,10 +3052,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v74 offset:6656
 	ds_load_b128 v[64:67], v74 offset:7168
 	ds_load_b128 v[68:71], v74 offset:7680
-	ds_load_b32 v92, v81 offset:4096
-	ds_load_b32 v93, v81 offset:4224
-	ds_load_b32 v94, v81 offset:4352
-	ds_load_b32 v95, v81 offset:4480
+	ds_load_b32 v92, v81 offset:2048
+	ds_load_b32 v93, v81 offset:2176
+	ds_load_b32 v94, v81 offset:2304
+	ds_load_b32 v95, v81 offset:2432
 	ds_load_b128 v[192:195], v78
 	ds_load_b128 v[196:199], v78 offset:512
 	ds_load_b128 v[200:203], v78 offset:2048
@@ -3088,7 +3088,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_000000008e54
 .Lbranch_000000007fc8:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[32:47], v[192:207], v[24:31], v[32:47], v92, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3100,7 +3100,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[96:111], v[208:223], v[64:71], v[96:111], v93, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[224:239], v[24:31], v[48:63], v94, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3112,18 +3112,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s97
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:6144
-	ds_load_b32 v83, v80 offset:6272
-	ds_load_b32 v84, v80 offset:6400
-	ds_load_b32 v85, v80 offset:6528
+	ds_load_b32 v82, v80 offset:3072
+	ds_load_b32 v83, v80 offset:3200
+	ds_load_b32 v84, v80 offset:3328
+	ds_load_b32 v85, v80 offset:3456
 	ds_load_b128 v[8:11], v75
 	ds_load_b128 v[12:15], v75 offset:512
 	ds_load_b128 v[16:19], v75 offset:1024
@@ -3141,10 +3141,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v75 offset:6656
 	ds_load_b128 v[64:67], v75 offset:7168
 	ds_load_b128 v[68:71], v75 offset:7680
-	ds_load_b32 v92, v81 offset:6144
-	ds_load_b32 v93, v81 offset:6272
-	ds_load_b32 v94, v81 offset:6400
-	ds_load_b32 v95, v81 offset:6528
+	ds_load_b32 v92, v81 offset:3072
+	ds_load_b32 v93, v81 offset:3200
+	ds_load_b32 v94, v81 offset:3328
+	ds_load_b32 v95, v81 offset:3456
 	ds_load_b128 v[192:195], v79
 	ds_load_b128 v[196:199], v79 offset:512
 	ds_load_b128 v[200:203], v79 offset:2048
@@ -3177,7 +3177,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_000000008e5c
 .Lbranch_000000008700:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[32:47], v[192:207], v[24:31], v[32:47], v92, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3189,7 +3189,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[96:111], v[208:223], v[64:71], v[96:111], v93, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[224:239], v[24:31], v[48:63], v94, v82 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
@@ -3201,9 +3201,9 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_b_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s98
@@ -3285,7 +3285,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_branch .Lbranch_00000000ab74                                              ; 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
 .Lbranch_000000008e6c:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82 matrix_a_reuse
@@ -3297,7 +3297,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[240:255], v[32:39], v[48:63], v95, v83 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[64:79], v[192:207], v[40:47], v[64:79], v92, v84
 	v_wmma_scale_f32_32x16x128_f4 v[80:95], v[224:239], v[40:47], v[80:95], v94, v84 matrix_a_reuse
@@ -3309,18 +3309,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s95
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:2048
-	ds_load_b32 v93, v81 offset:2176
-	ds_load_b32 v94, v81 offset:2304
-	ds_load_b32 v95, v81 offset:2432
+	ds_load_b32 v92, v81 offset:1024
+	ds_load_b32 v93, v81 offset:1152
+	ds_load_b32 v94, v81 offset:1280
+	ds_load_b32 v95, v81 offset:1408
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v77
 	ds_load_b128 v[196:199], v77 offset:512
@@ -3338,10 +3338,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v77 offset:5632
 	ds_load_b128 v[248:251], v77 offset:7168
 	ds_load_b128 v[252:255], v77 offset:7680
-	ds_load_b32 v82, v80 offset:2048
-	ds_load_b32 v83, v80 offset:2176
-	ds_load_b32 v84, v80 offset:2304
-	ds_load_b32 v85, v80 offset:2432
+	ds_load_b32 v82, v80 offset:1024
+	ds_load_b32 v83, v80 offset:1152
+	ds_load_b32 v84, v80 offset:1280
+	ds_load_b32 v85, v80 offset:1408
 	ds_load_b128 v[8:11], v73
 	ds_load_b128 v[12:15], v73 offset:512
 	ds_load_b128 v[16:19], v73 offset:1024
@@ -3374,7 +3374,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_00000000ab54
 .Lbranch_0000000095a4:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82 matrix_a_reuse
@@ -3386,7 +3386,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[240:255], v[32:39], v[48:63], v95, v83 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[64:79], v[192:207], v[40:47], v[64:79], v92, v84
 	v_wmma_scale_f32_32x16x128_f4 v[80:95], v[224:239], v[40:47], v[80:95], v94, v84 matrix_a_reuse
@@ -3398,18 +3398,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s96
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:4096
-	ds_load_b32 v93, v81 offset:4224
-	ds_load_b32 v94, v81 offset:4352
-	ds_load_b32 v95, v81 offset:4480
+	ds_load_b32 v92, v81 offset:2048
+	ds_load_b32 v93, v81 offset:2176
+	ds_load_b32 v94, v81 offset:2304
+	ds_load_b32 v95, v81 offset:2432
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v78
 	ds_load_b128 v[196:199], v78 offset:512
@@ -3427,10 +3427,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v78 offset:5632
 	ds_load_b128 v[248:251], v78 offset:7168
 	ds_load_b128 v[252:255], v78 offset:7680
-	ds_load_b32 v82, v80 offset:4096
-	ds_load_b32 v83, v80 offset:4224
-	ds_load_b32 v84, v80 offset:4352
-	ds_load_b32 v85, v80 offset:4480
+	ds_load_b32 v82, v80 offset:2048
+	ds_load_b32 v83, v80 offset:2176
+	ds_load_b32 v84, v80 offset:2304
+	ds_load_b32 v85, v80 offset:2432
 	ds_load_b128 v[8:11], v74
 	ds_load_b128 v[12:15], v74 offset:512
 	ds_load_b128 v[16:19], v74 offset:1024
@@ -3463,7 +3463,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_00000000ab5c
 .Lbranch_000000009cdc:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82 matrix_a_reuse
@@ -3475,7 +3475,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[240:255], v[32:39], v[48:63], v95, v83 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[64:79], v[192:207], v[40:47], v[64:79], v92, v84
 	v_wmma_scale_f32_32x16x128_f4 v[80:95], v[224:239], v[40:47], v[80:95], v94, v84 matrix_a_reuse
@@ -3487,18 +3487,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s97
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:6144
-	ds_load_b32 v93, v81 offset:6272
-	ds_load_b32 v94, v81 offset:6400
-	ds_load_b32 v95, v81 offset:6528
+	ds_load_b32 v92, v81 offset:3072
+	ds_load_b32 v93, v81 offset:3200
+	ds_load_b32 v94, v81 offset:3328
+	ds_load_b32 v95, v81 offset:3456
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v79
 	ds_load_b128 v[196:199], v79 offset:512
@@ -3516,10 +3516,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v79 offset:5632
 	ds_load_b128 v[248:251], v79 offset:7168
 	ds_load_b128 v[252:255], v79 offset:7680
-	ds_load_b32 v82, v80 offset:6144
-	ds_load_b32 v83, v80 offset:6272
-	ds_load_b32 v84, v80 offset:6400
-	ds_load_b32 v85, v80 offset:6528
+	ds_load_b32 v82, v80 offset:3072
+	ds_load_b32 v83, v80 offset:3200
+	ds_load_b32 v84, v80 offset:3328
+	ds_load_b32 v85, v80 offset:3456
 	ds_load_b128 v[8:11], v75
 	ds_load_b128 v[12:15], v75 offset:512
 	ds_load_b128 v[16:19], v75 offset:1024
@@ -3552,7 +3552,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cbranch_scc0 .Lbranch_00000000ab64
 .Lbranch_00000000a414:
 	s_nop 0
-	s_wait_dscnt 0x8
+	s_wait_dscnt 4
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[0:15], v[192:207], v[8:15], v[0:15], v92, v82
 	v_wmma_scale_f32_32x16x128_f4 v[16:31], v[224:239], v[8:15], v[16:31], v94, v82 matrix_a_reuse
@@ -3564,7 +3564,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[48:63], v[240:255], v[32:39], v[48:63], v95, v83 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x14
+	s_wait_dscnt 0
 	s_set_vgpr_msb 0x50
 	v_wmma_scale_f32_32x16x128_f4 v[64:79], v[192:207], v[40:47], v[64:79], v92, v84
 	v_wmma_scale_f32_32x16x128_f4 v[80:95], v[224:239], v[40:47], v[80:95], v94, v84 matrix_a_reuse
@@ -3576,9 +3576,9 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_wmma_scale_f32_32x16x128_f4 v[112:127], v[240:255], v[64:71], v[112:127], v95, v85 matrix_b_scale:MATRIX_SCALE_ROW1 matrix_a_reuse
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	s_wait_dscnt 0x8
-	s_wait_dscnt 0x14
-	s_wait_dscnt 0x8
+	s_wait_dscnt 0
+	s_wait_dscnt 0
+	s_wait_dscnt 0
 	s_wait_tensorcnt 0x2
 	s_barrier_signal -1
 	s_mov_b32 s33, s98
