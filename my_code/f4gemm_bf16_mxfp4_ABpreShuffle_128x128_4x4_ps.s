@@ -116,7 +116,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s24, s24, s25
 	s_add_co_u32 s24, s24, 0x22000
 	v_add_nc_u32_e32 v91, s24, v91
-	s_mov_b32 s94, 1                                           ; 000000001BF8: BEDE0081
+	s_mov_b32 s94, 0                                          ; take the fast restart path from the first persistent task onward
 	s_cmp_lt_u32 s28, s29                                      ; 000000001BFC: BF0A1D1C
 	s_cbranch_scc0 .Lbranch_00000000ba60                                       ; 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa160>
 	s_mov_b32 s24, s61                                         ; 000000001C04: BE98003D
