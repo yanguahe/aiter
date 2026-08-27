@@ -657,6 +657,12 @@ def _grouped_a8w4_tdm_moe(
             next_stage_prefetch=next_stage_prefetch,
             **_situ_kw,
         )
+        # Route-indexed: quantize only the routed rows instead of sweeping the
+        # whole (1, contiguous_m) capacity buffer. topids_to_rows already holds
+        # contiguous grouped rows after contiguous_psum_remap, so source and
+        # destination row coincide (source_topk=0). Per-expert alignment padding
+        # and the sentinel tail stay unwritten -- gemm2 discards those rows via
+        # mn_oob, the same invariant the a1 route path already relies on.
         a2_payload, a2_scale = flydsl_moe_fused_quant_preshuffle(
             y,
             1,
@@ -664,7 +670,9 @@ def _grouped_a8w4_tdm_moe(
             wmma_rep=wmma_rep2,
             quant_mode=_quant_mode,
             masked_m=None,
-            topids_to_rows=None,
+            topids_to_rows=topids_to_rows,
+            source_topk=0,
+            num_valid_routes=_ep_nvr,
         )
 
     grouped_out = torch.empty((1, contiguous_m, model_dim), dtype=dtype, device=device)
