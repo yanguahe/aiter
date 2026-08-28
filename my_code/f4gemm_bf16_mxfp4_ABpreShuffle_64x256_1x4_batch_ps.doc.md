@@ -272,7 +272,9 @@ The runner enforces the following exact launch domain:
 
 No power-of-two constraint is placed on `C_N`: the ISA uses a shift/mask
 path when `C_N` is a power of two and an integer-division path otherwise.
-The physical X/Y grid and its stride are powers of two, as described below.
+For small non-power-of-two `T_XY`, the physical cluster-grid X count is also
+non-power-of-two while the independently encoded recurrence stride remains a
+power of two, as described below.
 
 The ABI adds two non-divisibility checks. The five inherited row strides
 `N*2`, `K/2`, `K/2`, `K/32`, and `K/32` must fit uint32. Each appended
@@ -282,8 +284,9 @@ runner to satisfy `batch_stride * batch <= 2^64-1`.
 There is one inherited validation gap. The ISA stores `T_XY`, persistent
 task IDs, and intra-matrix tile-origin byte arithmetic in 32-bit scalar
 registers, while the runner does not explicitly prove those derived values
-cannot wrap. Since adaptive `P <= 64`, a sufficient scheduler bound is
-`T_XY <= 2^32-64`, so the final `task+P` lookahead also fits. Every
+cannot wrap. Since the encoded recurrence stride `S <= 64`, a sufficient
+scheduler bound is `T_XY <= 2^32-64`, so the final `task+S` lookahead also
+fits. Every
 intra-matrix A/B/sA/sB/D tile-origin offset must likewise fit uint32; a
 simple conservative condition is that each single-matrix byte extent is at
 most `2^32`. These are implementation safety limits, not additional
@@ -295,30 +298,46 @@ indexing 64-bit.
 
 ### 2.3 Physical Persistent X/Y Mapping
 
-The batch-symbol runner chooses the number of physical clusters in each Z
-plane from the logical cluster-task count:
+The batch-symbol runner chooses the physical seed count `C` and independently
+encodes the recurrence stride `S` from the logical cluster-task count:
 
 ```text
 T_XY = (M/64) * (N/1024), with T_XY >= 1
-P    = min(64, next_power_of_two(T_XY))
 
-cluster_grid_x = min(16,P)
-cluster_grid_y = P / cluster_grid_x
-log2_grid_x/y  = (log2(cluster_grid_x),log2(cluster_grid_y))
+if T_XY <= 64:
+    C = T_XY
+    S = next_power_of_two(T_XY)
+    cluster_grid_x/y      = (T_XY,1)
+    physical cluster grid = (T_XY,1,batch)
+    log2_grid_x/y         = (log2(S),0)
+else:
+    C = 64
+    S = 64
+    cluster_grid_x/y      = (16,4)
+    physical cluster grid = (16,4,batch)
+    log2_grid_x/y         = (4,2)
 
-physical HIP WG grid = (cluster_grid_x*4,cluster_grid_y*1,batch)
+physical HIP WG grid = (cluster_grid_x*4,cluster_grid_y,batch)
 clusterDim            = (4,1,1)
 block                 = (128,1,1)
-persistent_stride     = 1 << (log2_grid_x+log2_grid_y) = P
+encoded recurrence S = 1 << (log2_grid_x+log2_grid_y)
 ```
 
-**Implementation deduction.** Since `P` is one of
-`1,2,4,8,16,32,64`, this construction always gives a rectangular
-power-of-two cluster grid. The hierarchy is `(1,1)`, `(2,1)`, `(4,1)`,
-`(8,1)`, `(16,1)`, `(16,2)`, and `(16,4)`, respectively. Thus the
-established `(16,4)` maximum topology and 64-cluster cap remain unchanged,
-while smaller logical spaces no longer launch all 64 clusters. Each physical
-cluster contains four WGs, so a plane launches `4*P` WGs.
+**Implementation deduction.** Physical launch size and encoded recurrence
+stride are deliberately different for non-power-of-two `T_XY <= 64`.
+Exactly `T_XY` one-row seed clusters launch, but the existing log2 ABI encodes
+the next power of two `S`. For `T_XY > 64`, the proven `(16,4)` topology,
+64 seeds, and stride 64 remain unchanged. Each physical cluster contains four
+WGs, so a plane launches `4*C` WGs.
+
+**Launch-interface inspection.** The CDNA5 ISA and MI400 guide document
+cluster-grid X as the independent 32-bit `TTMP9` coordinate and cluster-grid
+Y/Z in `TTMP7`; they do not define the kernel's `log2_grid_x/y` software ABI
+fields. In the runner, HIP `gridDimX/Y/Z` and `clusterDim` are populated from
+the physical `LaunchGeometry.grid` and `.cluster`, while the two log2 values
+are packed separately into kernargs. Neither `LaunchGeometry` nor the HIP
+configuration builder requires the physical cluster counts to equal
+`1 << (log2_grid_x+log2_grid_y)`.
 
 For a physical cluster, gfx1250 provides cluster-grid X in `TTMP9`,
 cluster-grid Y in `TTMP7[15:0]`, local cluster-WG X/Y in TTMP6, and the
@@ -346,7 +365,7 @@ C_N = N / 1024
 C_M = M / 64
 T_XY = C_N * C_M
 
-for task = p; task < T_XY; task += P:
+for task = p; task < T_XY; task += S:
     cluster_n = task % C_N              # N is fastest
     cluster_m = task / C_N
 
@@ -357,20 +376,23 @@ for task = p; task < T_XY; task += P:
     wave_N_origin = Ntile*256 + wave_id*64
 ```
 
-The initial values cover `[0,P)` exactly: `cluster_grid_x` is a power of two,
-so the shift is multiplication by `cluster_grid_x`, and
-`p=cx+cluster_grid_x*cy` is the ordinary row-major bijection from the
-rectangular physical grid onto `[0,P)`. The recurrence also covers every
-logical task exactly once. Every nonnegative task has one unique Euclidean
-decomposition `task=p+k*P` with `0 <= p < P`; therefore it belongs to exactly
-one physical cluster's progression. For `T_XY <= 64`, `P >= T_XY`, so the
-first `T_XY` clusters each execute one task and any surplus clusters exit.
-For `T_XY > 64`, `P=64` and the 64 progressions partition the persistent
-task space without duplicates or misses.
+For `T_XY <= 64`, physical Y is one, so `cy=0` and the initial equation
+reduces to `p=cx` regardless of `log2_grid_x`. The exact X extent launches
+`cx=0..T_XY-1`, hence every seed is useful. Since `S >= T_XY`, every
+`p+S >= T_XY`; all clusters terminate after one task. This is why a
+non-power-of-two physical X extent is safe even though the recurrence remains
+power-of-two. It would not provide complete coverage if a second round were
+required.
+
+For `T_XY > 64`, physical X/Y is `(16,4)` and encoded log2 X/Y is `(4,2)`,
+so `p=cx+16*cy` covers `[0,64)` exactly. Every nonnegative task has one
+unique decomposition `task=p+k*64` with `0 <= p < 64`; the 64 persistent
+progressions therefore cover every logical task without duplicates or
+misses.
 
 The source implements one-task lookahead. At entry, a cluster terminates
 immediately if `p >= T_XY`. Otherwise it maps `p`, computes and maps
-`p+P` when valid, and records whether the current task is the last one.
+`p+S` when valid, and records whether the current task is the last one.
 After the current epilogue, all four WGs converge at the cluster barrier.
 Each wave then rewinds its output pointer by the current task's exact byte
 origin:
@@ -385,8 +407,8 @@ D_wave_ptr -= D_delta(current)
 If the lookahead is out of range, the kernel terminates. Otherwise the
 lookahead coordinates become current, A/B/sA/sB descriptors are rebuilt
 from their plane-adjusted bases, `D_delta(next)` is added, and another
-`+P` lookahead is formed. Thus physical cluster `p` visits exactly
-`p,p+P,p+2P,... < T_XY`; no task is taken from another physical cluster.
+`+S` lookahead is formed. Thus physical cluster `p` visits exactly
+`p,p+S,p+2S,... < T_XY`; no task is taken from another physical cluster.
 The ISA does not encode 64 in this mapping: it uses ABI values
 `log2_grid_x` and `log2_grid_y` to form both the initial `p` and
 `1 << (log2_grid_x+log2_grid_y)` recurrence. The runner's static contract
@@ -428,7 +450,7 @@ and a cluster depth of one.
 
 Batch is deliberately not flattened into the original X/Y task counter.
 The initial task uses only `TTMP7[15:0]` and `TTMP9`, `T_XY` contains only
-`C_N*C_M`, and the `+P` recurrence contains no Z term. The high half of
+`C_N*C_M`, and the `+S` recurrence contains no Z term. The high half of
 TTMP7 is consumed only by the following pointer prologue. Consequently
 every Z plane traverses the same set of X/Y task IDs and logical
 M/N tiles, independently.
@@ -492,11 +514,11 @@ the original non-batch pointers bit-for-bit. The descriptors, tile mapping
 for each task, pipeline, barriers, epilogue, rewind, and termination logic
 remain the original instruction stream. The batch symbol still executes the
 extra zero-offset prologue and consumes the 120-byte ABI, and its physical
-X/Y schedule is adaptive: for `T_XY < 64`, its initial task IDs and stride
-differ from the fixed legacy launch while retaining one-to-one task
-coverage. Alternatively, the batch runner accepts the original non-batch
-symbol only for `batch=1`; that compatibility path retains the exact
-original fixed geometry, 80-byte ABI, and execution schedule.
+X/Y schedule is adaptive: for `T_XY <= 64`, it launches only the useful
+initial task IDs and may encode a recurrence stride larger than that physical
+seed count. Alternatively, the batch runner accepts the original non-batch
+symbol only for `batch=1`; that compatibility path retains the exact original
+fixed geometry, 80-byte ABI, and execution schedule.
 
 <a id="section-2-6-launch-examples"></a>
 
@@ -523,17 +545,17 @@ batch_stride_sB = 65536*(32768/32) =   67108864 B = 0x04000000
 These are the exact values returned by `make_contiguous_batch_strides`.
 `make_batched_launch_geometry` produces:
 
-| Batch | Logical WG grid | Logical cluster grid | Physical HIP WG grid | `clusterDim` | Physical cluster grid | Block / stride |
+| Batch | Logical WG grid | Logical cluster grid | Physical HIP WG grid | `clusterDim` | Physical cluster grid | Block / encoded recurrence stride |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | `(256,1,1)` | `(64,1,1)` | `(64,4,1)` | `(4,1,1)` | `(16,4,1)` | `(128,1,1)` / 64 |
-| 2 | `(256,1,2)` | `(64,1,2)` | `(64,4,2)` | `(4,1,1)` | `(16,4,2)` | `(128,1,1)` / 64 |
+| 1 | `(256,1,1)` | `(64,1,1)` | `(256,1,1)` | `(4,1,1)` | `(64,1,1)` | `(128,1,1)` / 64 |
+| 2 | `(256,1,2)` | `(64,1,2)` | `(256,1,2)` | `(4,1,1)` | `(64,1,2)` | `(128,1,1)` / 64 |
 
 For batch 1, 256 WGs form 64 physical clusters. For batch 2, 512 WGs form
 128 physical clusters, split into two identical planes of 256 WGs and 64
 clusters. In either plane:
 
 ```text
-p = cx + 16*cy, where cx=0..15 and cy=0..3
+p = cx, where cx=0..63 and cy=0
 p spans 0..63 exactly
 cluster_n = p
 cluster_m = 0
@@ -559,19 +581,21 @@ C_N = 24/4     = 6
 C_M = 1/1      = 1
 T_XY            = 6 cluster tasks per Z plane
 
-P               = next_power_of_two(6) = 8
-cluster grid    = (8,1,96)
-HIP WG grid     = (8*4,1,96) = (32,1,96)
+physical seeds C = T_XY = 6
+recurrence S      = next_power_of_two(6) = 8
+cluster grid      = (6,1,96)
+HIP WG grid       = (6*4,1,96) = (24,1,96)
 log2_grid_x/y   = (3,0)
-persistent stride = 8
+encoded recurrence stride = 8
 ```
 
-The initial `p` values are `0..7`. Clusters `p=0..5` execute the six useful
-tasks once; `p=6,7` fail the entry range check. Compared with the former
-maximum topology, each Z plane drops from 64 clusters/256 WGs to 8
-clusters/32 WGs. Across all 96 planes, that is 768 clusters/3072 WGs instead
-of 6144 clusters/24576 WGs. This removes the observed overlaunch while
-retaining one kernel dispatch and grid Z equal to batch.
+Physical Y is one, so the initial `p` values are exactly `cx=0..5`: all six
+launched clusters are useful. Each next task is `p+8 >= 8 > 6`, so there is
+no second round. Compared with the former maximum topology, each Z plane
+drops from 64 clusters/256 WGs to 6 clusters/24 WGs. Across all 96 planes,
+that is 576 clusters/2304 WGs instead of 6144 clusters/24576 WGs. This
+removes the observed overlaunch while retaining one kernel dispatch and grid
+Z equal to batch.
 
 <a id="section-3-software-pipeline"></a>
 

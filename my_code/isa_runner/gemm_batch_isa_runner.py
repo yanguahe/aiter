@@ -872,8 +872,19 @@ def run_static_contract_checks(
         ]
         if initial_tasks != list(range(expected_clusters)):
             raise AssertionError(
-                f"T_XY={logical_tasks} initial p values are not [0,P): "
+                f"T_XY={logical_tasks} initial p values are not [0,C): "
                 f"{initial_tasks}"
+            )
+        if (
+            logical_tasks <= MAX_PERSISTENT_CLUSTERS
+            and any(
+                seed + geometry.persistent_stride < logical_tasks
+                for seed in initial_tasks
+            )
+        ):
+            raise AssertionError(
+                f"T_XY={logical_tasks} exact small grid entered a second "
+                "persistent round"
             )
         visited = [
             task
