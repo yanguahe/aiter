@@ -1,25 +1,27 @@
-# gfx1250 MXFP4×MXFP4 128×128_4×4 Persistent GEMM Analysis
+# gfx1250 MXFP4xMXFP4 64x256_1x4 Persistent GEMM Design
+
+<!-- markdownlint-disable MD013 MD033 MD060 -->
 
 <a id="toc"></a>
 
 ## Table of Contents
 
 - [1. Wave Tile and TDM Specialization](#section-1-wave-tile)
-  - [1.1 Four Waves and 2×2 Output Quadrants](#section-1-1-wave-output-quadrants)
+  - [1.1 Four Waves in a 1x4 N Strip](#section-1-1-wave-output-strip)
   - [1.2 Four-Slot LDS Ring](#section-1-2-lds-ring)
   - [1.3 Final Kernel Contract](#section-1-3-final-kernel-contract)
-- [2. 4×4 Cluster, Logical Tasks, and Persistent Grid](#section-2-cluster-grid)
+- [2. 1x4 Cluster, Logical Tasks, and Persistent Grid](#section-2-cluster-grid)
   - [2.1 One Logical Cluster Task](#section-2-1-logical-cluster-task)
   - [2.2 Logical Grid](#section-2-2-logical-grid)
   - [2.3 Persistent Launch Candidate](#section-2-3-persistent-launch)
-- [3. End-to-end software pipeline](#section-3-software-pipeline)
-  - [3.1 wave0/2: `B-current → A-current → A-next → B-next`](#section-3-1-wave02-flow)
-  - [3.2 wave1/3: `A-current → B-current → B-next → A-next`](#section-3-2-wave13-flow)
-- [4. P0 Detailed Pipeline and Host Tile Coverage](#section-4-p0-details)
-  - [4.1 wave0/2 P0 detailed pipeline](#section-4-1-wave02-details)
-    - [4.1.1 wave0/2 P0 Host Tile Coverage](#section-4-1-1-wave02-host-tile)
-  - [4.2 wave1/3 P0 detailed pipeline](#section-4-2-wave13-details)
-    - [4.2.1 wave1/3 P0 Host Tile Coverage](#section-4-2-1-wave13-host-tile)
+- [3. End-to-End Software Pipeline](#section-3-software-pipeline)
+  - [3.1 wave0/2: `B-current -> A-current -> A-next -> B-next`](#section-3-1-wave02-flow)
+  - [3.2 wave1/3: `A-current -> B-current -> B-next -> A-next`](#section-3-2-wave13-flow)
+- [4. P0 Detailed Pipeline and Wave-Local Tile Coverage](#section-4-p0-details)
+  - [4.1 wave0/2 Specialization Schedule](#section-4-1-wave02-details)
+    - [4.1.1 wave0/2 Wave-Local Tile Coverage](#section-4-1-1-wave02-host-tile)
+  - [4.2 wave1/3 Specialization Schedule](#section-4-2-wave13-details)
+    - [4.2.1 wave1/3 Wave-Local Tile Coverage](#section-4-2-1-wave13-host-tile)
 - [5. Epilogue Design and Final Store Contract](#section-5-epilogue-design)
   - [5.1 Output Geometry and Fragment Mapping](#section-5-1-output-geometry)
   - [5.2 Candidate Physical VGPR Layout](#section-5-2-vgpr-layout)
@@ -36,86 +38,171 @@
 
 ## 1. Wave Tile and TDM Specialization
 
-<a id="section-1-1-wave-output-quadrants"></a>
+<a id="section-1-1-wave-output-strip"></a>
 
-### 1.1 Four Waves and 2×2 Output Quadrants
+### 1.1 Four Waves in a 1x4 N Strip
 
-| wave | Relative M | Relative N | TDM specialization |
-|---:|---|---|---|
-| 0 | `[0,63]` | `[0,63]` | host A data |
-| 1 | `[64,127]` | `[0,63]` | host B data |
-| 2 | `[0,63]` | `[64,127]` | SA |
-| 3 | `[64,127]` | `[64,127]` | SB |
+Each wave retains the same `64x64` compute tile. The four waves are arranged
+as one host-M wave by four host-N waves, so the WG output is exactly
+`64x256`. All four waves have local M origin zero; logical wave `w` has local
+N origin `64*w`.
+
+| Wave | WG-relative M | WG-relative N | N-origin formula | TDM specialization |
+|---:|---|---|---:|---|
+| 0 | `[0,63]` | `[0,63]` | `64*0 = 0` | host A data |
+| 1 | `[0,63]` | `[64,127]` | `64*1 = 64` | host B data |
+| 2 | `[0,63]` | `[128,191]` | `64*2 = 128` | SA |
+| 3 | `[0,63]` | `[192,255]` | `64*3 = 192` | SB |
+
+For logical WG tile indices `(Mtile,Ntile)` and logical wave ID `w`:
+
+```text
+Mbase(w) = 64 * Mtile
+Nbase(w) = 256 * Ntile + 64 * w
+```
+
+Thus wave ID contributes only to N. There is no wave-ID bit that selects a
+high-M half in this design.
+
+Each wave still owns eight `32x16` hardware output fragments and executes
+16 WMMA instructions per K256 body: two K128 accumulations for each of eight
+fragments. The wave0/2 and wave1/3 schedules in Chapters 3 and 4 are retained
+only as alternative software schedules associated with TDM specialization.
+They do not denote low-M/high-M wave pairs. Every wave covers the same local
+M64 and a distinct N64 quarter.
 
 <a id="section-1-2-lds-ring"></a>
 
 ### 1.2 Four-Slot LDS Ring
 
-The following addresses use a tightly packed layout for the 128×128 WG tile:
+For one WG and one K256 body, the logical TDM payloads are:
 
-| operand | slot0 | slot1 | slot2 | slot3 | Per-slot payload |
+| Operand | Payload derivation | Per-slot payload |
+|---|---|---:|
+| A data | `M64 * K256 * 4 bits` | `0x2000 = 8192 B = 8 KiB` |
+| SA | `M64 * (K256 / K32) * 1 B` | `0x0200 = 512 B` |
+| B data | `N256 * K256 * 4 bits` | `0x8000 = 32768 B = 32 KiB` |
+| SB | `N256 * (K256 / K32) * 1 B` | `0x0800 = 2048 B = 2 KiB` |
+
+The following correctness-first candidate packs the four input arrays
+contiguously, keeps a `0x8000` stride between B slots, and reserves a separate
+output region. It inserts no explicit layout gap:
+
+| Operand | slot0 | slot1 | slot2 | slot3 | Array end |
 |---|---:|---:|---:|---:|---:|
-| A data | `0x00000` | `0x04000` | `0x08000` | `0x0C000` | 16 KiB |
-| SA | `0x10000` | `0x10400` | `0x10800` | `0x10C00` | 1 KiB |
-| SB | `0x11000` | `0x11400` | `0x11800` | `0x11C00` | 1 KiB |
-| B data | `0x12000` | `0x16000` | `0x1A000` | `0x1E000` | 16 KiB |
+| A data | `0x00000` | `0x02000` | `0x04000` | `0x06000` | `0x08000` |
+| SA | `0x08000` | `0x08200` | `0x08400` | `0x08600` | `0x08800` |
+| SB | `0x08800` | `0x09000` | `0x09800` | `0x0A000` | `0x0A800` |
+| B data | `0x0A800` | `0x12800` | `0x1A800` | `0x22800` | `0x2A800` |
 
-The payload can be calculated independently:
+The resulting fixed LDS allocation is:
 
 ```text
-FP4 data: 128 rows * K256 / 2 = 16384 B = 0x4000
-E8M0 scale: 128 rows * (256/32) = 1024 B = 0x400
+input ring [0x00000,0x2A800)     = 0x2A800 = 170 KiB
+output staging [0x2A800,0x32800) = 0x08000 =  32 KiB
+candidate fixed LDS end           = 0x32800 = 202 KiB
 ```
 
-The tightly packed four-slot ranges for the four categories span `[0x00000,0x22000)`, totaling `0x22000 = 136 KiB`. This is the address layout for the input ring; the final alignment, bank conflicts, padding, and output staging still require validation against the target ISA.
+CDNA5 permits up to 320 KiB of LDS for a WG (CDNA5 ISA Section 2.2, local
+text L743-L748), so 202 KiB is within the documented architectural capacity.
+It can still reduce residency, and the target object must request the full
+`0x32800` group segment.
+
+The semantic TDM-load row counts follow the non-K dimensions. In byte mode,
+one packed-data row is `K256/2 = 0x80` bytes and one scale row is
+`K256/K32 = 0x08` bytes. This gives the following unassembled descriptor
+candidate:
+
+| Operand | Logical rows | Candidate row width | Candidate semantic tile | Payload |
+|---|---:|---:|---:|---:|
+| A data | 64 | `0x80` B | `tile_dim0=0x80, tile_dim1=64` | `0x2000` |
+| SA | 64 | `0x08` B | `tile_dim0=0x08, tile_dim1=64` | `0x0200` |
+| B data | 256 | `0x80` B | `tile_dim0=0x80, tile_dim1=256` | `0x8000` |
+| SB | 256 | `0x08` B | `tile_dim0=0x08, tile_dim1=256` | `0x0800` |
+
+CDNA5 defines tile dimensions in `data_size` units (Section 10.11.2 and
+Section 10.11.4, local text L10215-L10231 and L10487-L10514). The table fixes
+the target's logical row counts and payloads, but it does not claim encoded
+descriptor words. Whether the target can expose the semantic rows directly
+or must regroup the same bytes depends on the AB-preshuffle layout and
+strides. Descriptor packing, legal dimensions, B-base/TDM destination
+alignment, and bank behavior are target-assembly and hardware validation
+boundaries.
+
+For ring slot `s`, every wave uses the same A and SA base because there is no
+wave-M offset. Each wave consumes its own local N64 quarter of the WG-wide B
+and SB payload:
+
+```text
+A_wave_base(s,w)  = A_slot_base[s]
+SA_wave_base(s,w) = SA_slot_base[s]
+B_wave_base(s,w)  = B_slot_base[s]  + w * 0x2000
+SB_wave_base(s,w) = SB_slot_base[s] + w * 0x0200
+```
+
+The offsets are respectively one N64 FP4 payload
+(`64*256/2 = 0x2000`) and one N64 scale payload
+(`64*(256/32) = 0x200`). A/SA have no wave-M high-half offset. No formula in
+this target may use `(wave_id & 1)` for A/SA or `(wave_id >> 1)` for B/SB.
+The base arithmetic is exact; alignment, DS access legality, and bank-conflict
+behavior must be measured on the eventual target ISA.
 
 <a id="section-1-3-final-kernel-contract"></a>
 
 ### 1.3 Final Kernel Contract
 
-The following decisions are hard implementation preconditions for the target
-kernel. They are not optional extensions or fallback choices.
+The following decisions are hard preconditions for this documentation design.
+No corresponding assembled target ISA exists yet.
 
 | Property | Final decision |
 | --- | --- |
-| Kernel symbol basename | `f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps` |
-| Tile geometry | Wave `64x64`; WG `128x128`; four waves. |
-| M/N preconditions | Each is divisible by `128 * 4 = 512`. |
+| Kernel symbol basename | `f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps` |
+| Wave/WG geometry | Wave `64x64`; wave grid `(host M, host N) = (1,4)`; WG `64x256`. |
+| Cluster geometry | `(cluster_y/M, cluster_x/N) = (1,4)`; four WGs per cluster. |
+| M precondition | `M % (WG_M * cluster_M) = M % (64*1) = M % 64 == 0`. |
+| N precondition | `N % (WG_N * cluster_N) = N % (256*4) = N % 1024 == 0`. |
 | K precondition | `K % 256 == 0`; full K256 bodies only. |
-| Boundary/tail policy | No M/N boundary tiles and no K tail. |
-| Cluster requirement | Logical WG grid divides exactly into `4x4` clusters. |
-| Epilogue store | One 128-row `tensor_store_from_lds` per WG. |
-| Store failure policy | Stop the rewrite; no two-64-row fallback. |
+| Boundary/tail policy | No M/N boundary tile, K tail, or partial cluster. |
+| Epilogue store | One 64-row by 256-BF16 `tensor_store_from_lds` per WG, issued by wave0. |
+| Candidate fixed LDS | Input ring `[0x00000,0x2A800)` plus output `[0x2A800,0x32800)`, ending at `0x32800 = 202 KiB`; no explicit layout gap. |
 
-Accepted inputs therefore satisfy `M % 512 == 0`, `N % 512 == 0`, and
-`K % 256 == 0`. The logical WG grid `(N / 128, M / 128)` must divide exactly
-into `4x4` clusters; partial clusters and M/N boundary tiles are unsupported.
-Only complete K256 bodies are supported, with no K tail.
+Accepted inputs therefore satisfy:
 
-The required store follows Chapter 5 and uses `tile_dim1=128`. If its
-descriptor encoding, assembly, or hardware validation fails, stop the kernel
-rewrite. Two 64-row stores are not a supported fallback.
+```text
+M % 64   == 0
+N % 1024 == 0
+K % 256  == 0
+```
+
+The logical WG grid `(N/256, M/64)` must divide exactly into clusters of four
+WGs along N and one WG along M. Chapter 5 specifies the 64-row output store.
+Its width, descriptor encoding, and LDS layout remain implementation
+validation work; a historical 256x256 reference ISA provides migration
+evidence only for the 64-row-height idiom.
 
 <a id="section-2-cluster-grid"></a>
 
-## 2. 4×4 Cluster, Logical Tasks, and Persistent Grid
+## 2. 1x4 Cluster, Logical Tasks, and Persistent Grid
 
 <a id="section-2-1-logical-cluster-task"></a>
 
 ### 2.1 One Logical Cluster Task
 
-The target kernel uses `wave tile=64×64, WG tile=128×128, cluster=4×4`; x
-corresponds to N tiles and y corresponds to M tiles. Therefore:
+The design uses `wave tile=64x64`, `WG tile=64x256`, and
+`(cluster_y/M, cluster_x/N)=(1,4)`. Cluster x corresponds to N tiles and
+cluster y corresponds to M tiles. Therefore:
 
 ```text
-cluster N = 4 * 128 = 512
-cluster M = 4 * 128 = 512
+cluster N = 4 * 256 = 1024
+cluster M = 1 * 64  = 64
 ```
 
 Section 1.3 makes this exact cluster divisibility a launch precondition. The
-kernel does not construct partial 4×4 clusters or M/N boundary tiles.
+kernel does not construct partial 1x4 clusters or M/N boundary tiles.
 
-One logical cluster task contains 16 WGs, with a complete output region of `512×512`. One K256 body covers `512×512×256`; for `K=7168`, it covers `512×512×7168`.
+One logical cluster task contains four WGs and covers exactly `M64xN1024`.
+One K256 body covers `64x1024x256`; for `K=7168`, one complete cluster task
+covers `64x1024x7168`.
 
 <a id="section-2-2-logical-grid"></a>
 
@@ -124,61 +211,100 @@ One logical cluster task contains 16 WGs, with a complete output region of `512�
 For the target shape `M=18432,N=2048,K=7168`:
 
 ```text
-N tiles = 2048 / 128 = 16
-M tiles = 18432 / 128 = 144
+N tiles = 2048 / 256 = 8
+M tiles = 18432 / 64 = 288
 
-logical WG grid = (16,144,1)
-logical WG tasks = 16 * 144 = 2304
+logical WG grid = (Ntiles,Mtiles,1) = (8,288,1)
+logical WG tasks = 8 * 288 = 2304
 
-N cluster tasks = 16 / 4 = 4
-M cluster tasks = 144 / 4 = 36
-logical cluster tasks = 4 * 36 = 144
+N cluster tasks = 8 / 4 = 2
+M cluster tasks = 288 / 1 = 288
+logical cluster grid = (Nclusters,Mclusters,1) = (2,288,1)
+logical cluster tasks = 2 * 288 = 576
 ```
 
 <a id="section-2-3-persistent-launch"></a>
 
 ### 2.3 Persistent Launch Candidate
 
-If the original F4 launcher's `PERSISTENT_TG=256 WG` and 4×4 cluster are reused:
+If `PERSISTENT_TG=256 WG` and persistent cluster-grid height
+`grid_y=4` are retained:
 
 ```text
-cluster_size = 4 * 4 = 16 WG
-physical clusters = 256 / 16 = 16
-physical cluster grid = (4,4,1)
-physical WG launch = (16,16,1)
+cluster_size = cluster_x * cluster_y = 4 * 1 = 4 WG
+physical clusters = 256 / 4 = 64
+physical cluster grid = (16,4,1)
+physical WG launch = (16*4,4*1,1) = (64,4,1)
 block = (128,1,1)
 ```
 
-The candidate uses `log2_grid_x=2,log2_grid_y=2`, so:
+The cluster grid uses `log2_grid_x=4` and `log2_grid_y=2`, so:
 
 ```text
-persistent stride = 1 << (2 + 2) = 16 cluster tasks
+persistent stride = 1 << (4 + 2) = 64 logical cluster tasks
 ```
 
-Physical cluster `p` processes `p,p+16,p+32,...` until the task ID reaches 144. Each `p=0..15` processes 9 logical cluster tasks, covering a total of `9*256=2304` logical WG tasks over nine rounds.
+With N as the fastest logical cluster coordinate, physical cluster
+`p=cx+16*cy` processes `p, p+64, ..., p+8*64`. A logical task ID maps to
+`cluster_n=task%2` and `cluster_m=task/2`. Because `576/64=9`, every physical
+cluster processes exactly nine logical cluster tasks. Nine rounds cover
+`64 clusters * 4 WGs/cluster * 9 = 2304` logical WG tasks.
 
 | Name | Value |
 |---|---:|
-| logical WG grid | `(16,144,1)` |
+| logical WG grid | `(8,288,1)` |
 | logical WG tasks | 2304 |
-| logical cluster tasks | 144 |
-| physical cluster grid | `(4,4,1)` |
-| physical WG launch | `(16,16,1)` |
-| launched WG / cluster | 256 / 16 |
+| logical cluster grid | `(2,288,1)` |
+| logical cluster tasks | 576 |
+| physical cluster grid | `(16,4,1)` |
+| physical WG launch | `(64,4,1)` |
+| launched WGs / physical clusters | 256 / 64 |
+| WGs per cluster | 4 |
+| persistent stride | 64 cluster tasks |
+| logical tasks per physical cluster | 9 |
 | block | `(128,1,1)` |
 
-The persistent launch above remains a design candidate inherited from the original launcher; the target selector, task swizzle, tile/pointer updates, and epilogue must be implemented by the new kernel and validated against the target ISA.
+This launcher and cluster swizzle are design candidates inherited from the
+persistent-launch structure, not from an assembled implementation of this
+geometry. The task selector, task-to-coordinate mapping, pointer updates,
+cluster convergence, and epilogue must be implemented and verified in the
+eventual target ISA.
 
 <a id="section-3-software-pipeline"></a>
 
-## 3. End-to-end software pipeline
+## 3. End-to-End Software Pipeline
+
+Every wave consumes one local A `M64xK256` tile, one local B `N64xK256`
+quarter, and their corresponding scales, so the steady body remains 40 DS
+loads and 16 WMMA instructions per wave. The two schedule families below are
+specialization-driven software templates. They do not assign different
+host-M regions: all waves have local `M[0:63]`, while wave `w` has WG-relative
+`N[64*w:64*w+63]`.
+
+Per wave and K256 body, the local operand traffic is exactly 16
+`ds_load_b128` operations for A data, 16 for B data, four `ds_load_b32`
+operations for SA, and four for SB. Thus `16+16+4+4=40` DS loads feed eight
+C/D fragments and 16 WMMA operations.
+
+The wave0/2 versus wave1/3 split is retained from the 128x128 reference ISA's
+local instruction ordering because it remains consistent with the same four
+TDM specialist roles. It does not prove that the new 1x4 output placement
+needs this split. Keeping the split is an unassembled scheduling candidate;
+a target implementation may reschedule it after validating dependencies,
+register lifetimes, and issue behavior. The 16-WMMA and 40-DS dynamic counts
+remain the wave-local invariant.
 
 <a id="section-3-1-wave02-flow"></a>
 
-### 3.1 wave0/2: `B-current → A-current → A-next → B-next`
+### 3.1 wave0/2: `B-current -> A-current -> A-next -> B-next`
+
+This template groups the host-A-data specialist (wave0) with the SA
+specialist (wave2). It is a scheduling group, not an M-axis pair: wave0 owns
+WG-relative N quarter `[0:63]` and wave2 owns `[128:191]`, while both own
+local M `[0:63]`.
 
 ```text
-Prologue (wave0/2 combined)
+Prologue (wave0/2 specialization schedule)
 issue TDM A/SA slot0/body0              # 2 TDM in this wave group; wave0=A, wave2=SA
 issue TDM A/SA slot1/body1              # 2 TDM in this wave group
 issue TDM A/SA slot2/body2              # 2 TDM in this wave group
@@ -257,7 +383,7 @@ A-current second half # 8 ds_load_b128/wave
 
 s_wait_dscnt 10                                     # wait2, SB/B current second half ready
 
-SA/A-next first half + wmma K0/K1 upper right + WGP barrier      # 2 ds_load_b32 + 8 ds_load_b128 / wave
+SA/A-next first half + WMMA G1 local M[0:31],N[32:63] + WG barrier  # 2 ds_load_b32 + 8 ds_load_b128 / wave
     s_wait_tensorcnt 2
     s_barrier_signal -1
     wmma4 (1_0)  # K0
@@ -281,7 +407,7 @@ SA/A-next first half + wmma K0/K1 upper right + WGP barrier      # 2 ds_load_b32
 s_wait_dscnt 10                         # wait3, SA/A current second half ready
 s_barrier_signal -1
 
-SB/B-next first half + wmma K0 lower left + issue TDM       # 1 ds_load_b32 + 4 ds_load_b128 / wave + 1 TDM / wave
+SB/B-next first half + WMMA G2 K0 local M[32:63],N[0:31] + issue TDM  # 1 ds_load_b32 + 4 ds_load_b128 / wave + 1 TDM / wave
     wmma8 (2_0)  # K0
     s_barrier_wait 0xffff
     issue TDM A/SA slot0/body4          # 1 TDM/wave, 2 total in this wave group
@@ -293,7 +419,7 @@ SB/B-next first half + wmma K0 lower left + issue TDM       # 1 ds_load_b32 + 4 
     ds_ld128_b2 (0_2)                   # next
     ds_ld128_b3 (0_3)                   # next
 
-SB/B-next first half + wmma K1 lower left           # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SB/B-next first half + WMMA G2 K1 local M[32:63],N[0:31]  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma10 (2_2)  # K1
     wmma11 (2_3)  # K1
     s_wait_alu depctr_va_vdst(0)
@@ -303,7 +429,7 @@ SB/B-next first half + wmma K1 lower left           # 1 ds_load_b32 + 4 ds_load_
     ds_ld128_b6 (0_6)                   # next
     ds_ld128_b7 (0_7)                   # next
 
-SB/B-next second half + wmma K0 lower right + finish  # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SB/B-next second half + WMMA G3 K0 local M[32:63],N[32:63] + finish  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma12 (3_0)  # K0
     loop control SALU
     wmma13 (3_1)  # K0
@@ -316,7 +442,7 @@ SB/B-next second half + wmma K0 lower right + finish  # 1 ds_load_b32 + 4 ds_loa
     ds_ld128_b10 (1_2)                  # next
     ds_ld128_b11 (1_3)                  # next
 
-SB/B-next second half + wmma K1 lower right           # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SB/B-next second half + WMMA G3 K1 local M[32:63],N[32:63]  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma14 (3_2)  # K1
     wmma15 (3_3)  # K1
     s_wait_alu depctr_va_vdst(0)
@@ -327,7 +453,7 @@ SB/B-next second half + wmma K1 lower right           # 1 ds_load_b32 + 4 ds_loa
     ds_ld128_b15 (1_7)                  # next
     loop control branch
 
-P0→P1 boundary
+P0->P1 boundary
 loop branch not taken            # candidate steady path enters P1 directly
 phase advance: P0 next becomes P1 current; P1 reuses the corresponding VGPR
 
@@ -358,7 +484,7 @@ A-current second half # 8 ds_load_b128/wave
 
 s_wait_dscnt 10                         # P1 wait2, SB/B current second half ready
 
-SA/A-next first half + wmma K0/K1 upper right + WGP barrier      # 2 ds_load_b32 + 8 ds_load_b128 / wave
+SA/A-next first half + WMMA G1 local M[0:31],N[32:63] + WG barrier  # 2 ds_load_b32 + 8 ds_load_b128 / wave
     s_wait_tensorcnt 2
     s_barrier_signal -1
     p1_wmma4 (1_0)  # K0
@@ -387,10 +513,14 @@ P1 current second half ready, A-next first half issued  # next step enters P1 WM
 
 <a id="section-3-2-wave13-flow"></a>
 
-### 3.2 wave1/3: `A-current → B-current → B-next → A-next`
+### 3.2 wave1/3: `A-current -> B-current -> B-next -> A-next`
+
+This template groups the host-B-data specialist (wave1) with the SB
+specialist (wave3). It is also non-spatial: wave1 owns WG-relative N quarter
+`[64:127]` and wave3 owns `[192:255]`, while both own local M `[0:63]`.
 
 ```text
-Prologue (wave1/3 combined)
+Prologue (wave1/3 specialization schedule)
 issue TDM B/SB slot0/body0              # 2 TDM in this wave group; wave1=B, wave3=SB
 issue TDM B/SB slot1/body1              # 2 TDM in this wave group
 issue TDM B/SB slot2/body2              # 2 TDM in this wave group
@@ -469,7 +599,7 @@ B-current second half # 8 ds_load_b128/wave
 
 s_wait_dscnt 10                         # wait2, SA/A current second half ready
 
-SB/B-next first half + wmma K0/K1 lower left + WGP barrier      # 2 ds_load_b32 + 8 ds_load_b128 / wave
+SB/B-next first half + WMMA G1 local M[32:63],N[0:31] + WG barrier  # 2 ds_load_b32 + 8 ds_load_b128 / wave
     s_wait_tensorcnt 2
     s_barrier_signal -1
     wmma4 (1_0)  # K0
@@ -493,7 +623,7 @@ SB/B-next first half + wmma K0/K1 lower left + WGP barrier      # 2 ds_load_b32 
 s_wait_dscnt 10                         # wait3, SB/B current second half ready
 s_barrier_signal -1
 
-SA/A-next first half + wmma K0 upper right + issue TDM       # 1 ds_load_b32 + 4 ds_load_b128 / wave + 1 TDM / wave
+SA/A-next first half + WMMA G2 K0 local M[0:31],N[32:63] + issue TDM  # 1 ds_load_b32 + 4 ds_load_b128 / wave + 1 TDM / wave
     wmma8 (2_0)  # K0
     s_barrier_wait 0xffff
     issue TDM B/SB slot0/body4          # 1 TDM/wave, 2 total in this wave group
@@ -505,7 +635,7 @@ SA/A-next first half + wmma K0 upper right + issue TDM       # 1 ds_load_b32 + 4
     ds_ld128_a2 (0_2)                   # next
     ds_ld128_a3 (0_3)                   # next
 
-SA/A-next first half + wmma K1 upper right           # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SA/A-next first half + WMMA G2 K1 local M[0:31],N[32:63]  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma10 (2_2)  # K1
     wmma11 (2_3)  # K1
     s_wait_alu depctr_va_vdst(0)
@@ -515,7 +645,7 @@ SA/A-next first half + wmma K1 upper right           # 1 ds_load_b32 + 4 ds_load
     ds_ld128_a6 (0_6)                   # next
     ds_ld128_a7 (0_7)                   # next
 
-SA/A-next second half + wmma K0 lower right + finish  # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SA/A-next second half + WMMA G3 K0 local M[32:63],N[32:63] + finish  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma12 (3_0)  # K0
     loop control SALU
     wmma13 (3_1)  # K0
@@ -528,7 +658,7 @@ SA/A-next second half + wmma K0 lower right + finish  # 1 ds_load_b32 + 4 ds_loa
     ds_ld128_a10 (1_2)                  # next
     ds_ld128_a11 (1_3)                  # next
 
-SA/A-next second half + wmma K1 lower right           # 1 ds_load_b32 + 4 ds_load_b128 / wave
+SA/A-next second half + WMMA G3 K1 local M[32:63],N[32:63]  # 1 ds_load_b32 + 4 ds_load_b128 / wave
     wmma14 (3_2)  # K1
     wmma15 (3_3)  # K1
     s_wait_alu depctr_va_vdst(0)
@@ -539,7 +669,7 @@ SA/A-next second half + wmma K1 lower right           # 1 ds_load_b32 + 4 ds_loa
     ds_ld128_a15 (1_7)                  # next
     loop control branch
 
-P0→P1 boundary
+P0->P1 boundary
 loop branch not taken            # candidate steady path enters P1 directly
 phase advance: P0 next becomes P1 current; P1 reuses the corresponding VGPR
 
@@ -570,7 +700,7 @@ B-current second half # 8 ds_load_b128/wave
 
 s_wait_dscnt 10                         # P1 wait2, SA/A current second half ready
 
-SB/B-next first half + wmma K0/K1 lower left + WGP barrier      # 2 ds_load_b32 + 8 ds_load_b128 / wave
+SB/B-next first half + WMMA G1 local M[32:63],N[0:31] + WG barrier  # 2 ds_load_b32 + 8 ds_load_b128 / wave
     s_wait_tensorcnt 2
     s_barrier_signal -1
     p1_wmma4 (1_0)  # K0
@@ -599,61 +729,77 @@ P1 current second half ready, B-next first half issued  # next step enters P1 WM
 
 <a id="section-4-p0-details"></a>
 
-## 4. P0 Detailed Pipeline and Host Tile Coverage
+## 4. P0 Detailed Pipeline and Wave-Local Tile Coverage
+
+Chapter 4 describes the unchanged per-wave `64x64xK256` compute body. Table
+coordinates are wave-local unless explicitly prefixed by `WG-relative`.
+For wave `w`, convert a listed output `(m,n)` to the WG tile with:
+
+```text
+WG-relative M = m
+WG-relative N = 64*w + n
+host M        = wg_m_origin + m
+host N        = wg_n_origin + 64*w + n
+```
+
+Thus the two schedule families can share local coverage tables without
+implying a two-dimensional wave grid.
 
 <a id="section-4-1-wave02-details"></a>
 
-### 4.1 wave0/2 P0 detailed pipeline
+### 4.1 wave0/2 Specialization Schedule
 
 <a id="section-4-1-1-wave02-host-tile"></a>
 
-#### 4.1.1 wave0/2 P0 Host Tile Coverage
+#### 4.1.1 wave0/2 Wave-Local Tile Coverage
 
-**A data: one `ds_load_b128 = M16×K64` per cell**
+The same local tables apply to both waves. Wave0 adds N origin `0`; wave2
+adds N origin `128`. Both add M origin `0`.
 
-| Host M ↓ / K → | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
+**A data: one `ds_load_b128 = M16xK64` per cell**
+
+| Wave-local M / K | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
 |---|---|---|---|---|
 | M0 [0:15] | `ds_ld128_a0` (`0_0`) | `ds_ld128_a1` (`0_1`) | `ds_ld128_a4` (`0_4`) | `ds_ld128_a5` (`0_5`) |
 | M1 [16:31] | `ds_ld128_a2` (`0_2`) | `ds_ld128_a3` (`0_3`) | `ds_ld128_a6` (`0_6`) | `ds_ld128_a7` (`0_7`) |
 | M2 [32:47] | `ds_ld128_a8` (`1_0`) | `ds_ld128_a9` (`1_1`) | `ds_ld128_a12` (`1_4`) | `ds_ld128_a13` (`1_5`) |
 | M3 [48:63] | `ds_ld128_a10` (`1_2`) | `ds_ld128_a11` (`1_3`) | `ds_ld128_a14` (`1_6`) | `ds_ld128_a15` (`1_7`) |
 
-**A scale: one `ds_load_b32 = M32×K128 scales` per cell**
+**A scale: one `ds_load_b32 = M32xK128 scales` per cell**
 
-| Host M ↓ / K → | K0 [0:127] | K1 [128:255] |
+| Wave-local M / K | K0 [0:127] | K1 [128:255] |
 |---|---|---|
 | M0 [0:31] | `ds_ld32_as0` (`0_0`) | `ds_ld32_as1` (`0_1`) |
 | M1 [32:63] | `ds_ld32_as2` (`1_0`) | `ds_ld32_as3` (`1_1`) |
 
-**B data: one `ds_load_b128 = N16×K64` per cell**
+**B data: one `ds_load_b128 = N16xK64` per cell**
 
-| Host N ↓ / K → | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
+| Wave-local N / K | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
 |---|---|---|---|---|
 | N0 [0:15] | `ds_ld128_b0` (`0_0`) | `ds_ld128_b1` (`0_1`) | `ds_ld128_b4` (`0_4`) | `ds_ld128_b5` (`0_5`) |
 | N1 [16:31] | `ds_ld128_b2` (`0_2`) | `ds_ld128_b3` (`0_3`) | `ds_ld128_b6` (`0_6`) | `ds_ld128_b7` (`0_7`) |
 | N2 [32:47] | `ds_ld128_b8` (`1_0`) | `ds_ld128_b9` (`1_1`) | `ds_ld128_b12` (`1_4`) | `ds_ld128_b13` (`1_5`) |
 | N3 [48:63] | `ds_ld128_b10` (`1_2`) | `ds_ld128_b11` (`1_3`) | `ds_ld128_b14` (`1_6`) | `ds_ld128_b15` (`1_7`) |
 
-**B scale: one `ds_load_b32 = N32×K128 scales` per cell**
+**B scale: one `ds_load_b32 = N32xK128 scales` per cell**
 
-| Host N ↓ / K → | K0 [0:127] | K1 [128:255] |
+| Wave-local N / K | K0 [0:127] | K1 [128:255] |
 |---|---|---|
 | N0 [0:31] | `ds_ld32_bs0` (`0_0`) | `ds_ld32_bs1` (`0_1`) |
 | N1 [32:63] | `ds_ld32_bs2` (`1_0`) | `ds_ld32_bs3` (`1_1`) |
 
+**Each cell in the K0 table computes `M16xN32xK128`, with a K range of `[0,127]`:**
 
-**Each cell in the K0 table computes `M16×N32×K128`, with a K range of `[0,127]`:**
-
-| K0 [0,127] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] |
+| K0 [0,127] / wave-local M,N | N0 [0,31] | N1 [32,63] |
 |---|---:|---:|
 | M0 [0,15] | `wmma0` (`0_0`) | `wmma4` (`1_0`) |
 | M1 [16,31] | `wmma1` (`0_1`) | `wmma5` (`1_1`) |
 | M2 [32,47] | `wmma8` (`2_0`) | `wmma12` (`3_0`) |
 | M3 [48,63] | `wmma9` (`2_1`) | `wmma13` (`3_1`) |
 
-**Each cell in the K1 table computes the second K128 accumulation over `[128,255]` for the same M×N output fragment:**
+**Each cell in the K1 table computes the second K128 accumulation over `[128,255]` for the same MxN output fragment:**
 
-| K1 [128,255] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] |
+| K1 [128,255] / wave-local M,N | N0 [0,31] | N1 [32,63] |
 |---|---:|---:|
 | M0 [0,15] | `wmma2` (`0_2`) | `wmma6` (`1_2`) |
 | M1 [16,31] | `wmma3` (`0_3`) | `wmma7` (`1_3`) |
@@ -662,57 +808,59 @@ P1 current second half ready, B-next first half issued  # next step enters P1 WM
 
 <a id="section-4-2-wave13-details"></a>
 
-### 4.2 wave1/3 P0 detailed pipeline
+### 4.2 wave1/3 Specialization Schedule
 
 <a id="section-4-2-1-wave13-host-tile"></a>
 
-#### 4.2.1 wave1/3 P0 Host Tile Coverage
+#### 4.2.1 wave1/3 Wave-Local Tile Coverage
 
-**A data: one `ds_load_b128 = M16×K64` per cell**
+The same local tables apply to both waves. Wave1 adds N origin `64`; wave3
+adds N origin `192`. Both add M origin `0`.
 
-| Host M ↓ / K → | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
+**A data: one `ds_load_b128 = M16xK64` per cell**
+
+| Wave-local M / K | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
 |---|---|---|---|---|
 | M0 [0:15] | `ds_ld128_a0` (`0_0`) | `ds_ld128_a1` (`0_1`) | `ds_ld128_a4` (`0_4`) | `ds_ld128_a5` (`0_5`) |
 | M1 [16:31] | `ds_ld128_a2` (`0_2`) | `ds_ld128_a3` (`0_3`) | `ds_ld128_a6` (`0_6`) | `ds_ld128_a7` (`0_7`) |
 | M2 [32:47] | `ds_ld128_a8` (`1_0`) | `ds_ld128_a9` (`1_1`) | `ds_ld128_a12` (`1_4`) | `ds_ld128_a13` (`1_5`) |
 | M3 [48:63] | `ds_ld128_a10` (`1_2`) | `ds_ld128_a11` (`1_3`) | `ds_ld128_a14` (`1_6`) | `ds_ld128_a15` (`1_7`) |
 
-**A scale: one `ds_load_b32 = M32×K128 scales` per cell**
+**A scale: one `ds_load_b32 = M32xK128 scales` per cell**
 
-| Host M ↓ / K → | K0 [0:127] | K1 [128:255] |
+| Wave-local M / K | K0 [0:127] | K1 [128:255] |
 |---|---|---|
 | M0 [0:31] | `ds_ld32_as0` (`0_0`) | `ds_ld32_as1` (`0_1`) |
 | M1 [32:63] | `ds_ld32_as2` (`1_0`) | `ds_ld32_as3` (`1_1`) |
 
-**B data: one `ds_load_b128 = N16×K64` per cell**
+**B data: one `ds_load_b128 = N16xK64` per cell**
 
-| Host N ↓ / K → | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
+| Wave-local N / K | K[0:63] | K[64:127] | K[128:191] | K[192:255] |
 |---|---|---|---|---|
 | N0 [0:15] | `ds_ld128_b0` (`0_0`) | `ds_ld128_b1` (`0_1`) | `ds_ld128_b4` (`0_4`) | `ds_ld128_b5` (`0_5`) |
 | N1 [16:31] | `ds_ld128_b2` (`0_2`) | `ds_ld128_b3` (`0_3`) | `ds_ld128_b6` (`0_6`) | `ds_ld128_b7` (`0_7`) |
 | N2 [32:47] | `ds_ld128_b8` (`1_0`) | `ds_ld128_b9` (`1_1`) | `ds_ld128_b12` (`1_4`) | `ds_ld128_b13` (`1_5`) |
 | N3 [48:63] | `ds_ld128_b10` (`1_2`) | `ds_ld128_b11` (`1_3`) | `ds_ld128_b14` (`1_6`) | `ds_ld128_b15` (`1_7`) |
 
-**B scale: one `ds_load_b32 = N32×K128 scales` per cell**
+**B scale: one `ds_load_b32 = N32xK128 scales` per cell**
 
-| Host N ↓ / K → | K0 [0:127] | K1 [128:255] |
+| Wave-local N / K | K0 [0:127] | K1 [128:255] |
 |---|---|---|
 | N0 [0:31] | `ds_ld32_bs0` (`0_0`) | `ds_ld32_bs1` (`0_1`) |
 | N1 [32:63] | `ds_ld32_bs2` (`1_0`) | `ds_ld32_bs3` (`1_1`) |
 
+**Each cell in the K0 table computes `M16xN32xK128`, with a K range of `[0,127]`:**
 
-**Each cell in the K0 table computes `M16×N32×K128`, with a K range of `[0,127]`:**
-
-| K0 [0,127] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] |
+| K0 [0,127] / wave-local M,N | N0 [0,31] | N1 [32,63] |
 |---|---:|---:|
 | M0 [0,15] | `wmma0` (`0_0`) | `wmma8` (`2_0`) |
 | M1 [16,31] | `wmma1` (`0_1`) | `wmma9` (`2_1`) |
 | M2 [32,47] | `wmma4` (`1_0`) | `wmma12` (`3_0`) |
 | M3 [48,63] | `wmma5` (`1_1`) | `wmma13` (`3_1`) |
 
-**Each cell in the K1 table computes the second K128 accumulation over `[128,255]` for the same M×N output fragment:**
+**Each cell in the K1 table computes the second K128 accumulation over `[128,255]` for the same MxN output fragment:**
 
-| K1 [128,255] / Host M ↓, Host N → | N0 [0,31] | N1 [32,63] |
+| K1 [128,255] / wave-local M,N | N0 [0,31] | N1 [32,63] |
 |---|---:|---:|
 | M0 [0,15] | `wmma2` (`0_2`) | `wmma10` (`2_2`) |
 | M1 [16,31] | `wmma3` (`0_3`) | `wmma11` (`2_3`) |
@@ -724,16 +872,16 @@ P1 current second half ready, B-next first half issued  # next step enters P1 WM
 ## 5. Epilogue Design and Final Store Contract
 
 This chapter specifies a natural epilogue for the wave-tile `64x64`, WG-tile
-`128x128` design. It is design documentation, not assembled gfx1250 ISA.
-Section 1.3 makes the one-store policy and its failure gate final even where
-descriptor encodings remain validation boundaries. The following evidence
-labels are used throughout the chapter:
+`64x256` design. It is design documentation; no assembled gfx1250 ISA exists
+for the `f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps` target. The following
+evidence labels are used throughout the chapter:
 
 | Label | Meaning |
 |---|---|
 | Hardware fact | A behavior stated by the CDNA5 ISA or MI400 Shader Programming Guide. |
-| Original-ISA fact | An instruction or data-flow property present in the original 256x256 kernel disassembly. Line references use `my_code/fmha/dump_asm/hsa/gfx1250/f4gemm/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s`. |
-| Static derivation | Arithmetic or mapping derived from hardware facts, the original ISA, and Chapters 1-4 of this document. |
+| 128x128 reference-ISA fact | A local compute or specialization property observed in `f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.s`. It is historical evidence, not a target-geometry fact. |
+| 256x256 reference-ISA fact | An output-path instruction or descriptor idiom observed in `my_code/fmha/dump_asm/hsa/gfx1250/f4gemm/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s`. It is historical evidence, not a target-address or resource fact. |
+| Static derivation | Arithmetic or mapping derived from hardware facts and the geometry contract in Chapters 1-4. |
 | Candidate choice | A proposed allocation, descriptor, or schedule that is not final until assembled and run on the target. |
 | Validation boundary | A property that cannot be made bit-exact from the available text and must be checked in target assembly, disassembly, metadata, or hardware execution. |
 
@@ -758,12 +906,13 @@ staging.
 16 values per lane * 4 bytes = 16 VGPRs per fragment
 ```
 
-The 64x64 wave tile has four host-M blocks and two host-N blocks, so it has
+The 64x64 wave tile has four wave-local M blocks and two wave-local N blocks,
+so it has
 eight independent C/D fragments. The K0 and K1 instructions shown below both
 accumulate into the same named fragment; they are not separate output
 fragments. This table repeats the exact Chapter 4 coordinates and pairings.
 
-| Fragment | Host-relative output coordinates | wave0/2 K0 -> K1 | wave1/3 K0 -> K1 |
+| Fragment | Wave-local output coordinates | wave0/2 K0 -> K1 | wave1/3 K0 -> K1 |
 |---|---|---|---|
 | `F00` | `M[0:15], N[0:31]` | `wmma0 -> wmma2` | `wmma0 -> wmma2` |
 | `F01` | `M[0:15], N[32:63]` | `wmma4 -> wmma6` | `wmma8 -> wmma10` |
@@ -785,17 +934,21 @@ Therefore each wave owns:
 wave output = 64 * 64 = 4096 BF16 outputs
 ```
 
-The four existing wave quadrants combine without changing the Chapter 1
-mapping:
+The four wave tiles concatenate only along host N:
 
-| Logical wave | WG-relative M | WG-relative N |
-|---:|---|---|
-| 0 | `[0,63]` | `[0,63]` |
-| 1 | `[64,127]` | `[0,63]` |
-| 2 | `[0,63]` | `[64,127]` |
-| 3 | `[64,127]` | `[64,127]` |
+| Logical wave `w` | WG-relative M | WG-relative N | Coordinate transform |
+|---:|---|---|---|
+| 0 | `[0,63]` | `[0,63]` | `(m,n) -> (m,n)` |
+| 1 | `[0,63]` | `[64,127]` | `(m,n) -> (m,64+n)` |
+| 2 | `[0,63]` | `[128,191]` | `(m,n) -> (m,128+n)` |
+| 3 | `[0,63]` | `[192,255]` | `(m,n) -> (m,192+n)` |
 
-The combined WG output is exactly 128x128 BF16 elements.
+The combined WG output is exactly:
+
+```text
+4 waves * 4096 elements/wave = 16384 BF16 elements
+64 rows * 256 columns         = 16384 BF16 elements
+```
 
 <a id="section-5-2-vgpr-layout"></a>
 
@@ -805,7 +958,7 @@ The following is one explicit, internally non-overlapping **candidate choice**.
 It is selected for simple addressing and review, not because target metadata
 already guarantees it.
 
-| Fragment | Host-relative coordinates | F32 accumulator block | Packed-BF16 staging block |
+| Fragment | Wave-local coordinates | F32 accumulator block | Packed-BF16 staging block |
 |---|---|---|---|
 | `F00` | `M[0:15], N[0:31]` | `v256:v271` | `v128:v135` |
 | `F01` | `M[0:15], N[32:63]` | `v272:v287` | `v136:v143` |
@@ -856,9 +1009,10 @@ v_cvt_pk_bf16_f32 v128, v0, v1
 The documented immediate ordering is `{dst, src2, src1, src0}`. The final
 emitter must set the appropriate MSBs around every WMMA, conversion, address,
 and DS instruction, and must restore the low bank before low-bank DS sources
-or addresses are used. The original ISA demonstrates this requirement with
-`s_set_vgpr_msb` transitions around its conversion and DS sequences, for
-example L6522-L6523 and L6587-L6588.
+or addresses are used. The 256x256 reference ISA demonstrates
+`s_set_vgpr_msb` transitions around conversion and DS sequences, for example
+at L6522-L6523 and L6587-L6588. It does not establish the register assignment
+for this target.
 
 **Dependency requirement.** Before conversion reads the final WMMA results,
 the candidate executes `s_wait_alu depctr_va_vdst(0)`. Before DS consumes
@@ -878,26 +1032,22 @@ value, and only assembled target metadata may define the final value.
 
 ### 5.3 BF16 Conversion and LDS Staging
 
-**Original-ISA facts.** The original kernel drains broadly with `s_wait_idle`
-at L6365 / `0xAB84`, then uses the following instruction families:
-
-- `v_cvt_pk_bf16_f32`: first conversion group at L6458-L6521 /
-  `0xAD68-0xAF60`, with additional groups after `s_set_vgpr_msb` changes.
-- `ds_store_b128`: first output staging groups at L6588-L6620 /
-  `0xB170-0xB26C`.
-- `s_wait_dscnt 0` followed by `tensor_store_from_lds`: L6621-L6622 /
-  `0xB274-0xB278`, with the second store at L6809 / `0xB7FC`.
+**256x256 reference-ISA facts.** The reference output path uses
+`v_cvt_pk_bf16_f32` at L6458-L6521, `ds_store_b128` at L6588-L6620,
+`s_wait_dscnt 0` at L6621, and `tensor_store_from_lds` at L6622, with a
+second historical store at L6809. Its lane-address setup and DS offset pattern
+provide an implementation idiom only; its tile geometry, LDS bases, and store
+count do not describe this target.
 
 CDNA5 ISA L32879-L32889 defines `V_CVT_PK_BF16_F32` as converting two F32
 inputs to one packed BF16 dword using round-to-nearest-even. This is the
 architecturally appropriate conversion family for a normal BF16 output unless
 the target requires a different rounding contract.
 
-The original lane address setup at L145-L148 / `0x1BA4-0x1BBC` and the DS
-offset pattern at L6588-L6620 provide the layout principle: use the low four
-lane bits as the host-M row, use lane bit 4 to select a host-N subrange, and
-store consecutive packed pairs so the hardware N32 x M16 fragment becomes a
-host M16 x N32 row-major tile.
+The migrated layout principle is to use the low four lane bits as the
+wave-local M row, lane bit 4 to select a wave-local N subrange, and consecutive
+packed pairs to transpose the hardware N32 x M16 fragment into a host
+M16 x N32 row-major tile.
 
 The candidate sequence is:
 
@@ -918,8 +1068,8 @@ The candidate sequence is:
 4. Before DS reads the conversion destinations:
    s_wait_alu depctr_va_vdst(0)
 
-5. Apply the original lane/layout transpose principle and write each wave's
-   64x64 quadrant to the row-major 128x128 WG staging tile.
+5. Apply the migrated lane/layout transpose and write each wave's 64x64
+   N quarter to the row-major 64x256 WG staging tile.
 
 6. Complete all output DS writes:
    s_wait_dscnt 0
@@ -934,18 +1084,19 @@ lane_n_half = lane_id >> 4          # 0 or 1 for wave32
 fragment_m = 0, 16, 32, or 48
 fragment_n = 0 or 32
 store_group = 0 or 1                # first or second four packed VGPRs
+wave_n_origin = 64 * logical_wave_id
 
 lds_address =
-    0x22000
-  + (wave_m_offset + fragment_m + lane_row) * 0x100
-  + (wave_n_offset + fragment_n
+    0x2A800
+  + (fragment_m + lane_row) * 0x200
+  + (wave_n_origin + fragment_n
      + 16 * store_group + 8 * lane_n_half) * 2
 ```
 
 One `ds_store_b128` writes four packed dwords, or eight BF16 values, per lane.
 For a fragment, `store_group=0` uses the first four staging VGPRs and
 `store_group=1` uses the next four. Lanes 0-15 and 16-31 address the same 16
-host-M rows but disjoint eight-column host-N spans. This produces two
+wave-local M rows but disjoint eight-column wave-local N spans. This produces two
 `ds_store_b128` instructions per 32x16 fragment without overlap.
 
 The candidate DS count is therefore rigorous for this specific full-EXEC
@@ -968,38 +1119,72 @@ The row-major WG staging geometry is:
 | Quantity | Candidate value |
 |---|---:|
 | One wave output | `64x64x2 = 0x2000` bytes |
-| One WG output | `128x128x2 = 0x8000` bytes |
-| WG output row stride | `128x2 = 0x100` bytes |
-| `output_lds_base` | `0x22000` |
-| Output staging range | `[0x22000,0x2A000)` |
+| One WG output | `64x256x2 = 0x8000` bytes |
+| WG output row stride | `256x2 = 0x200` bytes |
+| `output_lds_base` | `0x2A800` |
+| Output staging range | `[0x2A800,0x32800)` |
 
-The wave quadrant origins are:
+The wave row-zero staging origins are:
 
-| Logical wave | Quadrant origin |
-|---:|---:|
-| 0 | `output_lds_base + 0x0000` |
-| 1 | `output_lds_base + 0x4000` |
-| 2 | `output_lds_base + 0x0080` |
-| 3 | `output_lds_base + 0x4080` |
+| Logical wave | WG-relative N origin | Staging origin |
+|---:|---:|---|
+| 0 | 0 | `output_lds_base + 0x000` |
+| 1 | 64 | `output_lds_base + 0x080` |
+| 2 | 128 | `output_lds_base + 0x100` |
+| 3 | 192 | `output_lds_base + 0x180` |
 
-`0x4000` is 64 rows times the `0x100` row stride, and `0x0080` is 64 BF16
-columns. These values are row-major quadrant origins, not contiguous
-`0x2000`-byte quadrant payloads. Every quadrant is interleaved at the full WG
-row stride, so DS addressing must use the row/lane map above.
+Each increment of `0x080` is 64 BF16 columns. These are row-major N-quarter
+origins, not contiguous `0x2000`-byte wave payloads. Every wave is interleaved
+at the full `0x200` WG row stride, so DS addressing must use the row/lane map
+above. There is no wave-M offset and no `0x4000` M-quadrant offset.
+
+The mapping has complete static coverage:
+
+```text
+fragment_m + lane_row
+    = {0,16,32,48} + [0,15]
+    = every row in [0,63] exactly once per fragment-N block
+
+fragment_n + 16*store_group + 8*lane_n_half + [0,7]
+    = every wave-local column in [0,63] exactly once
+
+wave_n_origin + wave-local column
+    = disjoint WG columns [0,63], [64,127], [128,191], [192,255]
+
+covered elements = 64 rows * 256 columns = 16384
+covered bytes    = 16384 * 2 = 32768 = 0x8000
+```
+
+The row sets, fragment-N sets, store groups, lane halves, and wave-N origins
+are pairwise disjoint at each nesting level. Therefore the candidate has
+16384 unique element addresses with no holes or collisions. A tagged-lane
+runtime test must still confirm that the physical WMMA lane distribution
+matches the assumed migration mapping.
+
+An independent temporary Python enumeration expanded every wave, fragment,
+store group, lane, and eight-element `ds_store_b128` span. It produced:
+
+```text
+elements=16384, collisions=0, holes=0, extras=0
+minimum byte address=0x2A800
+maximum byte address exclusive=0x32800
+```
 
 The output region is deliberately separate from the input ring:
 
 ```text
-input ring     [0x00000, 0x22000) = 0x22000 = 136 KiB
-output staging [0x22000, 0x2A000) = 0x08000 =  32 KiB
-fixed LDS end                           0x2A000 = 168 KiB
+input ring [0x00000,0x2A800)      0x2A800 = 170 KiB
+output staging [0x2A800,0x32800)  0x08000 =  32 KiB
+fixed LDS end                     0x32800 = 202 KiB
 ```
 
-This 168-KiB total, not 136 KiB, is the candidate fixed LDS requirement. A
-separate output region makes the first implementation easier to prove and
-prevents a late input load or speculative TDM fill from overlapping output
-staging. Reusing a drained input-ring slot is a future optimization and is
-permitted only after a complete DS/TDM lifetime and barrier proof.
+This 202-KiB total is the candidate fixed LDS requirement. There is no
+explicit layout gap: B starts at the SB end `0x0A800`, and output staging
+starts at the B end `0x2A800`. The separate, immediately adjacent output
+region makes the first implementation easier to prove and prevents a late
+input load or speculative TDM fill from overlapping output staging. Reusing a
+drained input-ring slot is a future optimization and is permitted only after
+a complete DS/TDM lifetime and barrier proof.
 
 <a id="section-5-4-tdm-store-sync"></a>
 
@@ -1011,62 +1196,52 @@ that wave, and are unordered with tensor operations from other waves.
 Descriptor `tile_dim0` and `tile_dim1` are 16-bit fields in data-size units
 (CDNA5 ISA L10487-L10503), and `tensor_dim0_stride` is in data-size elements
 (L10505-L10514). For a store, `workgroup_mask` is ignored (L10276-L10279);
-the target descriptor still sets it to zero so that the descriptor
+the candidate descriptor sets it to zero so that the descriptor
 unambiguously requests no multicast behavior.
 
-**Original-ISA facts.** The original descriptor construction at L6389-L6434
-uses byte-oriented dimensions, a `0x100`-byte in-bounds row, a padded
-`0x110`-byte LDS row span, `tile_dim1=64`, and global row stride `s12`.
-The stores at L6622 and L6809 move two 64-row pieces. This proves the original
-64-row form. It does not prove that 64 is the architectural maximum, and the
-two-piece form is historical evidence only, not a supported target mode.
+**256x256 reference-ISA facts.** The reference descriptor construction at
+L6389-L6434 uses byte-oriented dimensions, `tile_dim1=64`, and a global row
+stride supplied through the descriptor. Its stores at L6622 and L6809 are
+64-row `tensor_store_from_lds` operations. This is direct evidence for the
+required 64-row form; it does not prove this target's `0x200` row width,
+packed descriptor bits, LDS address, or SGPR allocation.
 
-The available CDNA5 ISA and MI400 Shader Guide describe `tile_dim1` as "1 to
-Max" but do not publish that maximum. Therefore support for a single 128-row
-operation is a validation boundary, not a documented hardware fact.
-Nevertheless, the final kernel contract requires exactly one
-`tensor_store_from_lds` for the 128x128 BF16 tile, issued only by logical
-wave0 of each WG:
+The design requires exactly one 64-row by 256-BF16 store for the complete
+`64x256` WG tile, issued only by logical wave0:
 
 | Descriptor property | Required semantic value |
 | --- | --- |
 | Issuer | logical wave0 only, selected by a scalar wave-ID branch |
 | Global tile base | `ptr_D + (wg_m_origin * N + wg_n_origin) * 2` |
-| LDS tile base | `0x22000` |
+| LDS tile base | `0x2A800` |
 | `count` | exactly one valid descriptor and one store issue |
 | `workgroup_mask` | `0` |
 | `data_size` | byte mode, 1 byte per descriptor element |
-| `tensor_dim0` | `0x100` bytes for the tile's row subrange |
-| `tensor_dim1` | `128` rows |
-| `tile_dim0` | `0x100` byte-mode elements, or 256 row bytes |
-| `tile_dim1` | `128` rows |
+| `tensor_dim0` | `0x200` bytes for the tile's row subrange |
+| `tensor_dim1` | `64` rows |
+| `tile_dim0` | `0x200` byte-mode elements, equal to 512 row bytes |
+| `tile_dim1` | `64` rows |
 | `tensor_dim0_stride` | `N * 2` bytes (`0x1000` for `N=2048`) |
-| Padding, gather, iteration, atomic arrival | disabled |
+| Descriptor padding, gather, iteration, atomic arrival | disabled |
 
-Byte mode follows the original ISA and makes `tile_dim0=0x100` exactly the
-row byte count. An element-mode descriptor with `data_size=2` and
-`tile_dim0=128` is semantically equivalent, but it is not the primary
-candidate here. All packed descriptor words, SGPR assignments, reserved bits,
-and encoded units remain candidates until target assembly and disassembly
-confirm them; this validation boundary does not permit changing the required
-one-store policy.
-
-`tile_dim1=128` is a hard validation gate. If the required descriptor cannot
-be encoded, the assembler rejects it, or target hardware validation fails,
-stop the kernel rewrite. Do not replace it with two 64-row stores; that
-historical original-kernel form is not supported by this target contract.
+Byte mode makes `tile_dim0=0x200` equal to the required `256*2=512` row
+bytes. An element-mode descriptor with two-byte elements and `tile_dim0=256`
+is semantically equivalent, but it is not the primary candidate. The packed
+descriptor words, semantic-size encoding convention, SGPR assignments,
+reserved bits, and accepted LDS/global alignments remain target-assembly and
+hardware validation boundaries.
 
 The exact WG synchronization skeleton is:
 
 ```text
-# All four waves have issued their quadrant DS writes.
+# All four waves have issued their N-quarter DS writes.
 all waves:
     s_wait_dscnt 0
     s_barrier_signal -1
-    s_barrier_wait 0xffff       # all 128x128 staging writes are visible
+    s_barrier_wait 0xffff       # complete 64x256 staging tile is visible
 
 if logical_wave_id == 0:        # scalar control-flow branch
-    tensor_store_from_lds required_128_row_descriptor  # exactly once per WG
+    tensor_store_from_lds candidate_64_row_descriptor  # exactly once per WG
     s_wait_tensorcnt 0
 
 all waves:
@@ -1085,7 +1260,7 @@ cluster barrier as specified in Section 5.5.
 ### 5.5 Final Drain, P3 Wrap, and Persistent-Task Transition
 
 The P0/P1/P2 phases continue directly to the next phase. P3 is the four-slot
-ring boundary and must use one converged decision for all 16 WGs in the 4x4
+ring boundary and must use one converged decision for all four WGs in the 1x4
 cluster. The following pseudocode is the candidate control protocol:
 
 ```text
@@ -1125,7 +1300,7 @@ for each persistent logical cluster task:
             s_wait_tensorcnt 0
             s_wait_alu depctr_va_vdst(0)
 
-        convert_pack_and_stage_64x64_quadrant()
+        convert_pack_and_stage_64x64_N_quarter()
         run_WG_output_store_protocol_from_Section_5_4()
 
         # No WG may advance while another WG in the physical cluster is still
@@ -1134,7 +1309,7 @@ for each persistent logical cluster task:
             s_barrier_signal -3
         all waves: s_barrier_wait 0xfffd
 
-        next_cluster_task = current_cluster_task + persistent_stride
+        next_cluster_task = current_cluster_task + 64  # persistent stride
         if next_cluster_task >= logical_cluster_task_count:
             terminate_all_WGs_in_this_physical_cluster()
             return                         # converged exit; no fall-through
@@ -1149,18 +1324,41 @@ for each persistent logical cluster task:
         break
 ```
 
+For the target shape's N-fastest logical task order, pointer reconstruction
+after that barrier uses the following static coordinate derivation:
+
+```text
+cluster_n = next_cluster_task % 2
+cluster_m = next_cluster_task / 2
+Mtile     = cluster_m
+Ntile     = 4*cluster_n + wg_x
+
+wg_m_origin = 64  * Mtile
+wg_n_origin = 256 * Ntile
+wave_m_origin = wg_m_origin
+wave_n_origin = wg_n_origin + 64*logical_wave_id
+```
+
+The A/SA pointers depend on `wg_m_origin`, B/SB depend on `wg_n_origin`, and
+D depends on both origins. All TDM descriptors must be rebuilt from those new
+coordinates. These formulas are part of the candidate launcher/swizzle
+contract, not assembled-ISA facts.
+
 The future prefetch decision must be effective before a real TDM issue. Tensor
 instructions ignore EXEC, so an EXEC-masked instruction is not suppressed.
-A scalar branch is sufficient. A descriptor with `tile_dim0=0` is also an
-architectural NOP candidate, but it still has to complete its tensor-counter
-protocol and must have atomic arrival disabled.
+A scalar branch is sufficient. A descriptor with `tile_dim0=0` is an
+alternative only if target validation confirms that it performs no transfer;
+it still has to complete its tensor-counter protocol and must have atomic
+arrival disabled.
 
-All 16 WGs derive `another_K_body_exists`, `next_cluster_task`, and task
+All four WGs derive `another_K_body_exists`, `next_cluster_task`, and task
 termination from the same cluster-task state. Exactly one wave in every WG
-signals each cluster barrier, and every wave waits. No WG may independently
-skip a signal or wait. For the current 144-task logical cluster grid and 16
-physical clusters, every physical cluster executes nine tasks, but the
-uniform termination predicate is still required for every supported shape.
+signals each cluster barrier, and all four waves in every WG wait. Thus each
+cluster-barrier generation has four WG signals and 16 wave waits. No WG may
+independently skip a signal or wait. For the 576-task logical cluster grid and
+64 physical clusters, every physical cluster executes nine tasks with stride
+64, but the uniform termination predicate is still required for every
+supported shape.
 
 Accumulator clearing and pointer/descriptor initialization may be optimized
 or overlapped later. The correctness-first candidate serializes them after
@@ -1176,13 +1374,13 @@ The candidate resource summary is:
 
 | Resource | Candidate requirement | Boundary |
 | --- | ---: | --- |
-| F32 accumulators | `8 * 16 = 128 VGPRs`, `v256:v383` | Candidate physical allocation |
-| Packed BF16 staging | `8 * 8 = 64 VGPRs`, `v128:v191` | Reuses storage only after input lifetimes end |
+| F32 accumulators per wave | `8 * 16 = 128 VGPRs`, `v256:v383` | Unchanged because each wave remains `64x64` |
+| Packed BF16 staging per wave | `8 * 8 = 64 VGPRs`, `v128:v191` | Unchanged; reuse only after input lifetimes end |
 | Candidate minimum next-free VGPR boundary | `>= 384` | Not metadata; target assembly may raise it |
-| Input LDS ring | `0x22000 = 136 KiB` | Existing Chapters 1-4 design |
-| Output LDS staging | `0x8000 = 32 KiB` | Candidate separate region |
-| Candidate fixed LDS total | `0x2A000 = 168 KiB` | Must be emitted and accepted as group-segment size |
-| Output TDM | one 128-row store per WG | Required; failure stops rewrite |
+| Input LDS ring | `0x2A800 = 170 KiB` | Four contiguous payload arrays; no explicit layout gap |
+| Output LDS staging | `0x8000 = 32 KiB` | Separate `[0x2A800,0x32800)` region |
+| Candidate fixed LDS total | `0x32800 = 202 KiB` | Must be emitted and accepted as group-segment size |
+| Output TDM | one `64x256` BF16 store per WG | `tile_dim1=64`; byte width `0x200` |
 
 The final `next_free_vgpr`, group-segment fixed size, SGPR count, descriptor
 SGPR placement, and occupancy must come from the assembled gfx1250 object.
@@ -1193,9 +1391,9 @@ Required validation in the intended ROCm gfx1250 container and on target
 hardware:
 
 1. **Assembler:** assemble the exact candidate with the target ROCm toolchain.
-   Confirm acceptance of gfx1250 opcodes, `s_set_vgpr_msb`, a `0x2A000`
-   group segment, and the required one-store descriptor. If the 128-row
-   descriptor is not accepted, stop the kernel rewrite.
+   Confirm acceptance of gfx1250 opcodes, `s_set_vgpr_msb`, a `0x32800`
+   group segment, all four input descriptors, and the one-store output
+   descriptor.
 2. **Objdump:** disassemble the object and verify every WMMA C/D range,
    conversion source/destination, DS address/data range, wait, barrier, and
    exactly one `tensor_store_from_lds` issue per WG. Confirm that physical
@@ -1204,29 +1402,46 @@ hardware:
    `.group_segment_fixed_size`, wave32 mode, and any resource-allocation
    granularity. Reject a build whose metadata does not cover every emitted
    physical register and LDS byte.
-4. **Conversion and layout:** run a tagged-fragment microtest that gives every
+4. **Input descriptors and ring:** verify semantic byte-mode tiles
+   `0x80*64`, `0x08*64`, `0x80*256`, and `0x08*256` for A, SA, B, and SB,
+   respectively; all four slot bases; and every wave-local B/SB quarter
+   offset. Confirm any required AB-preshuffle regrouping, descriptor encoding,
+   target legality of B bases `0x0A800/0x12800/0x1A800/0x22800`, TDM
+   destination alignment, no overlap in `[0,0x2A800)`, and acceptable DS bank
+   behavior.
+5. **Conversion and layout:** run a tagged-fragment microtest that gives every
    fragment, lane half, row, and column a distinguishable value. Verify
    round-to-nearest-even BF16 packing, the hardware N32 x M16 to host M16 x
-   N32 transform, all four quadrant bases, `0x100` row stride, and absence of
-   overlap or holes in `[0x22000,0x2A000)`.
-5. **Shape-domain gate:** reject any invocation unless `M % 512 == 0`,
-   `N % 512 == 0`, and `K % 256 == 0`. Verify that the logical WG grid divides
-   exactly into 4x4 clusters and that no M/N boundary or K-tail path exists.
-6. **Numerical comparison:** compare the complete kernel against the trusted
+   N32 transform, N-quarter bases `0x000/0x080/0x100/0x180`, `0x200` row
+   stride, and exactly 16384 unique elements with no overlap or holes in
+   `[0x2A800,0x32800)`.
+6. **Shape-domain gate:** reject any invocation unless `M % 64 == 0`,
+   `N % 1024 == 0`, and `K % 256 == 0`. Verify exact 1x4 cluster division and
+   the absence of M/N boundary, K-tail, and partial-cluster paths.
+7. **Grid mapping:** for `M=18432,N=2048,K=7168`, verify logical WG grid
+   `(8,288)`, logical cluster grid `(2,288)`, 576 cluster tasks, physical
+   cluster grid `(16,4)`, WG launch `(64,4)`, stride 64, and nine tasks per
+   physical cluster.
+8. **Numerical comparison:** compare the complete kernel against the trusted
    BF16 reference for the target `M=18432, N=2048, K=7168` shape, including
    constant, random, signed, zero, overflow, NaN, and rounding-boundary cases
    supported by the test harness.
-7. **Race and barrier checks:** stress repeated persistent tasks and verify
+9. **Pipeline and barriers:** verify 40 DS loads and 16 WMMA instructions per
+   wave per K256 body. Stress repeated persistent tasks and verify
    P3 continuation, final null/skip behavior, both WG barriers, both cluster
-   barrier protocols, and uniform termination. Confirm that no DS or TDM
-   operation accesses a region after another wave or WG has reused it.
-8. **TDM validation:** verify that exactly one wave0-issued 128-row
-   `tensor_store_from_lds` writes the complete 128x128 tile (32 KiB) with a
-   global row stride of `N * sizeof(BF16)` (4096 bytes for `N=2048`) and no
-   multicast. Check TENSORcnt completion before the second WG barrier. If
-   descriptor encoding, assembly, or hardware validation fails, stop the
-   rewrite; do not split the operation into two 64-row stores.
-9. **Occupancy and performance:** measure achieved occupancy, VGPR/LDS-limited
+   barrier protocols, four-wave WG convergence, four-WG cluster convergence,
+   one cluster signal per WG, all-wave waits, and uniform termination.
+   Confirm that no DS or TDM operation accesses a region after reuse.
+10. **Output TDM:** verify that exactly one wave0-issued 64-row
+   `tensor_store_from_lds` uses LDS base `0x2A800` and writes the complete
+   `64x256` tile (32 KiB) with a global row stride of `N * sizeof(BF16)` (4096
+   bytes for `N=2048`) and no multicast. Check wave0 TENSORcnt completion
+   before the second WG barrier.
+11. **Cluster multicast:** verify `nwg_x=4`, `nwg_y=1`, the one-row WG bit
+   mapping, A/SA mask `0xf`, B/SB mask `1<<x`, and 16 total shader TDM load
+   issues per cluster per K256 body. Measure request combining separately;
+   do not infer memory-transaction counts from masks.
+12. **Occupancy and performance:** measure achieved occupancy, VGPR/LDS-limited
    residency, DS bank conflicts, TDM throughput, barrier cost, and end-to-end
    kernel performance. Performance results may choose a later input-ring
    reuse optimization only after the correctness proof remains intact.
@@ -1235,11 +1450,12 @@ hardware:
 
 ## 6. Cluster TDM Multicast
 
-This chapter is derived from the current target ISA
-`my_code/f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.s`. It does not reuse
-the 256x256 kernel's line numbers, payload sizes, or LDS addresses. Vaddr
-citations below are included because the cited current-source instructions
-carry disassembly address comments.
+No assembled ISA exists for this target. The 128x128 reference ISA and the
+256x256 reference ISA are used only as historical evidence for wave
+specialization and descriptor-building idioms. Their instruction addresses,
+masks, payload sizes, LDS bases, and 4x4 cluster dimensions do not prove this
+design. The target geometry below is a static derivation from the 1x4 contract
+and the documented CDNA5 cluster/TDM semantics.
 
 <a id="section-6-1-wg-bit-matrix"></a>
 
@@ -1260,32 +1476,25 @@ The hardware facts are:
    CS waves in typewriter order, with X as the innermost coordinate
    (`for Z, for Y, for X`; local text L3728-L3734).
 
-The current target reads those exact fields at ISA L36-L41 /
-`0x1994-0x19B8`: `s52=nwg_y`, `s51=nwg_x`, `s50=wg_y`, and `s49=wg_x`
-after adding one to the two encoded dimension-minus-one fields. ISA L160-L163
-/ `0x1CA8-0x1CB4` then forms the M-side tile index from `wg_y/nwg_y` and the
-N-side tile index from `wg_x/nwg_x`. Thus `x` is the N coordinate and `y` is
-the M coordinate.
-
-For the current 4x4 cluster, X is the fastest-varying coordinate. The
-flattened logical ID used by the masks is therefore:
+For this design, x is host N and y is host M. The semantic cluster dimensions
+after decoding the TTMP6 dimension-minus-one fields are `nwg_x=4` and
+`nwg_y=1`; consequently `wg_y=0` is the only legal y coordinate. With X
+innermost, the flattened ID is:
 
 ```text
 WGinCluster = x + nwg_x * y
             = x + 4 * y
+            = x                 # because y=0
 
-                 N / x
-             x=0         x=1         x=2          x=3
-M / y
-y=0          bit0/WG0    bit1/WG1    bit2/WG2     bit3/WG3
-y=1          bit4/WG4    bit5/WG5    bit6/WG6     bit7/WG7
-y=2          bit8/WG8    bit9/WG9    bit10/WG10   bit11/WG11
-y=3          bit12/WG12  bit13/WG13  bit14/WG14   bit15/WG15
+               host N / x
+             x=0        x=1        x=2        x=3
+host M / y
+y=0          bit0/WG0   bit1/WG1   bit2/WG2   bit3/WG3
 ```
 
-This flattening is a static derivation from the documented TTMP6 fields,
-documented typewriter order, and the two mask constructions proven in Section
-6.2; it is not an undocumented hardware formula being assumed.
+Only bits 0 through 3 represent WGs in this cluster; bits 4 through 15 must
+remain zero. This one-row matrix is a static derivation from the documented
+TTMP6 fields, X-innermost order, and the required 1x4 launch geometry.
 
 The CDNA5 Tensor DMA group-1 descriptor defines bits 15:0 as
 `workgroup_mask`, with one bit per cluster WG (Section 10.11.4, manual page
@@ -1293,124 +1502,134 @@ The CDNA5 Tensor DMA group-1 descriptor defines bits 15:0 as
 WG must make the same memory request through one wave in that WG (Section
 10.7, local text L9884-L9918). Consequently, a set mask bit selects a
 requester and destination WG; it does not elect one WG as a cluster leader.
-In this kernel, each selected requester issues through its one operand-
-specialized wave.
+In this design, every selected requester issues through its operand-specialized
+wave.
 
 <a id="section-6-2-operand-multicast-masks"></a>
 
 ### 6.2 Operand Multicast Masks
 
-ISA L284-L291 / `0x1EE8-0x1F04` specializes the four waves and branches to the
-initial descriptor builders: wave0 to `.Lbranch_000000001f08` for A, wave1 to
-`.Lbranch_000000002b48` for B, wave2 to `.Lbranch_0000000037ac` for SA, and
-wave3 to `.Lbranch_0000000043f8` for SB. The persistent restart dispatch at
-ISA L3938-L3945 / `0xBA40-0xBA5C` uses the corresponding second set of
-builders. The exact current-source mask locations are:
+Historical reference ISA provides migration evidence for assigning wave0 to A
+data, wave1 to B data, wave2 to SA, and wave3 to SB. Its cluster masks and
+line addresses do not apply here. The masks below are rebuilt from the
+target's one M row and four N columns.
 
-| Operand specialist | Initial mask construction | Persistent-restart mask construction | Confirmed mask |
+| Operand | Specialist | Reuse axis | Required mask |
 | --- | --- | --- | --- |
-| A, wave0 | `.Lbranch_000000001f08`, L341-L350 / `0x2008-0x203C` | `.Lbranch_000000005060`, L1688-L1697 / `0x5280-0x52B4` | `0xf << (4*y)` |
-| B, wave1 | `.Lbranch_000000002b48`, loop `.Lbranch_000000002c70`, L660-L676 / `0x2C50-0x2CA0` | `.Lbranch_00000000554c`, loop `.Lbranch_00000000578c`, L1914-L1930 / `0x576C-0x57BC` | `0x1111 << x` |
-| SA, wave2 | `.Lbranch_0000000037ac`, L985-L994 / `0x38B4-0x38E8` | `.Lbranch_000000005a58`, L2147-L2156 / `0x5C78-0x5CAC` | `0xf << (4*y)` |
-| SB, wave3 | `.Lbranch_0000000043f8`, loop `.Lbranch_000000004520`, L1304-L1320 / `0x4500-0x4550` | `.Lbranch_000000005f48`, loop `.Lbranch_000000006188`, L2373-L2389 / `0x6168-0x61B8` | `0x1111 << x` |
+| A data | wave0 | same M64 tile across all four N WGs | `0xf` |
+| B data | wave1 | no M reuse because `nwg_y=1` | `1 << x` |
+| SA | wave2 | same M64 scale tile across all four N WGs | `0xf` |
+| SB | wave3 | no M reuse because `nwg_y=1` | `1 << x` |
 
-For A and SA, the target executes:
-
-```text
-width_x = ((TTMP6 >> 12) & 0xf) + 1 = 4
-row_bits = (1 << width_x) - 1       = 0x000f
-shift = wg_y * width_x              = 4 * y
-mask = row_bits << shift            = 0xf << (4*y)
-```
-
-The four consecutive bits keep M/y fixed and select all four N/x WGs in that
-cluster row. A and SA therefore reuse one M-side tile across four N-side
-output tiles.
-
-For B and SB, the target loop executes `nwg_y=4` times and advances the set-bit
-index by `nwg_x=4`:
+The unassembled target mask-construction candidate decodes TTMP6 and then
+builds:
 
 ```text
-base_bits = bit(0) | bit(4) | bit(8) | bit(12) = 0x1111
-mask = base_bits << wg_x                         = 0x1111 << x
+nwg_x = ((TTMP6 >> 12) & 0xf) + 1 = 4
+nwg_y = ((TTMP6 >> 16) & 0xf) + 1 = 1
+wg_y  =  (TTMP6 >> 4) & 0xf       = 0
+wg_x  =   TTMP6       & 0xf       = x
+
+row_bits = (1 << nwg_x) - 1       = 0xf
+A_SA_mask = row_bits << (nwg_x*wg_y)
+          = 0xf << 0              = 0xf
+B_SB_mask = 1 << (wg_x + nwg_x*wg_y)
+          = 1 << x
 ```
 
-Those four strided bits keep N/x fixed and select all four M/y WGs in that
-cluster column. B and SB therefore reuse one N-side tile across four M-side
-output tiles.
+For A and SA, all WGs have the same cluster M coordinate and request the same
+M-side operand tile. The constant `0xf` mask selects WG0 through WG3. All
+four A requesters, and separately all four SA requesters, must issue the same
+request through their specialized wave. The hardware may then combine
+matching requests that arrive within its multicast window.
 
-The confirmed examples are:
+For B and SB, fixed N/x would normally select a cluster column. That column
+contains only the requesting WG because `nwg_y=1`:
 
 ```text
-A/SA, y=2 -> 0x0f00 -> WG8, WG9, WG10, WG11
-B/SB, x=1 -> 0x2222 -> WG1, WG5, WG9, WG13
+WGinCluster = x + 4*0 = x
+mask = 1 << WGinCluster = 1 << x
 ```
 
-Each builder inserts the mask into `s36[15:0]`, the documented
-`workgroup_mask` field. Immediately afterward, all four initial builders set
-descriptor bit 21: A L351 / `0x2040`, B L677 / `0x2CA4`, SA L995 /
-`0x38EC`, and SB L1321 / `0x4554`. CDNA5 ISA Section 10.11.4 identifies this
-as `early_timeout` (local text L10432-L10438). The restart builders mirror
-that setting. Matching requesters can therefore be combined, but static ISA
-inspection cannot guarantee how many have arrived before an early timeout.
+The complete examples are:
+
+```text
+A/SA, any requester x=0..3 -> mask 0xf -> WG0, WG1, WG2, WG3
+B/SB, x=0 -> mask 0x1 -> WG0 only
+B/SB, x=1 -> mask 0x2 -> WG1 only
+B/SB, x=2 -> mask 0x4 -> WG2 only
+B/SB, x=3 -> mask 0x8 -> WG3 only
+```
+
+The B/SB masks are nonzero and therefore select the documented cluster-load
+path, but each has a requester set of size one and a multicast reuse factor of
+one. There is no cross-M reuse to claim. The exact descriptor word,
+`early_timeout` policy, and persistent-restart reconstruction are target-ISA
+validation boundaries.
 
 <a id="section-6-3-payload-cluster-coverage"></a>
 
 ### 6.3 Payload and Cluster Coverage
 
-One WG computes a 128x128 output tile for one K256 body. FP4 consumes four
-bits per value, and one E8M0 scale byte covers K32, so the per-requester
-payloads are:
+One WG computes a `64x256` output tile for one K256 body. FP4 consumes four
+bits per value, and one E8M0 scale byte covers K32, so each WG-local
+destination receives:
 
 | Operand | Logical payload derivation | Bytes |
 | --- | --- | ---: |
-| A data | `M128 * K256 * 4 bits` | `16 KiB = 0x4000` |
-| B data | `N128 * K256 * 4 bits` | `16 KiB = 0x4000` |
-| SA | `M128 * (K256 / K32) * 1 byte` | `1 KiB = 0x400` |
-| SB | `N128 * (K256 / K32) * 1 byte` | `1 KiB = 0x400` |
+| A data | `M64 * K256 * 4 bits` | `8 KiB = 0x2000` |
+| SA | `M64 * (K256 / K32) * 1 byte` | `512 B = 0x0200` |
+| B data | `N256 * K256 * 4 bits` | `32 KiB = 0x8000` |
+| SB | `N256 * (K256 / K32) * 1 byte` | `2 KiB = 0x0800` |
 
 The CDNA5 descriptor layout places `tile_dim0` in `s39[31:16]` and
 `tile_dim1` in `s40[15:0]`; both are in `data_size` units (Section 10.11.4,
-local text L10487-L10514). The current target leaves `data_size=0`, meaning
-one byte per descriptor element, and constructs these exact tiles:
+local text L10487-L10514). The target semantic row counts and unassembled
+byte-mode descriptor candidate are:
 
-| Operand | Current descriptor evidence | Byte-mode tile | Payload |
-| --- | --- | ---: | ---: |
-| A | ISA L330-L333 / `0x1FC8-0x1FE0` | `0x800 * 8` | `0x4000` |
-| B | ISA L649-L652 / `0x2C10-0x2C28` | `0x800 * 8` | `0x4000` |
-| SA | ISA L974-L977 / `0x3874-0x388C` | `0x100 * 4` | `0x400` |
-| SB | ISA L1293-L1296 / `0x44C0-0x44D8` | `0x100 * 4` | `0x400` |
+| Operand | Rows | Bytes per row | Candidate semantic tile | Payload |
+| --- | ---: | ---: | ---: | ---: |
+| A data | 64 | `0x80` | `tile_dim0=0x80, tile_dim1=64` | `0x2000` |
+| SA | 64 | `0x08` | `tile_dim0=0x08, tile_dim1=64` | `0x0200` |
+| B data | 256 | `0x80` | `tile_dim0=0x80, tile_dim1=256` | `0x8000` |
+| SB | 256 | `0x08` | `tile_dim0=0x08, tile_dim1=256` | `0x0800` |
 
-These are dimensions of the preshuffled byte tile. Their product, rather than
-either descriptor dimension alone, corresponds to the logical 128-by-K256
-operand payload.
+The row counts are fixed by target geometry. Mapping these semantic rows onto
+the actual AB-preshuffled global layout, including any equivalent regrouping
+required by its strides, is a target-codegen validation boundary. No packed
+descriptor word is claimed here.
 
-The four-slot LDS rings and first load instructions are also explicit in the
-current target:
+The corresponding non-overlapping four-slot bases are:
 
-| Operand | Four LDS slot bases | Current slot-base construction | First `tensor_load_to_lds` |
-| --- | --- | --- | --- |
-| A | `0x00000, 0x04000, 0x08000, 0x0C000` | L293-L296 / `0x1F08-0x1F1C` | L376 / `0x20C0` |
-| B | `0x12000, 0x16000, 0x1A000, 0x1E000` | L612-L615 / `0x2B48-0x2B60` | L832 / `0x3530` |
-| SA | `0x10000, 0x10400, 0x10800, 0x10C00` | L937-L940 / `0x37AC-0x37C4` | L1151 / `0x417C` |
-| SB | `0x11000, 0x11400, 0x11800, 0x11C00` | L1256-L1259 / `0x43F8-0x4410` | L1477 / `0x4DE4` |
+| Operand | slot0 | slot1 | slot2 | slot3 | End |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A data | `0x00000` | `0x02000` | `0x04000` | `0x06000` | `0x08000` |
+| SA | `0x08000` | `0x08200` | `0x08400` | `0x08600` | `0x08800` |
+| SB | `0x08800` | `0x09000` | `0x09800` | `0x0A000` | `0x0A800` |
+| B data | `0x0A800` | `0x12800` | `0x1A800` | `0x22800` | `0x2A800` |
 
-The 4x4 logical cluster contains 16 WGs and covers
-`(4 * M128) x (4 * N128) = 512x512` output elements. At shader-issue level,
-one K256 body has:
+Within a slot, all waves use the same A/SA base. Wave `w` uses B offset
+`w*0x2000` and SB offset `w*0x0200`, selecting its N64 quarter. The payload
+arrays are contiguous, contain `0x2A800 = 170 KiB`, and have no explicit
+layout gap. B starts at `0x0A800` with a `0x8000` slot stride, and output
+occupies `[0x2A800,0x32800)`. B-base legality, TDM destination alignment, and
+DS bank behavior remain target-ISA validation boundaries.
 
-| Operand class | Requester groups | Shader TDM load issues |
-| --- | ---: | ---: |
-| A | four M/y rows, four requesters per row | 16 |
-| SA | four M/y rows, four requesters per row | 16 |
-| B | four N/x columns, four requesters per column | 16 |
-| SB | four N/x columns, four requesters per column | 16 |
-| Total | 16 four-requester groups | 64 |
+The 1x4 logical cluster contains four WGs and covers
+`M64xN(4*256) = M64xN1024`. At shader-issue level, one K256 body has:
+
+| Operand class | Requester identity groups | Shader TDM load issues | Static reuse |
+| --- | --- | ---: | --- |
+| A | one identical group of four WGs | 4 | potentially combine 4-to-1 upstream |
+| SA | one identical group of four WGs | 4 | potentially combine 4-to-1 upstream |
+| B | four distinct groups of one WG | 4 | reuse factor 1 |
+| SB | four distinct groups of one WG | 4 | reuse factor 1 |
+| Total | ten identity groups | 16 | not a transaction count |
 
 Equivalently, every WG has four specialized waves and issues four TDM loads
-per K256 body, so `16 WGs * 4 issues/WG = 64` shader TDM issues. Each operand
-class has 16 requester instructions before any multicast combining. There is
-no row or column leader that removes the other three shader instructions.
+per K256 body, so `4 WGs * 4 issues/WG = 16` shader TDM issues. Each operand
+class has four requester instructions before any multicast combining. There
+is no cluster leader that removes requester instructions.
 Tensor instructions also ignore EXEC (CDNA5 ISA Section 10.11.1, local text
 L10147-L10155), so EXEC masking cannot change this count.
 
@@ -1418,24 +1637,29 @@ A nonzero TDM `workgroup_mask` makes `TENSOR_LOAD_TO_LDS` use
 `CLUSTER_LOAD_ASYNC` rather than `GLOBAL_LOAD_ASYNC` (CDNA5 ISA Section
 10.11.3, local text L10269-L10279; MI400 Shader Programming Guide Section
 4.10.3, manual page 200, local text L14296-L14305). The upstream semantics
-are therefore:
+are therefore different for the two reuse classes:
 
 ```text
-four selected WGs each issue the same specialized-wave request
+A or SA:
+    four selected WGs each issue the same specialized-wave request
     -> GL1 may combine matching requests that arrive in time
     -> the returned data is delivered to each requester's WG-local LDS slot
+
+B or SB:
+    one selected WG issues each N-specific request
+    -> no cross-M requester exists in this 1x4 cluster
+    -> reuse factor is one
 ```
 
 This is multicast into separate WGP-local LDS destinations, not one
 cluster-wide LDS allocation. The MI400 guide states that GL1 can merge at
 most five requests into one data return (Section 4.9.8, manual page 190,
-local text L13779-L13794), so a four-requester row or column is within that
-documented limit. It does not prove that a particular dynamic group combines,
-especially with early timeout. Nothing in this static analysis establishes
+local text L13779-L13794), so an A/SA group of four is within that documented
+limit. It does not prove that a particular dynamic group combines; arrival
+timing and timeout policy still matter. Nothing in this static analysis establishes
 the GL1-to-GL2 request count, cache-line transaction count, HBM transaction
 count, achieved bandwidth, or performance; those require measurement.
 
-Separately from the hardware and ISA facts above, the user reports that the
-current target kernel produces a bitwise-identical hash to the reference.
-That is user-reported runtime validation of the observed result, not evidence
-for a particular multicast merge ratio or memory-transaction count.
+No 64x256 target correctness or performance result is available. Any
+bitwise-correct result from the historical 128x128 kernel validates only that
+historical kernel and does not validate this design.
