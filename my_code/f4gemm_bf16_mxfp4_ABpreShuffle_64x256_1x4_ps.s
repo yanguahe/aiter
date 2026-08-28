@@ -1,11 +1,14 @@
 	.amdgcn_target "amdgcn-amd-amdhsa--gfx1250"
 	.amdhsa_code_object_version 6
 	.text
-	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps
-	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps
+	; Contract: wave M64xN64, WG M64xN256, cluster (N x M)=4x1, full K256 bodies.
+	; Tight LDS: A 00000/02000/04000/06000, SA 08000/08200/08400/08600,
+	; SB 08800/09000/09800/0a000, B 0a800/12800/1a800/22800, output 2a800..32800.
+	.protected	f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps
+	.globl	f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps
 	.p2align	8
-	.type	f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps,@function
-f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
+	.type	f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps,@function
+f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps:
 	s_version UC_VERSION_GFX12|UC_VERSION_W32_BIT              ; 000000001900: B0804009
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 0, 2), 2  ; 000000001904: B980081A 00000002
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_SCHED_MODE, 2, 1), 1  ; 00000000190C: B980009A 00000001
@@ -13,7 +16,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s45, s3                                          ; 000000001918: BEAD0003
 	s_bfe_u32 s22, ttmp8, 0x50019                              ; 00000000191C: 9316FF74 00050019
 	s_cmp_eq_u32 s22, 0                                        ; 000000001924: BF068016
-	s_cbranch_scc0 .Lbranch_00000000195c                                          ; 000000001928: BFA1000C <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5c>
+	s_cbranch_scc0 .Lbranch_00000000195c                                          ; 000000001928: BFA1000C <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5c>
 	s_getreg_b32 s24, hwreg(HW_REG_WAVE_MODE)                  ; 00000000192C: B898F801
 	s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 24, 1), 1       ; 000000001930: B9800601 00000001
 	s_getreg_b32 s24, hwreg(HW_REG_WAVE_MODE)                  ; 000000001938: B898F801
@@ -46,88 +49,72 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s70, s19                                         ; 0000000019D0: BEC60013
 	s_add_co_u32 s71, s19, 0x200                               ; 0000000019D4: 8047FF13 00000200
 	s_ctz_i32_b32 s25, s51                                     ; 0000000019DC: BE990833
-	s_add_co_i32 s25, s25, 7                                   ; 0000000019E0: 81198819
+	s_add_co_i32 s25, s25, 8                                   ; N cluster span = nwg_x * 256
 	s_lshl_b32 s26, 1, s25                                     ; 0000000019E4: 841A1981
 	s_sub_co_u32 s26, s26, 1                                   ; 0000000019E8: 809A811A
 	s_add_co_u32 s61, s18, s26                                 ; 0000000019EC: 803D1A12
 	s_lshr_b32 s61, s61, s25                                   ; 0000000019F0: 853D193D
 	s_ctz_i32_b32 s25, s52                                     ; 0000000019F4: BE990834
-	s_add_co_i32 s25, s25, 7                                   ; 0000000019F8: 81198819
+	s_add_co_i32 s25, s25, 6                                   ; M cluster span = nwg_y * 64
 	s_lshl_b32 s26, 1, s25                                     ; 0000000019FC: 841A1981
 	s_sub_co_u32 s26, s26, 1                                   ; 000000001A00: 809A811A
 	s_add_co_u32 s29, s17, s26                                 ; 000000001A04: 801D1A11
 	s_lshr_b32 s29, s29, s25                                   ; 000000001A08: 851D191D
 	s_mul_i32 s29, s29, s61                                    ; 000000001A0C: 961D3D1D
+	; A/SA are shared M64 payloads; B/SB select wave w's N64 quarter.
 	v_lshlrev_b32_e32 v72, 4, v0                               ; 000000001A10: 30900084
-	s_mov_b32 s24, 0x2000                                      ; 000000001A14: BE9800FF 00004000
-	s_and_b32 s25, s22, 1                                      ; 000000001A1C: 8B198116
-	s_mul_i32 s24, s24, s25                                    ; 000000001A20: 96181918
-	v_add_nc_u32_e32 v4, s24, v72                              ; 000000001A24: 4A089018
-	s_mov_b32 s24, 0                                           ; 000000001A28: BE980080
-	v_add_nc_u32_e32 v72, s24, v4                              ; 000000001A2C: 4A900818
-	s_mov_b32 s24, 0x4000                                      ; 000000001A30: BE9800FF 00008000
-	v_add_nc_u32_e32 v73, s24, v4                              ; 000000001A38: 4A920818
-	s_mov_b32 s24, 0x8000                                     ; 000000001A3C: BE9800FF 00012000
-	v_add_nc_u32_e32 v74, s24, v4                              ; 000000001A44: 4A940818
-	s_mov_b32 s24, 0xc000                                     ; 000000001A48: BE9800FF 0001A000
-	v_add_nc_u32_e32 v75, s24, v4                              ; 000000001A50: 4A960818
+	s_mov_b32 s24, 0x2000
+	v_add_nc_u32_e32 v73, s24, v72
+	s_mov_b32 s24, 0x4000
+	v_add_nc_u32_e32 v74, s24, v72
+	s_mov_b32 s24, 0x6000
+	v_add_nc_u32_e32 v75, s24, v72
 	s_set_vgpr_msb 0                                           ; 000000001A90: BF860000
 	v_lshlrev_b32_e32 v76, 4, v0                               ; 000000001A94: 30980084
 	s_mov_b32 s24, 0x2000                                      ; 000000001A98: BE9800FF 00004000
-	s_lshr_b32 s25, s22, 1                                     ; 000000001AA0: 85198116
-	s_mul_i32 s24, s24, s25                                    ; 000000001AA4: 96181918
+	s_mul_i32 s24, s24, s22
 	v_add_nc_u32_e32 v4, s24, v76                              ; 000000001AA8: 4A089818
-	s_mov_b32 s24, 0x12000                                     ; 000000001AAC: BE9800FF 00030000
+	s_mov_b32 s24, 0xa800
 	v_add_nc_u32_e32 v76, s24, v4                              ; 000000001AB4: 4A980818
-	s_mov_b32 s24, 0x16000                                     ; 000000001AB8: BE9800FF 00038000
+	s_mov_b32 s24, 0x12800
 	v_add_nc_u32_e32 v77, s24, v4                              ; 000000001AC0: 4A9A0818
-	s_mov_b32 s24, 0x1a000                                     ; 000000001AC4: BE9800FF 00040000
+	s_mov_b32 s24, 0x1a800
 	v_add_nc_u32_e32 v78, s24, v4                              ; 000000001ACC: 4A9C0818
-	s_mov_b32 s24, 0x1e000                                     ; 000000001AD0: BE9800FF 00048000
+	s_mov_b32 s24, 0x22800
 	v_add_nc_u32_e32 v79, s24, v4                              ; 000000001AD8: 4A9E0818
 	s_set_vgpr_msb 0                                           ; 000000001B18: BF860000
 	v_lshlrev_b32_e32 v80, 2, v0                               ; 000000001B1C: 30A00082
-	s_mov_b32 s24, 0x200                                       ; 000000001B20: BE9800FF 00000400
-	s_and_b32 s25, s22, 1                                      ; 000000001B28: 8B198116
-	s_mul_i32 s24, s24, s25                                    ; 000000001B2C: 96181918
-	v_add_nc_u32_e32 v80, s24, v80                             ; 000000001B30: 4AA0A018
-	s_mov_b32 s24, 0x10000                                     ; 000000001B34: BE9800FF 00010000
+	s_mov_b32 s24, 0x8000
 	v_add_nc_u32_e32 v80, s24, v80                             ; 000000001B3C: 4AA0A018
 	s_set_vgpr_msb 0                                           ; 000000001B58: BF860000
 	v_lshlrev_b32_e32 v81, 2, v0                               ; 000000001B5C: 30A20082
 	s_mov_b32 s24, 0x200                                       ; 000000001B60: BE9800FF 00000400
-	s_lshr_b32 s25, s22, 1                                     ; 000000001B68: 85198116
-	s_mul_i32 s24, s24, s25                                    ; 000000001B6C: 96181918
+	s_mul_i32 s24, s24, s22
 	v_add_nc_u32_e32 v81, s24, v81                             ; 000000001B70: 4AA2A218
-	s_mov_b32 s24, 0x11000                                     ; 000000001B74: BE9800FF 00022000
+	s_mov_b32 s24, 0x8800
 	v_add_nc_u32_e32 v81, s24, v81                             ; 000000001B7C: 4AA2A218
 	s_set_vgpr_msb 0
-	; v91 = output staging addr: 0x22000 + (wave_m + lane_row)*0x100 + (wave_n + 8*lane_half)*2
+	; v91 = 0x2a800 + lane_row*0x200 + wave_id*0x80 + lane_half*0x10
 	v_and_b32_e64 v4, v0, 15
-	v_mul_u32_u24_e64 v91, v4, 0x100
+	v_mul_u32_u24_e64 v91, v4, 0x200
 	v_lshrrev_b32_e32 v4, 4, v0
 	v_mul_u32_u24_e64 v4, v4, 16
 	v_add_nc_u32_e32 v91, v4, v91
-	; wave quadrant origin: wave0=+0x0000 wave1=+0x4000 wave2=+0x0080 wave3=+0x4080
-	s_and_b32 s24, s22, 1
-	s_mul_i32 s24, s24, 0x4000
-	s_lshr_b32 s25, s22, 1
-	s_mul_i32 s25, s25, 0x80
-	s_add_co_u32 s24, s24, s25
-	s_add_co_u32 s24, s24, 0x22000
+	s_mul_i32 s24, s22, 0x80
+	s_add_co_u32 s24, s24, 0x2a800
 	v_add_nc_u32_e32 v91, s24, v91
 	s_mov_b32 s94, 0                                          ; take the fast restart path from the first persistent task onward
 	s_cmp_lt_u32 s28, s29                                      ; 000000001BFC: BF0A1D1C
-	s_cbranch_scc0 .Lbranch_00000000ba60                                       ; 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa160>
+	s_cbranch_scc0 .Lbranch_00000000ba60                                       ; 000000001C00: BFA12797 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa160>
 	s_mov_b32 s24, s61                                         ; 000000001C04: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   ; 000000001C08: 80998118
 	s_and_b32 s26, s24, s25                                    ; 000000001C0C: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        ; 000000001C10: BF06801A
-	s_cbranch_scc0 .Lbranch_000000001c28                                           ; 000000001C14: BFA10004 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x328>
+	s_cbranch_scc0 .Lbranch_000000001c28                                           ; 000000001C14: BFA10004 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x328>
 	s_ctz_i32_b32 s26, s24                                     ; 000000001C18: BE9A0818
 	s_lshr_b32 s48, s28, s26                                   ; 000000001C1C: 85301A1C
 	s_and_b32 s23, s28, s25                                    ; 000000001C20: 8B17191C
-	s_branch .Lbranch_000000001ca8                                                ; 000000001C24: BFA00020 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x3a8>
+	s_branch .Lbranch_000000001ca8                                                ; 000000001C24: BFA00020 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x3a8>
 .Lbranch_000000001c28:
 	v_cvt_f32_u32_e32 v4, s24                                  ; 000000001C28: 7E080C18
 	s_sub_co_i32 s27, 0, s24                                   ; 000000001C2C: 819B1880
@@ -166,12 +153,12 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s28, s28, s24                                 ; 000000001CC0: 801C181C
 	s_cmp_lt_u32 s28, s29                                      ; 000000001CC4: BF0A1D1C
 	s_cselect_b32 s60, 0, 1                                    ; 000000001CC8: 983C8180
-	s_cbranch_scc0 .Lbranch_000000001d98                                          ; 000000001CCC: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x498>
+	s_cbranch_scc0 .Lbranch_000000001d98                                          ; 000000001CCC: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x498>
 	s_mov_b32 s24, s61                                         ; 000000001CD0: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   ; 000000001CD4: 80998118
 	s_and_b32 s26, s24, s25                                    ; 000000001CD8: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        ; 000000001CDC: BF06801A
-	s_cbranch_scc0 .Lbranch_000000001d04                                           ; 000000001CE0: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x404>
+	s_cbranch_scc0 .Lbranch_000000001d04                                           ; 000000001CE0: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x404>
 	s_ctz_i32_b32 s26, s24                                     ; 000000001CE4: BE9A0818
 	s_lshr_b32 s27, s28, s26                                   ; 000000001CE8: 851B1A1C
 	s_and_b32 s24, s28, s25                                    ; 000000001CEC: 8B18191C
@@ -179,7 +166,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s69, s25, s50                                 ; 000000001CF4: 80453219
 	s_mul_i32 s25, s24, s51                                    ; 000000001CF8: 96193318
 	s_add_co_u32 s68, s25, s49                                 ; 000000001CFC: 80443119
-	s_branch .Lbranch_000000001da0                                                ; 000000001D00: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4a0>
+	s_branch .Lbranch_000000001da0                                                ; 000000001D00: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4a0>
 .Lbranch_000000001d04:
 	v_cvt_f32_u32_e32 v4, s24                                  ; 000000001D04: 7E080C18
 	s_sub_co_i32 s26, 0, s24                                   ; 000000001D08: 819A1880
@@ -212,39 +199,35 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s69, s25, s50                                 ; 000000001D88: 80453219
 	s_mul_i32 s25, s24, s51                                    ; 000000001D8C: 96193318
 	s_add_co_u32 s68, s25, s49                                 ; 000000001D90: 80443119
-	s_branch .Lbranch_000000001da0                                                 ; 000000001D94: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4a0>
+	s_branch .Lbranch_000000001da0                                                 ; 000000001D94: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4a0>
 .Lbranch_000000001d98:
 	s_mov_b32 s68, s54                                         ; 000000001D98: BEC40036
 	s_mov_b32 s69, s55                                         ; 000000001D9C: BEC50037
 .Lbranch_000000001da0:
-	s_mul_i32 s24, s55, 0x80                                  ; 000000001DA0: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_mul_i32 s24, s24, s13                                    ; 000000001DA8: 96180D18
 	s_add_co_u32 s72, s4, s24                                  ; 000000001DAC: 80481804
 	s_add_co_ci_u32 s73, 0, s5                                 ; 000000001DB0: 82490580
-	s_mul_i32 s24, s55, 0x80                                  ; 000000001DB4: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_mul_i32 s24, s24, s15                                    ; 000000001DBC: 96180F18
 	s_add_co_u32 s76, s8, s24                                  ; 000000001DC0: 804C1808
 	s_add_co_ci_u32 s77, 0, s9                                 ; 000000001DC4: 824D0980
-	s_mul_i32 s24, s54, 0x80                                  ; 000000001DC8: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_mul_i32 s24, s24, s14                                    ; 000000001DD0: 96180E18
 	s_add_co_u32 s74, s6, s24                                  ; 000000001DD4: 804A1806
 	s_add_co_ci_u32 s75, 0, s7                                 ; 000000001DD8: 824B0780
-	s_mul_i32 s24, s54, 0x80                                  ; 000000001DDC: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_mul_i32 s24, s24, s16                                    ; 000000001DE4: 96181018
 	s_add_co_u32 s78, s10, s24                                 ; 000000001DE8: 804E180A
 	s_add_co_ci_u32 s79, 0, s11                                ; 000000001DEC: 824F0B80
-	s_mul_i32 s24, 0x80, s54                                  ; 000000001DF0: 961836FF 00000100
+	; D origin = ((Mtile*64)*N + Ntile*256 + wave_id*64) * sizeof(bf16).
+	s_mul_i32 s24, 0x100, s54
 	s_lshl_b32 s24, s24, 1                                     ; 000000001DF8: 84188118
-	s_mul_i32 s25, 0x80, s55                                  ; 000000001DFC: 961937FF 00000100
+	s_mul_i32 s25, 0x40, s55
 	s_mul_i32 s25, s25, s12                                    ; 000000001E04: 96190C19
 	s_add_co_u32 s26, s25, s24                                 ; 000000001E08: 801A1819
-	s_and_b32 s24, s22, 1                                      ; 000000001E0C: 8B188116
-	s_mul_i32 s24, s24, 0x40                                   ; 000000001E10: 9618FF18 00000080
-	s_mul_i32 s24, s24, s12                                    ; 000000001E18: 96180C18
-	s_lshr_b32 s25, s22, 1                                     ; 000000001E1C: 85198116
-	s_mul_i32 s25, s25, 0x40                                   ; 000000001E20: 9619FF19 00000080
-	s_lshl_b32 s25, s25, 1                                     ; 000000001E28: 84198119
-	s_add_co_u32 s24, s25, s24                                 ; 000000001E2C: 80181819
+	s_mul_i32 s24, s22, 0x40
+	s_lshl_b32 s24, s24, 1
 	s_add_co_u32 s26, s26, s24                                 ; 000000001E30: 801A181A
 	s_add_co_u32 s44, s44, s26                                 ; 000000001E34: 802C1A2C
 	s_add_co_ci_u32 s45, 0, s45                                ; 000000001E38: 822D2D80
@@ -269,31 +252,36 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s24, s78, s24                                ; 000000001E84: 9818184E
 	s_cselect_b32 s25, s79, s25                                ; 000000001E88: 9819194F
 	s_cselect_b32 s26, s16, s26                                ; 000000001E8C: 981A1A10
-	s_mul_i32 s27, 0x80, s26                                  ; 000000001E90: 961B1AFF 00000100
+	; Sixteen prefetch lanes cover 4 rows/lane for A/SA and 16 rows/lane for B/SB.
+	s_and_b32 s23, s22, 1
+	s_cmp_eq_u32 s23, 0
+	s_cselect_b32 s23, 4, 16
+	s_lshl_b32 s27, s23, 4
+	s_mul_i32 s27, s27, s26
 	s_sub_co_i32 s27, s27, 1                                   ; 000000001E98: 819B811B
 	v_mov_b32_e32 v5, 0                                        ; 000000001E9C: 7E0A0280
 	v_mov_b32_e32 v7, 0                                        ; 000000001EA0: 7E0E0280
 	v_and_b32_e64 v6, v0, 1                                    ; 000000001EA4: D51B0006 00010300
 	v_mul_u32_u24_e64 v6, v6, 0x200000                         ; 000000001EAC: D50B0006 0001FF06 00200000
 	v_and_b32_e64 v4, v0, 15                                   ; 000000001EB8: D51B0004 00011F00
-	v_mul_u32_u24_e64 v4, v4, 8                               ; 000000001EC0: D50B0004 00012104
+	v_mul_u32_u24_e64 v4, v4, s23
 	v_mul_lo_u32 v4, v4, s26                                   ; 000000001EC8: D72C0004 00003504
 	s_mov_b32 exec_lo, 0xffff                                  ; 000000001ED0: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            ; 000000001ED8: EE174018 00000000 00000004
 	s_mov_b32 exec_lo, -1                                      ; 000000001EE4: BEFE00C1
 	s_cmp_eq_u32 s22, 0                                        ; 000000001EE8: BF068016
-	s_cbranch_scc1 .Lbranch_000000001f08                                           ; 000000001EEC: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x608>
+	s_cbranch_scc1 .Lbranch_000000001f08                                           ; 000000001EEC: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x608>
 	s_cmp_eq_u32 s22, 1                                        ; 000000001EF0: BF068116
-	s_cbranch_scc1 .Lbranch_000000002b48                                         ; 000000001EF4: BFA20314 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x1248>
+	s_cbranch_scc1 .Lbranch_000000002b48                                         ; 000000001EF4: BFA20314 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x1248>
 	s_cmp_eq_u32 s22, 2                                        ; 000000001EF8: BF068216
-	s_cbranch_scc1 .Lbranch_0000000037ac                                        ; 000000001EFC: BFA2062B <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x1eac>
+	s_cbranch_scc1 .Lbranch_0000000037ac                                        ; 000000001EFC: BFA2062B <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x1eac>
 	s_cmp_eq_u32 s22, 3                                        ; 000000001F00: BF068316
-	s_cbranch_scc1 .Lbranch_0000000043f8                                        ; 000000001F04: BFA2093C <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x2af8>
+	s_cbranch_scc1 .Lbranch_0000000043f8                                        ; 000000001F04: BFA2093C <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x2af8>
 .Lbranch_000000001f08:
 	s_mov_b32 s95, 0                                           ; 000000001F08: BEDF0080
-	s_mov_b32 s96, 0x4000                                      ; 000000001F0C: BEE000FF 00008000
-	s_mov_b32 s97, 0x8000                                     ; 000000001F14: BEE100FF 00012000
-	s_mov_b32 s98, 0xc000                                     ; 000000001F1C: BEE200FF 0001A000
+	s_mov_b32 s96, 0x2000
+	s_mov_b32 s97, 0x4000
+	s_mov_b32 s98, 0x6000
 	s_mov_b32 s32, 1                                           ; 000000001F24: BEA00081
 	s_mov_b32 s33, 0                                           ; 000000001F28: BEA10080
 	s_mov_b32 s34, 0                                           ; 000000001F2C: BEA20080
@@ -318,7 +306,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000001F8C: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 000000001F90: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 000000001F94: 8C262618
-	s_mul_i32 s24, s55, 0x80                                  ; 000000001F98: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s26, s17, s24                                 ; 000000001FA0: 809A1811
 	s_lshr_b32 s26, s26, 4                                     ; 000000001FA4: 851A841A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000001FA8: 8B26FF26 0000FFFF
@@ -330,7 +318,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000001FC8: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x8000000                               ; 000000001FD0: 8C27FF27 08000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000001FD8: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 8                                      ; 000000001FE0: 8C289028
+	s_or_b32 s40, s40, 4                                      ; preshuffle blocks: 4 * (16 rows * 0x80 bytes)
 	s_lshl_b32 s24, s13, 4                                     ; 000000001FE4: 8418840D
 	s_mov_b32 s25, 0                                           ; 000000001FE8: BE990080
 	s_mov_b32 s41, s24                                         ; 000000001FEC: BEA90018
@@ -338,20 +326,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 000000001FF8: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000002000: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000002004: BEA41094
-	s_bfe_u32 s24, ttmp6, 0x4000c                              ; 000000002008: 9318FF72 0004000C
-	s_add_co_i32 s24, s24, 1                                   ; 000000002010: 81188118
-	s_lshl_b32 s25, 1, s24                                     ; 000000002014: 84191881
-	s_sub_co_i32 s25, s25, 1                                   ; 000000002018: 81998119
-	s_bfe_u32 s53, ttmp6, 0x40004                              ; 00000000201C: 9335FF72 00040004
-	s_mul_i32 s53, s53, s24                                    ; 000000002024: 96351835
-	s_lshl_b32 s53, s25, s53                                   ; 000000002028: 84353519
+	s_mov_b32 s53, 0xf                                         ; A multicast: all four N WGs in the M row
 	s_and_b32 s36, s36, 0xffff0000                             ; 00000000202C: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 000000002034: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 00000000203C: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000002040: BEA41295
 	s_mov_b32 s56, 0x800                                       ; 000000002044: BEB800FF 00000800
 	s_mov_b32 s57, 0                                           ; 00000000204C: BEB90080
-	s_mul_i32 s24, s69, 0x80                                  ; 000000002050: 9618FF45 00000100
+	s_mul_i32 s24, s69, 0x40
 	s_mul_hi_u32 s63, s24, s13                                 ; 000000002058: 96BF0D18
 	s_mul_i32 s24, s24, s13                                    ; 00000000205C: 96180D18
 	s_add_co_u32 s62, s4, s24                                  ; 000000002060: 803E1804
@@ -360,7 +341,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000002070: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000002078: BEC00024
 	s_mov_b32 s65, s37                                         ; 00000000207C: BEC10025
-	s_mul_i32 s27, s69, 0x80                                  ; 000000002080: 961BFF45 00000100
+	s_mul_i32 s27, s69, 0x40
 	s_sub_co_u32 s27, s17, s27                                 ; 000000002088: 809B1B11
 	s_lshr_b32 s27, s27, 4                                     ; 00000000208C: 851B841B
 	s_lshl_b32 s26, s27, 16                                    ; 000000002090: 841A901B
@@ -387,7 +368,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 0000000020F8: 98278027
 	s_barrier_signal -1                                        ; 0000000020FC: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000002100: BF94FFFF
-	s_mov_b32 s33, 0x4000                                      ; 000000002104: BEA100FF 00008000
+	s_mov_b32 s33, 0x2000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 00000000210C: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000002118: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000002120: BF0A4618
@@ -402,7 +383,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000002144: 98278027
 	s_barrier_signal -1                                        ; 000000002148: BE804EC1
 	s_barrier_wait 0xffff                                      ; 00000000214C: BF94FFFF
-	s_mov_b32 s33, 0x8000                                     ; 000000002150: BEA100FF 00012000
+	s_mov_b32 s33, 0x4000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000002158: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000002164: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 00000000216C: BF0A4618
@@ -594,7 +575,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v76 offset:5632      
 	ds_load_b128 v[248:251], v76 offset:7168      
 	ds_load_b128 v[252:255], v76 offset:7680      
-	s_mov_b32 s33, 0xc000                                     ; 000000002B00: BEA100FF 0001A000
+	s_mov_b32 s33, 0x6000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000002B08: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000002B14: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000002B1C: BF0A4618
@@ -607,17 +588,17 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000002B38: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 000000002B3C: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000002B40: 98278027
-	s_branch .Lbranch_000000007158                                              ; 000000002B44: BFA01184 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5858>
+	s_branch .Lbranch_000000007158                                              ; 000000002B44: BFA01184 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5858>
 .Lbranch_000000002b48:
-	s_mov_b32 s95, 0x12000                                     ; 000000002B48: BEDF00FF 00030000
-	s_mov_b32 s96, 0x16000                                     ; 000000002B50: BEE000FF 00038000
-	s_mov_b32 s97, 0x1a000                                     ; 000000002B58: BEE100FF 00040000
-	s_mov_b32 s98, 0x1e000                                     ; 000000002B60: BEE200FF 00048000
+	s_mov_b32 s95, 0xa800
+	s_mov_b32 s96, 0x12800
+	s_mov_b32 s97, 0x1a800
+	s_mov_b32 s98, 0x22800
 	s_mov_b32 s32, 1                                           ; 000000002B68: BEA00081
 	s_mov_b32 s33, 0                                           ; 000000002B6C: BEA10080
 	s_mov_b32 s34, 0                                           ; 000000002B70: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 000000002B74: BEA300FF 80000000
-	s_mov_b32 s33, 0x12000                                     ; 000000002B7C: BEA100FF 00030000
+	s_mov_b32 s33, 0xa800
 	s_mov_b32 s34, s74                                         ; 000000002B84: BEA2004A
 	s_and_b32 s75, s75, 0x1ffffff                              ; 000000002B88: 8B4BFF4B 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 000000002B90: 8B23FF23 FE000000
@@ -637,7 +618,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000002BD4: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 000000002BD8: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 000000002BDC: 8C262618
-	s_mul_i32 s24, s54, 0x80                                  ; 000000002BE0: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_sub_co_u32 s26, s18, s24                                 ; 000000002BE8: 809A1812
 	s_lshr_b32 s26, s26, 4                                     ; 000000002BEC: 851A841A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000002BF0: 8B26FF26 0000FFFF
@@ -649,7 +630,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000002C10: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x8000000                               ; 000000002C18: 8C27FF27 08000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000002C20: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 8                                      ; 000000002C28: 8C289028
+	s_or_b32 s40, s40, 16                                     ; preshuffle blocks: 16 * (16 rows * 0x80 bytes)
 	s_lshl_b32 s24, s14, 4                                     ; 000000002C2C: 8418840E
 	s_mov_b32 s25, 0                                           ; 000000002C30: BE990080
 	s_mov_b32 s41, s24                                         ; 000000002C34: BEA90018
@@ -657,27 +638,14 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 000000002C40: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000002C48: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000002C4C: BEA41094
-	s_mov_b32 s53, 0                                           ; 000000002C50: BEB50080
-	s_bfe_u32 s24, ttmp6, 0x40010                              ; 000000002C54: 9318FF72 00040010
-	s_add_co_i32 s24, s24, 1                                   ; 000000002C5C: 81188118
-	s_bfe_u32 s25, ttmp6, 0x4000c                              ; 000000002C60: 9319FF72 0004000C
-	s_add_co_i32 s25, s25, 1                                   ; 000000002C68: 81198119
-	s_mov_b32 s26, 0                                           ; 000000002C6C: BE9A0080
-.Lbranch_000000002c70:
-	s_bitset1_b32 s53, s26                                     ; 000000002C70: BEB5121A
-	s_add_co_i32 s26, s26, s25                                 ; 000000002C74: 811A191A
-	s_sub_co_i32 s24, s24, 1                                   ; 000000002C78: 81988118
-	s_cmp_gt_u32 s24, 0                                        ; 000000002C7C: BF088018
-	s_cbranch_scc1 .Lbranch_000000002c70                                       ; 000000002C80: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x1370>
-	s_bfe_u32 s24, ttmp6, 0x40000                              ; 000000002C84: 9318FF72 00040000
-	s_lshl_b32 s53, s53, s24                                   ; 000000002C8C: 84351835
+	s_mov_b32 s53, 1
+	s_lshl_b32 s53, s53, s49                                  ; B has no M reuse: local requester 1 << wg_x
 	s_and_b32 s36, s36, 0xffff0000                             ; 000000002C90: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 000000002C98: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 000000002CA0: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000002CA4: BEA41295
 	s_mov_b32 s56, 0x800                                       ; 000000002CA8: BEB800FF 00000800
 	s_mov_b32 s57, 0                                           ; 000000002CB0: BEB90080
-	s_mul_i32 s24, s68, 0x80                                  ; 000000002CB4: 9618FF44 00000100
+	s_mul_i32 s24, s68, 0x100
 	s_mul_hi_u32 s63, s24, s14                                 ; 000000002CBC: 96BF0E18
 	s_mul_i32 s24, s24, s14                                    ; 000000002CC0: 96180E18
 	s_add_co_u32 s62, s6, s24                                  ; 000000002CC4: 803E1806
@@ -686,7 +654,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000002CD4: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000002CDC: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000002CE0: BEC10025
-	s_mul_i32 s27, s68, 0x80                                  ; 000000002CE4: 961BFF44 00000100
+	s_mul_i32 s27, s68, 0x100
 	s_sub_co_u32 s27, s18, s27                                 ; 000000002CEC: 809B1B12
 	s_lshr_b32 s27, s27, 4                                     ; 000000002CF0: 851B841B
 	s_lshl_b32 s26, s27, 16                                    ; 000000002CF4: 841A901B
@@ -828,7 +796,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_mov_b32_e32 v126, 0
 	v_mov_b32_e32 v127, 0
 	s_set_vgpr_msb 0
-	s_mov_b32 s33, 0x12000                                     ; 000000003528: BEA100FF 00030000
+	s_mov_b32 s33, 0xa800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000003530: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 00000000353C: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 000000003544: BF0A4618
@@ -843,7 +811,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000003568: 98278027
 	s_barrier_signal -1                                        ; 00000000356C: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000003570: BF94FFFF
-	s_mov_b32 s33, 0x16000                                     ; 000000003574: BEA100FF 00038000
+	s_mov_b32 s33, 0x12800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000357C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000003588: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000003590: BF0A4618
@@ -858,7 +826,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 0000000035B4: 98278027
 	s_barrier_signal -1                                        ; 0000000035B8: BE804EC1
 	s_barrier_wait 0xffff                                      ; 0000000035BC: BF94FFFF
-	s_mov_b32 s33, 0x1a000                                     ; 0000000035C0: BEA100FF 00040000
+	s_mov_b32 s33, 0x1a800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000035C8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 0000000035D4: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 0000000035DC: BF0A4618
@@ -919,7 +887,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v72 offset:6656
 	ds_load_b128 v[64:67], v72 offset:7168
 	ds_load_b128 v[68:71], v72 offset:7680
-	s_mov_b32 s33, 0x1e000                                     ; 000000003764: BEA100FF 00048000
+	s_mov_b32 s33, 0x22800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000376C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000003778: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000003780: BF0A4618
@@ -932,17 +900,17 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 00000000379C: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 0000000037A0: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 0000000037A4: 98278027
-	s_branch .Lbranch_000000008e6c                                              ; 0000000037A8: BFA015B0 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x756c>
+	s_branch .Lbranch_000000008e6c                                              ; 0000000037A8: BFA015B0 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x756c>
 .Lbranch_0000000037ac:
-	s_mov_b32 s95, 0x10000                                     ; 0000000037AC: BEDF00FF 00010000
-	s_mov_b32 s96, 0x10400                                     ; 0000000037B4: BEE000FF 00010800
-	s_mov_b32 s97, 0x10800                                     ; 0000000037BC: BEE100FF 00011000
-	s_mov_b32 s98, 0x10c00                                     ; 0000000037C4: BEE200FF 00011800
+	s_mov_b32 s95, 0x8000
+	s_mov_b32 s96, 0x8200
+	s_mov_b32 s97, 0x8400
+	s_mov_b32 s98, 0x8600
 	s_mov_b32 s32, 1                                           ; 0000000037CC: BEA00081
 	s_mov_b32 s33, 0                                           ; 0000000037D0: BEA10080
 	s_mov_b32 s34, 0                                           ; 0000000037D4: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 0000000037D8: BEA300FF 80000000
-	s_mov_b32 s33, 0x10000                                     ; 0000000037E0: BEA100FF 00010000
+	s_mov_b32 s33, 0x8000
 	s_mov_b32 s34, s76                                         ; 0000000037E8: BEA2004C
 	s_and_b32 s77, s77, 0x1ffffff                              ; 0000000037EC: 8B4DFF4D 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 0000000037F4: 8B23FF23 FE000000
@@ -962,7 +930,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000003838: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 00000000383C: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 000000003840: 8C262618
-	s_mul_i32 s24, s55, 0x80                                  ; 000000003844: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s26, s17, s24                                 ; 00000000384C: 809A1811
 	s_lshr_b32 s26, s26, 5                                     ; 000000003850: 851A851A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000003854: 8B26FF26 0000FFFF
@@ -974,7 +942,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000003874: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x1000000                               ; 00000000387C: 8C27FF27 01000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000003884: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 4                                       ; 00000000388C: 8C288828
+	s_or_b32 s40, s40, 2                                       ; preshuffle blocks: 2 * (32 rows * 0x08 bytes)
 	s_lshl_b32 s24, s15, 5                                     ; 000000003890: 8418850F
 	s_mov_b32 s25, 0                                           ; 000000003894: BE990080
 	s_mov_b32 s41, s24                                         ; 000000003898: BEA90018
@@ -982,20 +950,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 0000000038A4: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 0000000038AC: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 0000000038B0: BEA41094
-	s_bfe_u32 s24, ttmp6, 0x4000c                              ; 0000000038B4: 9318FF72 0004000C
-	s_add_co_i32 s24, s24, 1                                   ; 0000000038BC: 81188118
-	s_lshl_b32 s25, 1, s24                                     ; 0000000038C0: 84191881
-	s_sub_co_i32 s25, s25, 1                                   ; 0000000038C4: 81998119
-	s_bfe_u32 s53, ttmp6, 0x40004                              ; 0000000038C8: 9335FF72 00040004
-	s_mul_i32 s53, s53, s24                                    ; 0000000038D0: 96351835
-	s_lshl_b32 s53, s25, s53                                   ; 0000000038D4: 84353519
+	s_mov_b32 s53, 0xf                                         ; SA multicast: all four N WGs in the M row
 	s_and_b32 s36, s36, 0xffff0000                             ; 0000000038D8: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 0000000038E0: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 0000000038E8: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 0000000038EC: BEA41295
 	s_mov_b32 s56, 0x100                                       ; 0000000038F0: BEB800FF 00000100
 	s_mov_b32 s57, 0                                           ; 0000000038F8: BEB90080
-	s_mul_i32 s24, s69, 0x80                                  ; 0000000038FC: 9618FF45 00000100
+	s_mul_i32 s24, s69, 0x40
 	s_mul_hi_u32 s63, s24, s15                                 ; 000000003904: 96BF0F18
 	s_mul_i32 s24, s24, s15                                    ; 000000003908: 96180F18
 	s_add_co_u32 s62, s8, s24                                  ; 00000000390C: 803E1808
@@ -1004,7 +965,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 00000000391C: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000003924: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000003928: BEC10025
-	s_mul_i32 s27, s69, 0x80                                  ; 00000000392C: 961BFF45 00000100
+	s_mul_i32 s27, s69, 0x40
 	s_sub_co_u32 s27, s17, s27                                 ; 000000003934: 809B1B11
 	s_lshr_b32 s27, s27, 5                                     ; 000000003938: 851B851B
 	s_lshl_b32 s26, s27, 16                                    ; 00000000393C: 841A901B
@@ -1147,7 +1108,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_mov_b32_e32 v126, 0
 	v_mov_b32_e32 v127, 0
 	s_set_vgpr_msb 0
-	s_mov_b32 s33, 0x10000                                     ; 000000004174: BEA100FF 00010000
+	s_mov_b32 s33, 0x8000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000417C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 000000004188: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 000000004190: BF0A4618
@@ -1162,7 +1123,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 0000000041B4: 98278027
 	s_barrier_signal -1                                        ; 0000000041B8: BE804EC1
 	s_barrier_wait 0xffff                                      ; 0000000041BC: BF94FFFF
-	s_mov_b32 s33, 0x10400                                     ; 0000000041C0: BEA100FF 00010800
+	s_mov_b32 s33, 0x8200
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000041C8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 0000000041D4: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 0000000041DC: BF0A4618
@@ -1177,7 +1138,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000004200: 98278027
 	s_barrier_signal -1                                        ; 000000004204: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000004208: BF94FFFF
-	s_mov_b32 s33, 0x10800                                     ; 00000000420C: BEA100FF 00011000
+	s_mov_b32 s33, 0x8400
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000004214: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000004220: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000004228: BF0A4618
@@ -1238,7 +1199,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v76 offset:5632      
 	ds_load_b128 v[248:251], v76 offset:7168      
 	ds_load_b128 v[252:255], v76 offset:7680      
-	s_mov_b32 s33, 0x10c00                                     ; 0000000043B0: BEA100FF 00011800
+	s_mov_b32 s33, 0x8600
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000043B8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 0000000043C4: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 0000000043CC: BF0A4618
@@ -1251,17 +1212,17 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 0000000043E8: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 0000000043EC: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 0000000043F0: 98278027
-	s_branch .Lbranch_000000007158                                              ; 0000000043F4: BFA00B58 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5858>
+	s_branch .Lbranch_000000007158                                              ; 0000000043F4: BFA00B58 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5858>
 .Lbranch_0000000043f8:
-	s_mov_b32 s95, 0x11000                                     ; 0000000043F8: BEDF00FF 00022000
-	s_mov_b32 s96, 0x11400                                     ; 000000004400: BEE000FF 00022800
-	s_mov_b32 s97, 0x11800                                     ; 000000004408: BEE100FF 00023000
-	s_mov_b32 s98, 0x11c00                                     ; 000000004410: BEE200FF 00023800
+	s_mov_b32 s95, 0x8800
+	s_mov_b32 s96, 0x9000
+	s_mov_b32 s97, 0x9800
+	s_mov_b32 s98, 0xa000
 	s_mov_b32 s32, 1                                           ; 000000004418: BEA00081
 	s_mov_b32 s33, 0                                           ; 00000000441C: BEA10080
 	s_mov_b32 s34, 0                                           ; 000000004420: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 000000004424: BEA300FF 80000000
-	s_mov_b32 s33, 0x11000                                     ; 00000000442C: BEA100FF 00022000
+	s_mov_b32 s33, 0x8800
 	s_mov_b32 s34, s78                                         ; 000000004434: BEA2004E
 	s_and_b32 s79, s79, 0x1ffffff                              ; 000000004438: 8B4FFF4F 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 000000004440: 8B23FF23 FE000000
@@ -1281,7 +1242,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000004484: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 000000004488: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 00000000448C: 8C262618
-	s_mul_i32 s24, s54, 0x80                                  ; 000000004490: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_sub_co_u32 s26, s18, s24                                 ; 000000004498: 809A1812
 	s_lshr_b32 s26, s26, 5                                     ; 00000000449C: 851A851A
 	s_and_b32 s38, s38, 0xffff                                 ; 0000000044A0: 8B26FF26 0000FFFF
@@ -1293,7 +1254,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 0000000044C0: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x1000000                               ; 0000000044C8: 8C27FF27 01000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 0000000044D0: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 4                                       ; 0000000044D8: 8C288828
+	s_or_b32 s40, s40, 8                                       ; preshuffle blocks: 8 * (32 rows * 0x08 bytes)
 	s_lshl_b32 s24, s16, 5                                     ; 0000000044DC: 84188510
 	s_mov_b32 s25, 0                                           ; 0000000044E0: BE990080
 	s_mov_b32 s41, s24                                         ; 0000000044E4: BEA90018
@@ -1301,27 +1262,14 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 0000000044F0: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 0000000044F8: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 0000000044FC: BEA41094
-	s_mov_b32 s53, 0                                           ; 000000004500: BEB50080
-	s_bfe_u32 s24, ttmp6, 0x40010                              ; 000000004504: 9318FF72 00040010
-	s_add_co_i32 s24, s24, 1                                   ; 00000000450C: 81188118
-	s_bfe_u32 s25, ttmp6, 0x4000c                              ; 000000004510: 9319FF72 0004000C
-	s_add_co_i32 s25, s25, 1                                   ; 000000004518: 81198119
-	s_mov_b32 s26, 0                                           ; 00000000451C: BE9A0080
-.Lbranch_000000004520:
-	s_bitset1_b32 s53, s26                                     ; 000000004520: BEB5121A
-	s_add_co_i32 s26, s26, s25                                 ; 000000004524: 811A191A
-	s_sub_co_i32 s24, s24, 1                                   ; 000000004528: 81988118
-	s_cmp_gt_u32 s24, 0                                        ; 00000000452C: BF088018
-	s_cbranch_scc1 .Lbranch_000000004520                                       ; 000000004530: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x2c20>
-	s_bfe_u32 s24, ttmp6, 0x40000                              ; 000000004534: 9318FF72 00040000
-	s_lshl_b32 s53, s53, s24                                   ; 00000000453C: 84351835
+	s_mov_b32 s53, 1
+	s_lshl_b32 s53, s53, s49                                  ; SB has no M reuse: local requester 1 << wg_x
 	s_and_b32 s36, s36, 0xffff0000                             ; 000000004540: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 000000004548: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 000000004550: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000004554: BEA41295
 	s_mov_b32 s56, 0x100                                       ; 000000004558: BEB800FF 00000100
 	s_mov_b32 s57, 0                                           ; 000000004560: BEB90080
-	s_mul_i32 s24, s68, 0x80                                  ; 000000004564: 9618FF44 00000100
+	s_mul_i32 s24, s68, 0x100
 	s_mul_hi_u32 s63, s24, s16                                 ; 00000000456C: 96BF1018
 	s_mul_i32 s24, s24, s16                                    ; 000000004570: 96181018
 	s_add_co_u32 s62, s10, s24                                 ; 000000004574: 803E180A
@@ -1330,7 +1278,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000004584: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 00000000458C: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000004590: BEC10025
-	s_mul_i32 s27, s68, 0x80                                  ; 000000004594: 961BFF44 00000100
+	s_mul_i32 s27, s68, 0x100
 	s_sub_co_u32 s27, s18, s27                                 ; 00000000459C: 809B1B12
 	s_lshr_b32 s27, s27, 5                                     ; 0000000045A0: 851B851B
 	s_lshl_b32 s26, s27, 16                                    ; 0000000045A4: 841A901B
@@ -1473,7 +1421,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	v_mov_b32_e32 v126, 0
 	v_mov_b32_e32 v127, 0
 	s_set_vgpr_msb 0
-	s_mov_b32 s33, 0x11000                                     ; 000000004DDC: BEA100FF 00022000
+	s_mov_b32 s33, 0x8800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000004DE4: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 000000004DF0: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 000000004DF8: BF0A4618
@@ -1488,7 +1436,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000004E1C: 98278027
 	s_barrier_signal -1                                        ; 000000004E20: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000004E24: BF94FFFF
-	s_mov_b32 s33, 0x11400                                     ; 000000004E28: BEA100FF 00022800
+	s_mov_b32 s33, 0x9000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000004E30: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000004E3C: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000004E44: BF0A4618
@@ -1503,7 +1451,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000004E68: 98278027
 	s_barrier_signal -1                                        ; 000000004E6C: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000004E70: BF94FFFF
-	s_mov_b32 s33, 0x11800                                     ; 000000004E74: BEA100FF 00023000
+	s_mov_b32 s33, 0x9800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000004E7C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000004E88: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000004E90: BF0A4618
@@ -1564,7 +1512,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v72 offset:6656
 	ds_load_b128 v[64:67], v72 offset:7168
 	ds_load_b128 v[68:71], v72 offset:7680
-	s_mov_b32 s33, 0x11c00                                     ; 000000005018: BEA100FF 00023800
+	s_mov_b32 s33, 0xa000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005020: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 00000000502C: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000005034: BF0A4618
@@ -1577,9 +1525,9 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000005050: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 000000005054: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000005058: 98278027
-	s_branch .Lbranch_000000008e6c                                              ; 00000000505C: BFA00F83 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x756c>
+	s_branch .Lbranch_000000008e6c                                              ; 00000000505C: BFA00F83 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x756c>
 .Lbranch_000000005060:
-	s_mul_i32 s24, s69, 0x80                                  ; 000000005060: 9618FF45 00000100
+	s_mul_i32 s24, s69, 0x40
 	s_mul_hi_u32 s63, s24, s13                                 ; 000000005068: 96BF0D18
 	s_mul_i32 s24, s24, s13                                    ; 00000000506C: 96180D18
 	s_add_co_u32 s62, s4, s24                                  ; 000000005070: 803E1804
@@ -1588,7 +1536,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000005080: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000005088: BEC00024
 	s_mov_b32 s65, s37                                         ; 00000000508C: BEC10025
-	s_mul_i32 s27, s69, 0x80                                  ; 000000005090: 961BFF45 00000100
+	s_mul_i32 s27, s69, 0x40
 	s_sub_co_u32 s27, s17, s27                                 ; 000000005098: 809B1B11
 	s_lshr_b32 s27, s27, 4                                     ; 00000000509C: 851B841B
 	s_lshl_b32 s26, s27, 16                                    ; 0000000050A0: 841A901B
@@ -1617,21 +1565,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s24, s10, s24                                ; 000000005104: 9818180A
 	s_cselect_b32 s25, s11, s25                                ; 000000005108: 9819190B
 	s_cselect_b32 s26, s16, s26                                ; 00000000510C: 981A1A10
-	s_and_b32 s27, s22, 1                                      ; 000000005110: 8B1B8116
-	s_cmp_eq_u32 s27, 0                                        ; 000000005114: BF06801B
-	s_cselect_b32 s27, s69, s68                                ; 000000005118: 981B4445
-	s_mul_i32 s27, s27, 0x80                                  ; 00000000511C: 961BFF1B 00000100
+	s_mul_i32 s27, s69, 0x40                                  ; wave0 A tile origin
 	s_mul_i32 s27, s27, s26                                    ; 000000005124: 961B1A1B
 	s_add_co_u32 s24, s24, s27                                 ; 000000005128: 80181B18
 	s_add_co_ci_u32 s25, 0, s25                                ; 00000000512C: 82191980
-	s_mul_i32 s27, 0x80, s26                                  ; 000000005130: 961B1AFF 00000100
+	s_mul_i32 s27, 0x40, s26
 	s_sub_co_i32 s27, s27, 1                                   ; 000000005138: 819B811B
 	v_mov_b32_e32 v5, 0                                        ; 00000000513C: 7E0A0280
 	v_mov_b32_e32 v7, 0                                        ; 000000005140: 7E0E0280
 	v_and_b32_e64 v6, v0, 1                                    ; 000000005144: D51B0006 00010300
 	v_mul_u32_u24_e64 v6, v6, 0x200000                         ; 00000000514C: D50B0006 0001FF06 00200000
 	v_and_b32_e64 v4, v0, 15                                   ; 000000005158: D51B0004 00011F00
-	v_mul_u32_u24_e64 v4, v4, 8                               ; 000000005160: D50B0004 00012104
+	v_mul_u32_u24_e64 v4, v4, 4
 	v_mul_lo_u32 v4, v4, s26                                   ; 000000005168: D72C0004 00003504
 	s_mov_b32 exec_lo, 0xffff                                  ; 000000005170: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            ; 000000005178: EE174018 00000000 00000004
@@ -1639,7 +1584,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_call_i64 s[100:101], .Lbranch_000000006944                                ; 000000005188: BA6405EE
 	s_wait_tensorcnt 0x0                                       ; 00000000518C: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        ; 000000005190: BF06815E
-	s_cbranch_scc0 .Lbranch_000000005548                                         ; 000000005194: BFA100EC <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x3c48>
+	s_cbranch_scc0 .Lbranch_000000005548                                         ; 000000005194: BFA100EC <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x3c48>
 	s_mov_b32 s94, 0                                           ; 000000005198: BEDE0080
 	s_mov_b32 s32, 1                                           ; 00000000519C: BEA00081
 	s_mov_b32 s33, 0                                           ; 0000000051A0: BEA10080
@@ -1665,7 +1610,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000005204: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 000000005208: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 00000000520C: 8C262618
-	s_mul_i32 s24, s55, 0x80                                  ; 000000005210: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s26, s17, s24                                 ; 000000005218: 809A1811
 	s_lshr_b32 s26, s26, 4                                     ; 00000000521C: 851A841A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000005220: 8B26FF26 0000FFFF
@@ -1677,7 +1622,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000005240: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x8000000                               ; 000000005248: 8C27FF27 08000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000005250: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 8 ; 000000005258: 8C289028
+	s_or_b32 s40, s40, 4
 	s_lshl_b32 s24, s13, 4                                     ; 00000000525C: 8418840D
 	s_mov_b32 s25, 0                                           ; 000000005260: BE990080
 	s_mov_b32 s41, s24                                         ; 000000005264: BEA90018
@@ -1685,15 +1630,8 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 000000005270: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000005278: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 00000000527C: BEA41094
-	s_bfe_u32 s24, ttmp6, 0x4000c                              ; 000000005280: 9318FF72 0004000C
-	s_add_co_i32 s24, s24, 1                                   ; 000000005288: 81188118
-	s_lshl_b32 s25, 1, s24                                     ; 00000000528C: 84191881
-	s_sub_co_i32 s25, s25, 1                                   ; 000000005290: 81998119
-	s_bfe_u32 s53, ttmp6, 0x40004                              ; 000000005294: 9335FF72 00040004
-	s_mul_i32 s53, s53, s24                                    ; 00000000529C: 96351835
-	s_lshl_b32 s53, s25, s53                                   ; 0000000052A0: 84353519
+	s_mov_b32 s53, 0xf
 	s_and_b32 s36, s36, 0xffff0000                             ; 0000000052A4: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 0000000052AC: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 0000000052B4: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 0000000052B8: BEA41295
 	s_mov_b32 s56, 0x800                                       ; 0000000052BC: BEB800FF 00000800
@@ -1713,7 +1651,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000005304: 98278027
 	s_barrier_signal -1                                        ; 000000005308: BE804EC1
 	s_barrier_wait 0xffff                                      ; 00000000530C: BF94FFFF
-	s_mov_b32 s33, 0x8000                                      ; 000000005310: BEA100FF 00008000
+	s_mov_b32 s33, 0x2000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000005318: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000005324: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 00000000532C: BF0A4618
@@ -1728,7 +1666,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000005350: 98278027
 	s_barrier_signal -1                                        ; 000000005354: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000005358: BF94FFFF
-	s_mov_b32 s33, 0x12000                                     ; 00000000535C: BEA100FF 00012000
+	s_mov_b32 s33, 0x4000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000005364: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000005370: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000005378: BF0A4618
@@ -1789,7 +1727,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v76 offset:5632      
 	ds_load_b128 v[248:251], v76 offset:7168      
 	ds_load_b128 v[252:255], v76 offset:7680      
-	s_mov_b32 s33, 0x1a000                                     ; 000000005500: BEA100FF 0001A000
+	s_mov_b32 s33, 0x6000
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000005508: D0310000 00100000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000005514: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 00000000551C: BF0A4618
@@ -1802,11 +1740,11 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000005538: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 00000000553C: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000005540: 98278027
-	s_branch .Lbranch_000000007158                                              ; 000000005544: BFA00704 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5858>
+	s_branch .Lbranch_000000007158                                              ; 000000005544: BFA00704 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5858>
 .Lbranch_000000005548:
-	s_branch .Lbranch_000000006454                                               ; 000000005548: BFA003C2 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4b54>
+	s_branch .Lbranch_000000006454                                               ; 000000005548: BFA003C2 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4b54>
 .Lbranch_00000000554c:
-	s_mul_i32 s24, s68, 0x80                                  ; 00000000554C: 9618FF44 00000100
+	s_mul_i32 s24, s68, 0x100
 	s_mul_hi_u32 s63, s24, s14                                 ; 000000005554: 96BF0E18
 	s_mul_i32 s24, s24, s14                                    ; 000000005558: 96180E18
 	s_add_co_u32 s62, s6, s24                                  ; 00000000555C: 803E1806
@@ -1815,7 +1753,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 00000000556C: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000005574: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000005578: BEC10025
-	s_mul_i32 s27, s68, 0x80                                  ; 00000000557C: 961BFF44 00000100
+	s_mul_i32 s27, s68, 0x100
 	s_sub_co_u32 s27, s18, s27                                 ; 000000005584: 809B1B12
 	s_lshr_b32 s27, s27, 4                                     ; 000000005588: 851B841B
 	s_lshl_b32 s26, s27, 16                                    ; 00000000558C: 841A901B
@@ -1843,21 +1781,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s24, s10, s24                                ; 0000000055EC: 9818180A
 	s_cselect_b32 s25, s11, s25                                ; 0000000055F0: 9819190B
 	s_cselect_b32 s26, s16, s26                                ; 0000000055F4: 981A1A10
-	s_and_b32 s27, s22, 1                                      ; 0000000055F8: 8B1B8116
-	s_cmp_eq_u32 s27, 0                                        ; 0000000055FC: BF06801B
-	s_cselect_b32 s27, s69, s68                                ; 000000005600: 981B4445
-	s_mul_i32 s27, s27, 0x80                                  ; 000000005604: 961BFF1B 00000100
+	s_mul_i32 s27, s68, 0x100                                 ; wave1 B tile origin
 	s_mul_i32 s27, s27, s26                                    ; 00000000560C: 961B1A1B
 	s_add_co_u32 s24, s24, s27                                 ; 000000005610: 80181B18
 	s_add_co_ci_u32 s25, 0, s25                                ; 000000005614: 82191980
-	s_mul_i32 s27, 0x80, s26                                  ; 000000005618: 961B1AFF 00000100
+	s_mul_i32 s27, 0x100, s26
 	s_sub_co_i32 s27, s27, 1                                   ; 000000005620: 819B811B
 	v_mov_b32_e32 v5, 0                                        ; 000000005624: 7E0A0280
 	v_mov_b32_e32 v7, 0                                        ; 000000005628: 7E0E0280
 	v_and_b32_e64 v6, v0, 1                                    ; 00000000562C: D51B0006 00010300
 	v_mul_u32_u24_e64 v6, v6, 0x200000                         ; 000000005634: D50B0006 0001FF06 00200000
 	v_and_b32_e64 v4, v0, 15                                   ; 000000005640: D51B0004 00011F00
-	v_mul_u32_u24_e64 v4, v4, 8                               ; 000000005648: D50B0004 00012104
+	v_mul_u32_u24_e64 v4, v4, 16
 	v_mul_lo_u32 v4, v4, s26                                   ; 000000005650: D72C0004 00003504
 	s_mov_b32 exec_lo, 0xffff                                  ; 000000005658: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            ; 000000005660: EE174018 00000000 00000004
@@ -1865,13 +1800,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_call_i64 s[100:101], .Lbranch_000000006944                                ; 000000005670: BA6404B4
 	s_wait_tensorcnt 0x0                                       ; 000000005674: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        ; 000000005678: BF06815E
-	s_cbranch_scc0 .Lbranch_000000005a54                                         ; 00000000567C: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4154>
+	s_cbranch_scc0 .Lbranch_000000005a54                                         ; 00000000567C: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4154>
 	s_mov_b32 s94, 0                                           ; 000000005680: BEDE0080
 	s_mov_b32 s32, 1                                           ; 000000005684: BEA00081
 	s_mov_b32 s33, 0                                           ; 000000005688: BEA10080
 	s_mov_b32 s34, 0                                           ; 00000000568C: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 000000005690: BEA300FF 80000000
-	s_mov_b32 s33, 0x12000                                     ; 000000005698: BEA100FF 00030000
+	s_mov_b32 s33, 0xa800
 	s_mov_b32 s34, s74                                         ; 0000000056A0: BEA2004A
 	s_and_b32 s75, s75, 0x1ffffff                              ; 0000000056A4: 8B4BFF4B 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 0000000056AC: 8B23FF23 FE000000
@@ -1891,7 +1826,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 0000000056F0: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 0000000056F4: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 0000000056F8: 8C262618
-	s_mul_i32 s24, s54, 0x80                                  ; 0000000056FC: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_sub_co_u32 s26, s18, s24                                 ; 000000005704: 809A1812
 	s_lshr_b32 s26, s26, 4                                     ; 000000005708: 851A841A
 	s_and_b32 s38, s38, 0xffff                                 ; 00000000570C: 8B26FF26 0000FFFF
@@ -1903,7 +1838,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 00000000572C: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x8000000                               ; 000000005734: 8C27FF27 08000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 00000000573C: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 8 ; 000000005744: 8C289028
+	s_or_b32 s40, s40, 16
 	s_lshl_b32 s24, s14, 4                                     ; 000000005748: 8418840E
 	s_mov_b32 s25, 0                                           ; 00000000574C: BE990080
 	s_mov_b32 s41, s24                                         ; 000000005750: BEA90018
@@ -1911,27 +1846,14 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 00000000575C: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000005764: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000005768: BEA41094
-	s_mov_b32 s53, 0                                           ; 00000000576C: BEB50080
-	s_bfe_u32 s24, ttmp6, 0x40010                              ; 000000005770: 9318FF72 00040010
-	s_add_co_i32 s24, s24, 1                                   ; 000000005778: 81188118
-	s_bfe_u32 s25, ttmp6, 0x4000c                              ; 00000000577C: 9319FF72 0004000C
-	s_add_co_i32 s25, s25, 1                                   ; 000000005784: 81198119
-	s_mov_b32 s26, 0                                           ; 000000005788: BE9A0080
-.Lbranch_00000000578c:
-	s_bitset1_b32 s53, s26                                     ; 00000000578C: BEB5121A
-	s_add_co_i32 s26, s26, s25                                 ; 000000005790: 811A191A
-	s_sub_co_i32 s24, s24, 1                                   ; 000000005794: 81988118
-	s_cmp_gt_u32 s24, 0                                        ; 000000005798: BF088018
-	s_cbranch_scc1 .Lbranch_00000000578c                                       ; 00000000579C: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x3e8c>
-	s_bfe_u32 s24, ttmp6, 0x40000                              ; 0000000057A0: 9318FF72 00040000
-	s_lshl_b32 s53, s53, s24                                   ; 0000000057A8: 84351835
+	s_mov_b32 s53, 1
+	s_lshl_b32 s53, s53, s49
 	s_and_b32 s36, s36, 0xffff0000                             ; 0000000057AC: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 0000000057B4: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 0000000057BC: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 0000000057C0: BEA41295
 	s_mov_b32 s56, 0x800                                       ; 0000000057C4: BEB800FF 00000800
 	s_mov_b32 s57, 0                                           ; 0000000057CC: BEB90080
-	s_mov_b32 s33, 0x12000                                     ; 0000000057D0: BEA100FF 00030000
+	s_mov_b32 s33, 0xa800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000057D8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 0000000057E4: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 0000000057EC: BF0A4618
@@ -1946,7 +1868,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000005810: 98278027
 	s_barrier_signal -1                                        ; 000000005814: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000005818: BF94FFFF
-	s_mov_b32 s33, 0x16000                                     ; 00000000581C: BEA100FF 00038000
+	s_mov_b32 s33, 0x12800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005824: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000005830: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000005838: BF0A4618
@@ -1961,7 +1883,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 00000000585C: 98278027
 	s_barrier_signal -1                                        ; 000000005860: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000005864: BF94FFFF
-	s_mov_b32 s33, 0x1a000                                     ; 000000005868: BEA100FF 00040000
+	s_mov_b32 s33, 0x1a800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005870: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 00000000587C: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000005884: BF0A4618
@@ -2022,7 +1944,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v72 offset:6656
 	ds_load_b128 v[64:67], v72 offset:7168
 	ds_load_b128 v[68:71], v72 offset:7680
-	s_mov_b32 s33, 0x1e000                                     ; 000000005A0C: BEA100FF 00048000
+	s_mov_b32 s33, 0x22800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005A14: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000005A20: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000005A28: BF0A4618
@@ -2035,11 +1957,11 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000005A44: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 000000005A48: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000005A4C: 98278027
-	s_branch .Lbranch_000000008e6c                                              ; 000000005A50: BFA00D06 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x756c>
+	s_branch .Lbranch_000000008e6c                                              ; 000000005A50: BFA00D06 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x756c>
 .Lbranch_000000005a54:
-	s_branch .Lbranch_0000000066cc                                               ; 000000005A54: BFA0031D <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4dcc>
+	s_branch .Lbranch_0000000066cc                                               ; 000000005A54: BFA0031D <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4dcc>
 .Lbranch_000000005a58:
-	s_mul_i32 s24, s69, 0x80                                  ; 000000005A58: 9618FF45 00000100
+	s_mul_i32 s24, s69, 0x40
 	s_mul_hi_u32 s63, s24, s15                                 ; 000000005A60: 96BF0F18
 	s_mul_i32 s24, s24, s15                                    ; 000000005A64: 96180F18
 	s_add_co_u32 s62, s8, s24                                  ; 000000005A68: 803E1808
@@ -2048,7 +1970,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000005A78: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000005A80: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000005A84: BEC10025
-	s_mul_i32 s27, s69, 0x80                                  ; 000000005A88: 961BFF45 00000100
+	s_mul_i32 s27, s69, 0x40
 	s_sub_co_u32 s27, s17, s27                                 ; 000000005A90: 809B1B11
 	s_lshr_b32 s27, s27, 5                                     ; 000000005A94: 851B851B
 	s_lshl_b32 s26, s27, 16                                    ; 000000005A98: 841A901B
@@ -2076,21 +1998,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s24, s10, s24                                ; 000000005AF8: 9818180A
 	s_cselect_b32 s25, s11, s25                                ; 000000005AFC: 9819190B
 	s_cselect_b32 s26, s16, s26                                ; 000000005B00: 981A1A10
-	s_and_b32 s27, s22, 1                                      ; 000000005B04: 8B1B8116
-	s_cmp_eq_u32 s27, 0                                        ; 000000005B08: BF06801B
-	s_cselect_b32 s27, s69, s68                                ; 000000005B0C: 981B4445
-	s_mul_i32 s27, s27, 0x80                                  ; 000000005B10: 961BFF1B 00000100
+	s_mul_i32 s27, s69, 0x40                                  ; wave2 SA tile origin
 	s_mul_i32 s27, s27, s26                                    ; 000000005B18: 961B1A1B
 	s_add_co_u32 s24, s24, s27                                 ; 000000005B1C: 80181B18
 	s_add_co_ci_u32 s25, 0, s25                                ; 000000005B20: 82191980
-	s_mul_i32 s27, 0x80, s26                                  ; 000000005B24: 961B1AFF 00000100
+	s_mul_i32 s27, 0x40, s26
 	s_sub_co_i32 s27, s27, 1                                   ; 000000005B2C: 819B811B
 	v_mov_b32_e32 v5, 0                                        ; 000000005B30: 7E0A0280
 	v_mov_b32_e32 v7, 0                                        ; 000000005B34: 7E0E0280
 	v_and_b32_e64 v6, v0, 1                                    ; 000000005B38: D51B0006 00010300
 	v_mul_u32_u24_e64 v6, v6, 0x200000                         ; 000000005B40: D50B0006 0001FF06 00200000
 	v_and_b32_e64 v4, v0, 15                                   ; 000000005B4C: D51B0004 00011F00
-	v_mul_u32_u24_e64 v4, v4, 8                               ; 000000005B54: D50B0004 00012104
+	v_mul_u32_u24_e64 v4, v4, 4
 	v_mul_lo_u32 v4, v4, s26                                   ; 000000005B5C: D72C0004 00003504
 	s_mov_b32 exec_lo, 0xffff                                  ; 000000005B64: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            ; 000000005B6C: EE174018 00000000 00000004
@@ -2098,13 +2017,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_call_i64 s[100:101], .Lbranch_000000006944                                 ; 000000005B7C: BA640371
 	s_wait_tensorcnt 0x0                                       ; 000000005B80: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        ; 000000005B84: BF06815E
-	s_cbranch_scc0 .Lbranch_000000005f44                                         ; 000000005B88: BFA100EE <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4644>
+	s_cbranch_scc0 .Lbranch_000000005f44                                         ; 000000005B88: BFA100EE <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4644>
 	s_mov_b32 s94, 0                                           ; 000000005B8C: BEDE0080
 	s_mov_b32 s32, 1                                           ; 000000005B90: BEA00081
 	s_mov_b32 s33, 0                                           ; 000000005B94: BEA10080
 	s_mov_b32 s34, 0                                           ; 000000005B98: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 000000005B9C: BEA300FF 80000000
-	s_mov_b32 s33, 0x10000                                     ; 000000005BA4: BEA100FF 00010000
+	s_mov_b32 s33, 0x8000
 	s_mov_b32 s34, s76                                         ; 000000005BAC: BEA2004C
 	s_and_b32 s77, s77, 0x1ffffff                              ; 000000005BB0: 8B4DFF4D 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 000000005BB8: 8B23FF23 FE000000
@@ -2124,7 +2043,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 000000005BFC: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 000000005C00: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 000000005C04: 8C262618
-	s_mul_i32 s24, s55, 0x80                                  ; 000000005C08: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s26, s17, s24                                 ; 000000005C10: 809A1811
 	s_lshr_b32 s26, s26, 5                                     ; 000000005C14: 851A851A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000005C18: 8B26FF26 0000FFFF
@@ -2136,7 +2055,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000005C38: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x1000000                               ; 000000005C40: 8C27FF27 01000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000005C48: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 4 ; 000000005C50: 8C288828
+	s_or_b32 s40, s40, 2
 	s_lshl_b32 s24, s15, 5                                     ; 000000005C54: 8418850F
 	s_mov_b32 s25, 0                                           ; 000000005C58: BE990080
 	s_mov_b32 s41, s24                                         ; 000000005C5C: BEA90018
@@ -2144,20 +2063,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 000000005C68: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000005C70: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000005C74: BEA41094
-	s_bfe_u32 s24, ttmp6, 0x4000c                              ; 000000005C78: 9318FF72 0004000C
-	s_add_co_i32 s24, s24, 1                                   ; 000000005C80: 81188118
-	s_lshl_b32 s25, 1, s24                                     ; 000000005C84: 84191881
-	s_sub_co_i32 s25, s25, 1                                   ; 000000005C88: 81998119
-	s_bfe_u32 s53, ttmp6, 0x40004                              ; 000000005C8C: 9335FF72 00040004
-	s_mul_i32 s53, s53, s24                                    ; 000000005C94: 96351835
-	s_lshl_b32 s53, s25, s53                                   ; 000000005C98: 84353519
+	s_mov_b32 s53, 0xf
 	s_and_b32 s36, s36, 0xffff0000                             ; 000000005C9C: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 000000005CA4: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 000000005CAC: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000005CB0: BEA41295
 	s_mov_b32 s56, 0x100                                       ; 000000005CB4: BEB800FF 00000100
 	s_mov_b32 s57, 0                                           ; 000000005CBC: BEB90080
-	s_mov_b32 s33, 0x10000                                     ; 000000005CC0: BEA100FF 00010000
+	s_mov_b32 s33, 0x8000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005CC8: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 000000005CD4: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 000000005CDC: BF0A4618
@@ -2172,7 +2084,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000005D00: 98278027
 	s_barrier_signal -1                                        ; 000000005D04: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000005D08: BF94FFFF
-	s_mov_b32 s33, 0x10800                                     ; 000000005D0C: BEA100FF 00010800
+	s_mov_b32 s33, 0x8200
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005D14: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 000000005D20: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000005D28: BF0A4618
@@ -2187,7 +2099,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000005D4C: 98278027
 	s_barrier_signal -1                                        ; 000000005D50: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000005D54: BF94FFFF
-	s_mov_b32 s33, 0x11000                                     ; 000000005D58: BEA100FF 00011000
+	s_mov_b32 s33, 0x8400
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005D60: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000005D6C: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000005D74: BF0A4618
@@ -2248,7 +2160,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v76 offset:5632      
 	ds_load_b128 v[248:251], v76 offset:7168      
 	ds_load_b128 v[252:255], v76 offset:7680      
-	s_mov_b32 s33, 0x11800                                     ; 000000005EFC: BEA100FF 00011800
+	s_mov_b32 s33, 0x8600
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000005F04: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 000000005F10: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000005F18: BF0A4618
@@ -2261,11 +2173,11 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000005F34: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 000000005F38: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000005F3C: 98278027
-	s_branch .Lbranch_000000007158                                              ; 000000005F40: BFA00485 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5858>
+	s_branch .Lbranch_000000007158                                              ; 000000005F40: BFA00485 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5858>
 .Lbranch_000000005f44:
-	s_branch .Lbranch_000000006454                                               ; 000000005F44: BFA00143 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4b54>
+	s_branch .Lbranch_000000006454                                               ; 000000005F44: BFA00143 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4b54>
 .Lbranch_000000005f48:
-	s_mul_i32 s24, s68, 0x80                                  ; 000000005F48: 9618FF44 00000100
+	s_mul_i32 s24, s68, 0x100
 	s_mul_hi_u32 s63, s24, s16                                 ; 000000005F50: 96BF1018
 	s_mul_i32 s24, s24, s16                                    ; 000000005F54: 96181018
 	s_add_co_u32 s62, s10, s24                                 ; 000000005F58: 803E180A
@@ -2274,7 +2186,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s63, s63, 0x80000000                              ; 000000005F68: 8C3FFF3F 80000000
 	s_mov_b32 s64, s36                                         ; 000000005F70: BEC00024
 	s_mov_b32 s65, s37                                         ; 000000005F74: BEC10025
-	s_mul_i32 s27, s68, 0x80                                  ; 000000005F78: 961BFF44 00000100
+	s_mul_i32 s27, s68, 0x100
 	s_sub_co_u32 s27, s18, s27                                 ; 000000005F80: 809B1B12
 	s_lshr_b32 s27, s27, 5                                     ; 000000005F84: 851B851B
 	s_lshl_b32 s26, s27, 16                                    ; 000000005F88: 841A901B
@@ -2302,21 +2214,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s24, s10, s24                                ; 000000005FE8: 9818180A
 	s_cselect_b32 s25, s11, s25                                ; 000000005FEC: 9819190B
 	s_cselect_b32 s26, s16, s26                                ; 000000005FF0: 981A1A10
-	s_and_b32 s27, s22, 1                                      ; 000000005FF4: 8B1B8116
-	s_cmp_eq_u32 s27, 0                                        ; 000000005FF8: BF06801B
-	s_cselect_b32 s27, s69, s68                                ; 000000005FFC: 981B4445
-	s_mul_i32 s27, s27, 0x80                                  ; 000000006000: 961BFF1B 00000100
+	s_mul_i32 s27, s68, 0x100                                 ; wave3 SB tile origin
 	s_mul_i32 s27, s27, s26                                    ; 000000006008: 961B1A1B
 	s_add_co_u32 s24, s24, s27                                 ; 00000000600C: 80181B18
 	s_add_co_ci_u32 s25, 0, s25                                ; 000000006010: 82191980
-	s_mul_i32 s27, 0x80, s26                                  ; 000000006014: 961B1AFF 00000100
+	s_mul_i32 s27, 0x100, s26
 	s_sub_co_i32 s27, s27, 1                                   ; 00000000601C: 819B811B
 	v_mov_b32_e32 v5, 0                                        ; 000000006020: 7E0A0280
 	v_mov_b32_e32 v7, 0                                        ; 000000006024: 7E0E0280
 	v_and_b32_e64 v6, v0, 1                                    ; 000000006028: D51B0006 00010300
 	v_mul_u32_u24_e64 v6, v6, 0x200000                         ; 000000006030: D50B0006 0001FF06 00200000
 	v_and_b32_e64 v4, v0, 15                                   ; 00000000603C: D51B0004 00011F00
-	v_mul_u32_u24_e64 v4, v4, 8                               ; 000000006044: D50B0004 00012104
+	v_mul_u32_u24_e64 v4, v4, 16
 	v_mul_lo_u32 v4, v4, s26                                   ; 00000000604C: D72C0004 00003504
 	s_mov_b32 exec_lo, 0xffff                                  ; 000000006054: BEFE00FF 0000FFFF
 	global_prefetch_b8 v4, s[24:25]                            ; 00000000605C: EE174018 00000000 00000004
@@ -2324,13 +2233,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_call_i64 s[100:101], .Lbranch_000000006944                                 ; 00000000606C: BA640235
 	s_wait_tensorcnt 0x0                                       ; 000000006070: BFCB0000
 	s_cmp_eq_u32 s94, 1                                        ; 000000006074: BF06815E
-	s_cbranch_scc0 .Lbranch_000000006450                                         ; 000000006078: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4b50>
+	s_cbranch_scc0 .Lbranch_000000006450                                         ; 000000006078: BFA100F5 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4b50>
 	s_mov_b32 s94, 0                                           ; 00000000607C: BEDE0080
 	s_mov_b32 s32, 1                                           ; 000000006080: BEA00081
 	s_mov_b32 s33, 0                                           ; 000000006084: BEA10080
 	s_mov_b32 s34, 0                                           ; 000000006088: BEA20080
 	s_mov_b32 s35, 0x80000000                                  ; 00000000608C: BEA300FF 80000000
-	s_mov_b32 s33, 0x11000                                     ; 000000006094: BEA100FF 00022000
+	s_mov_b32 s33, 0x8800
 	s_mov_b32 s34, s78                                         ; 00000000609C: BEA2004E
 	s_and_b32 s79, s79, 0x1ffffff                              ; 0000000060A0: 8B4FFF4F 01FFFFFF
 	s_and_b32 s35, s35, 0xfe000000                             ; 0000000060A8: 8B23FF23 FE000000
@@ -2350,7 +2259,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_or_b32 s37, s24, s37                                     ; 0000000060EC: 8C252518
 	s_lshr_b32 s24, s26, 16                                    ; 0000000060F0: 8518901A
 	s_or_b32 s38, s24, s38                                     ; 0000000060F4: 8C262618
-	s_mul_i32 s24, s54, 0x80                                  ; 0000000060F8: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_sub_co_u32 s26, s18, s24                                 ; 000000006100: 809A1812
 	s_lshr_b32 s26, s26, 5                                     ; 000000006104: 851A851A
 	s_and_b32 s38, s38, 0xffff                                 ; 000000006108: 8B26FF26 0000FFFF
@@ -2362,7 +2271,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s39, s39, 0xffff                                 ; 000000006128: 8B27FF27 0000FFFF
 	s_or_b32 s39, s39, 0x1000000                               ; 000000006130: 8C27FF27 01000000
 	s_and_b32 s40, s40, 0xffff0000                             ; 000000006138: 8B28FF28 FFFF0000
-	s_or_b32 s40, s40, 4 ; 000000006140: 8C288828
+	s_or_b32 s40, s40, 8
 	s_lshl_b32 s24, s16, 5                                     ; 000000006144: 84188510
 	s_mov_b32 s25, 0                                           ; 000000006148: BE990080
 	s_mov_b32 s41, s24                                         ; 00000000614C: BEA90018
@@ -2370,27 +2279,14 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_and_b32 s42, s42, 0xffff0000                             ; 000000006158: 8B2AFF2A FFFF0000
 	s_or_b32 s42, s42, s25                                     ; 000000006160: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000006164: BEA41094
-	s_mov_b32 s53, 0                                           ; 000000006168: BEB50080
-	s_bfe_u32 s24, ttmp6, 0x40010                              ; 00000000616C: 9318FF72 00040010
-	s_add_co_i32 s24, s24, 1                                   ; 000000006174: 81188118
-	s_bfe_u32 s25, ttmp6, 0x4000c                              ; 000000006178: 9319FF72 0004000C
-	s_add_co_i32 s25, s25, 1                                   ; 000000006180: 81198119
-	s_mov_b32 s26, 0                                           ; 000000006184: BE9A0080
-.Lbranch_000000006188:
-	s_bitset1_b32 s53, s26                                     ; 000000006188: BEB5121A
-	s_add_co_i32 s26, s26, s25                                 ; 00000000618C: 811A191A
-	s_sub_co_i32 s24, s24, 1                                   ; 000000006190: 81988118
-	s_cmp_gt_u32 s24, 0                                        ; 000000006194: BF088018
-	s_cbranch_scc1 .Lbranch_000000006188                                       ; 000000006198: BFA2FFFB <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4888>
-	s_bfe_u32 s24, ttmp6, 0x40000                              ; 00000000619C: 9318FF72 00040000
-	s_lshl_b32 s53, s53, s24                                   ; 0000000061A4: 84351835
+	s_mov_b32 s53, 1
+	s_lshl_b32 s53, s53, s49
 	s_and_b32 s36, s36, 0xffff0000                             ; 0000000061A8: 8B24FF24 FFFF0000
-	s_and_b32 s53, s53, 0xffff                                 ; 0000000061B0: 8B35FF35 0000FFFF
 	s_or_b32 s36, s53, s36                                     ; 0000000061B8: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 0000000061BC: BEA41295
 	s_mov_b32 s56, 0x100                                       ; 0000000061C0: BEB800FF 00000100
 	s_mov_b32 s57, 0                                           ; 0000000061C8: BEB90080
-	s_mov_b32 s33, 0x11000                                     ; 0000000061CC: BEA100FF 00022000
+	s_mov_b32 s33, 0x8800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000061D4: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x100                               ; 0000000061E0: 8018FF3A 00000100
 	s_cmp_lt_u32 s24, s70                                      ; 0000000061E8: BF0A4618
@@ -2405,7 +2301,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 00000000620C: 98278027
 	s_barrier_signal -1                                        ; 000000006210: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006214: BF94FFFF
-	s_mov_b32 s33, 0x11400                                     ; 000000006218: BEA100FF 00022800
+	s_mov_b32 s33, 0x9000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000006220: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x200                               ; 00000000622C: 8018FF3A 00000200
 	s_cmp_lt_u32 s24, s70                                      ; 000000006234: BF0A4618
@@ -2420,7 +2316,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006258: 98278027
 	s_barrier_signal -1                                        ; 00000000625C: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006260: BF94FFFF
-	s_mov_b32 s33, 0x11800                                     ; 000000006264: BEA100FF 00023000
+	s_mov_b32 s33, 0x9800
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000626C: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x300                               ; 000000006278: 8018FF3A 00000300
 	s_cmp_lt_u32 s24, s70                                      ; 000000006280: BF0A4618
@@ -2481,7 +2377,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v72 offset:6656
 	ds_load_b128 v[64:67], v72 offset:7168
 	ds_load_b128 v[68:71], v72 offset:7680
-	s_mov_b32 s33, 0x11c00                                     ; 000000006408: BEA100FF 00023800
+	s_mov_b32 s33, 0xa000
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000006410: D0310000 00000000 7C7C2420
 	s_add_co_u32 s24, s58, 0x400                               ; 00000000641C: 8018FF3A 00000400
 	s_cmp_lt_u32 s24, s70                                      ; 000000006424: BF0A4618
@@ -2494,20 +2390,20 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_nc_u64 s[34:35], s[34:35], s[26:27]                  ; 000000006440: A9A21A22
 	s_cmp_lt_u32 s24, s71                                      ; 000000006444: BF0A4718
 	s_cselect_b32 s39, s39, 0                                  ; 000000006448: 98278027
-	s_branch .Lbranch_000000008e6c                                              ; 00000000644C: BFA00A87 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x756c>
+	s_branch .Lbranch_000000008e6c                                              ; 00000000644C: BFA00A87 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x756c>
 .Lbranch_000000006450:
-	s_branch .Lbranch_0000000066cc                                               ; 000000006450: BFA0009E <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4dcc>
+	s_branch .Lbranch_0000000066cc                                               ; 000000006450: BFA0009E <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4dcc>
 .Lbranch_000000006454:
 	s_nop 0                                                    ; 000000006454: BF800000
 	s_set_vgpr_msb 0                                           ; 000000006458: BF860000
 	s_cmp_eq_u32 s92, 0                                        ; 00000000645C: BF06805C
-	s_cbranch_scc1 .Lbranch_00000000647c                                           ; 000000006460: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4b7c>
+	s_cbranch_scc1 .Lbranch_00000000647c                                           ; 000000006460: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4b7c>
 	s_cmp_eq_u32 s92, 1                                        ; 000000006464: BF06815C
-	s_cbranch_scc1 .Lbranch_000000006510                                          ; 000000006468: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4c10>
+	s_cbranch_scc1 .Lbranch_000000006510                                          ; 000000006468: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4c10>
 	s_cmp_eq_u32 s92, 2                                        ; 00000000646C: BF06825C
-	s_cbranch_scc1 .Lbranch_0000000065a4                                          ; 000000006470: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4ca4>
+	s_cbranch_scc1 .Lbranch_0000000065a4                                          ; 000000006470: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4ca4>
 	s_cmp_eq_u32 s92, 3                                        ; 000000006474: BF06835C
-	s_cbranch_scc1 .Lbranch_000000006638                                         ; 000000006478: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4d38>
+	s_cbranch_scc1 .Lbranch_000000006638                                         ; 000000006478: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4d38>
 .Lbranch_00000000647c:
 	s_mov_b32 s33, s98                                         ; 00000000647C: BEA10062
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000006480: D0310000 00100000 7C7C2420
@@ -2539,7 +2435,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006500: 98278027
 	s_barrier_signal -1                                        ; 000000006504: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006508: BF94FFFF
-	s_branch .Lbranch_000000007890                                              ; 00000000650C: BFA004E0 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5f90>
+	s_branch .Lbranch_000000007890                                              ; 00000000650C: BFA004E0 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5f90>
 .Lbranch_000000006510:
 	s_mov_b32 s33, s95                                         ; 000000006510: BEA1005F
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 000000006514: D0310000 00100000 7C7C2420
@@ -2571,7 +2467,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006594: 98278027
 	s_barrier_signal -1                                        ; 000000006598: BE804EC1
 	s_barrier_wait 0xffff                                      ; 00000000659C: BF94FFFF
-	s_branch .Lbranch_000000007fc8                                              ; 0000000065A0: BFA00689 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x66c8>
+	s_branch .Lbranch_000000007fc8                                              ; 0000000065A0: BFA00689 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x66c8>
 .Lbranch_0000000065a4:
 	s_mov_b32 s33, s96                                         ; 0000000065A4: BEA10060
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 0000000065A8: D0310000 00100000 7C7C2420
@@ -2603,7 +2499,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006628: 98278027
 	s_barrier_signal -1                                        ; 00000000662C: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006630: BF94FFFF
-	s_branch .Lbranch_000000008700                                              ; 000000006634: BFA00832 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x6e00>
+	s_branch .Lbranch_000000008700                                              ; 000000006634: BFA00832 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x6e00>
 .Lbranch_000000006638:
 	s_mov_b32 s33, s97                                         ; 000000006638: BEA10061
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT        ; 00000000663C: D0310000 00100000 7C7C2420
@@ -2635,18 +2531,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 0000000066BC: 98278027
 	s_barrier_signal -1                                        ; 0000000066C0: BE804EC1
 	s_barrier_wait 0xffff                                      ; 0000000066C4: BF94FFFF
-	s_branch .Lbranch_000000007158                                               ; 0000000066C8: BFA002A3 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x5858>
+	s_branch .Lbranch_000000007158                                               ; 0000000066C8: BFA002A3 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x5858>
 .Lbranch_0000000066cc:
 	s_nop 0                                                    ; 0000000066CC: BF800000
 	s_set_vgpr_msb 0                                           ; 0000000066D0: BF860000
 	s_cmp_eq_u32 s92, 0                                        ; 0000000066D4: BF06805C
-	s_cbranch_scc1 .Lbranch_0000000066f4                                           ; 0000000066D8: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4df4>
+	s_cbranch_scc1 .Lbranch_0000000066f4                                           ; 0000000066D8: BFA20006 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4df4>
 	s_cmp_eq_u32 s92, 1                                        ; 0000000066DC: BF06815C
-	s_cbranch_scc1 .Lbranch_000000006788                                          ; 0000000066E0: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4e88>
+	s_cbranch_scc1 .Lbranch_000000006788                                          ; 0000000066E0: BFA20029 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4e88>
 	s_cmp_eq_u32 s92, 2                                        ; 0000000066E4: BF06825C
-	s_cbranch_scc1 .Lbranch_00000000681c                                          ; 0000000066E8: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4f1c>
+	s_cbranch_scc1 .Lbranch_00000000681c                                          ; 0000000066E8: BFA2004C <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4f1c>
 	s_cmp_eq_u32 s92, 3                                        ; 0000000066EC: BF06835C
-	s_cbranch_scc1 .Lbranch_0000000068b0                                         ; 0000000066F0: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4fb0>
+	s_cbranch_scc1 .Lbranch_0000000068b0                                         ; 0000000066F0: BFA2006F <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4fb0>
 .Lbranch_0000000066f4:
 	s_mov_b32 s33, s98                                         ; 0000000066F4: BEA10062
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000066F8: D0310000 00000000 7C7C2420
@@ -2678,7 +2574,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006778: 98278027
 	s_barrier_signal -1                                        ; 00000000677C: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006780: BF94FFFF
-	s_branch .Lbranch_0000000095a4                                              ; 000000006784: BFA00B87 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x7ca4>
+	s_branch .Lbranch_0000000095a4                                              ; 000000006784: BFA00B87 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x7ca4>
 .Lbranch_000000006788:
 	s_mov_b32 s33, s95                                         ; 000000006788: BEA1005F
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 00000000678C: D0310000 00000000 7C7C2420
@@ -2710,7 +2606,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 00000000680C: 98278027
 	s_barrier_signal -1                                        ; 000000006810: BE804EC1
 	s_barrier_wait 0xffff                                      ; 000000006814: BF94FFFF
-	s_branch .Lbranch_000000009cdc                                              ; 000000006818: BFA00D30 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x83dc>
+	s_branch .Lbranch_000000009cdc                                              ; 000000006818: BFA00D30 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x83dc>
 .Lbranch_00000000681c:
 	s_mov_b32 s33, s96                                         ; 00000000681C: BEA10060
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 000000006820: D0310000 00000000 7C7C2420
@@ -2742,7 +2638,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 0000000068A0: 98278027
 	s_barrier_signal -1                                        ; 0000000068A4: BE804EC1
 	s_barrier_wait 0xffff                                      ; 0000000068A8: BF94FFFF
-	s_branch .Lbranch_00000000a414                                              ; 0000000068AC: BFA00ED9 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x8b14>
+	s_branch .Lbranch_00000000a414                                              ; 0000000068AC: BFA00ED9 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x8b14>
 .Lbranch_0000000068b0:
 	s_mov_b32 s33, s97                                         ; 0000000068B0: BEA10061
 	tensor_load_to_lds s[32:35], s[36:43]                      ; 0000000068B4: D0310000 00000000 7C7C2420
@@ -2774,7 +2670,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_cselect_b32 s39, s39, 0                                  ; 000000006934: 98278027
 	s_barrier_signal -1                                        ; 000000006938: BE804EC1
 	s_barrier_wait 0xffff                                      ; 00000000693C: BF94FFFF
-	s_branch .Lbranch_000000008e6c                                              ; 000000006940: BFA0094A <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x756c>
+	s_branch .Lbranch_000000008e6c                                              ; 000000006940: BFA0094A <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x756c>
 .Lbranch_000000006944:
 	; clear the 8 F32 accumulator fragments: physical v256:v383
 	s_set_vgpr_msb 0x40
@@ -2942,10 +2838,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s95
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:1024
-	ds_load_b32 v83, v80 offset:1152
-	ds_load_b32 v84, v80 offset:1280
-	ds_load_b32 v85, v80 offset:1408
+	ds_load_b32 v82, v80 offset:512
+	ds_load_b32 v83, v80 offset:640
+	ds_load_b32 v84, v80 offset:768
+	ds_load_b32 v85, v80 offset:896
 	ds_load_b128 v[8:11], v73
 	ds_load_b128 v[12:15], v73 offset:512
 	ds_load_b128 v[16:19], v73 offset:1024
@@ -2963,10 +2859,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v73 offset:6656
 	ds_load_b128 v[64:67], v73 offset:7168
 	ds_load_b128 v[68:71], v73 offset:7680
-	ds_load_b32 v92, v81 offset:1024
-	ds_load_b32 v93, v81 offset:1152
-	ds_load_b32 v94, v81 offset:1280
-	ds_load_b32 v95, v81 offset:1408
+	ds_load_b32 v92, v81 offset:2048
+	ds_load_b32 v93, v81 offset:2176
+	ds_load_b32 v94, v81 offset:2304
+	ds_load_b32 v95, v81 offset:2432
 	ds_load_b128 v[192:195], v77
 	ds_load_b128 v[196:199], v77 offset:512
 	ds_load_b128 v[200:203], v77 offset:2048
@@ -3031,10 +2927,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s96
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:2048
-	ds_load_b32 v83, v80 offset:2176
-	ds_load_b32 v84, v80 offset:2304
-	ds_load_b32 v85, v80 offset:2432
+	ds_load_b32 v82, v80 offset:1024
+	ds_load_b32 v83, v80 offset:1152
+	ds_load_b32 v84, v80 offset:1280
+	ds_load_b32 v85, v80 offset:1408
 	ds_load_b128 v[8:11], v74
 	ds_load_b128 v[12:15], v74 offset:512
 	ds_load_b128 v[16:19], v74 offset:1024
@@ -3052,10 +2948,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v74 offset:6656
 	ds_load_b128 v[64:67], v74 offset:7168
 	ds_load_b128 v[68:71], v74 offset:7680
-	ds_load_b32 v92, v81 offset:2048
-	ds_load_b32 v93, v81 offset:2176
-	ds_load_b32 v94, v81 offset:2304
-	ds_load_b32 v95, v81 offset:2432
+	ds_load_b32 v92, v81 offset:4096
+	ds_load_b32 v93, v81 offset:4224
+	ds_load_b32 v94, v81 offset:4352
+	ds_load_b32 v95, v81 offset:4480
 	ds_load_b128 v[192:195], v78
 	ds_load_b128 v[196:199], v78 offset:512
 	ds_load_b128 v[200:203], v78 offset:2048
@@ -3120,10 +3016,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s97
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43] th:TH_LOAD_NT
-	ds_load_b32 v82, v80 offset:3072
-	ds_load_b32 v83, v80 offset:3200
-	ds_load_b32 v84, v80 offset:3328
-	ds_load_b32 v85, v80 offset:3456
+	ds_load_b32 v82, v80 offset:1536
+	ds_load_b32 v83, v80 offset:1664
+	ds_load_b32 v84, v80 offset:1792
+	ds_load_b32 v85, v80 offset:1920
 	ds_load_b128 v[8:11], v75
 	ds_load_b128 v[12:15], v75 offset:512
 	ds_load_b128 v[16:19], v75 offset:1024
@@ -3141,10 +3037,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[60:63], v75 offset:6656
 	ds_load_b128 v[64:67], v75 offset:7168
 	ds_load_b128 v[68:71], v75 offset:7680
-	ds_load_b32 v92, v81 offset:3072
-	ds_load_b32 v93, v81 offset:3200
-	ds_load_b32 v94, v81 offset:3328
-	ds_load_b32 v95, v81 offset:3456
+	ds_load_b32 v92, v81 offset:6144
+	ds_load_b32 v93, v81 offset:6272
+	ds_load_b32 v94, v81 offset:6400
+	ds_load_b32 v95, v81 offset:6528
 	ds_load_b128 v[192:195], v79
 	ds_load_b128 v[196:199], v79 offset:512
 	ds_load_b128 v[200:203], v79 offset:2048
@@ -3273,16 +3169,16 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_branch .Lbranch_000000007158
 .Lbranch_000000008e4c:
 	s_mov_b32 s92, 0                                           ; 000000008E4C: BEDC0080
-	s_branch .Lbranch_00000000ab74                                              ; 000000008E50: BFA00748 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                              ; 000000008E50: BFA00748 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_000000008e54:
 	s_mov_b32 s92, 1                                           ; 000000008E54: BEDC0081
-	s_branch .Lbranch_00000000ab74                                              ; 000000008E58: BFA00746 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                              ; 000000008E58: BFA00746 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_000000008e5c:
 	s_mov_b32 s92, 2                                           ; 000000008E5C: BEDC0082
-	s_branch .Lbranch_00000000ab74                                              ; 000000008E60: BFA00744 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                              ; 000000008E60: BFA00744 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_000000008e64:
 	s_mov_b32 s92, 3                                           ; 000000008E64: BEDC0083
-	s_branch .Lbranch_00000000ab74                                              ; 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                              ; 000000008E68: BFA00742 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_000000008e6c:
 	s_nop 0
 	s_wait_dscnt 4
@@ -3317,10 +3213,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s95
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:1024
-	ds_load_b32 v93, v81 offset:1152
-	ds_load_b32 v94, v81 offset:1280
-	ds_load_b32 v95, v81 offset:1408
+	ds_load_b32 v92, v81 offset:2048
+	ds_load_b32 v93, v81 offset:2176
+	ds_load_b32 v94, v81 offset:2304
+	ds_load_b32 v95, v81 offset:2432
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v77
 	ds_load_b128 v[196:199], v77 offset:512
@@ -3338,10 +3234,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v77 offset:5632
 	ds_load_b128 v[248:251], v77 offset:7168
 	ds_load_b128 v[252:255], v77 offset:7680
-	ds_load_b32 v82, v80 offset:1024
-	ds_load_b32 v83, v80 offset:1152
-	ds_load_b32 v84, v80 offset:1280
-	ds_load_b32 v85, v80 offset:1408
+	ds_load_b32 v82, v80 offset:512
+	ds_load_b32 v83, v80 offset:640
+	ds_load_b32 v84, v80 offset:768
+	ds_load_b32 v85, v80 offset:896
 	ds_load_b128 v[8:11], v73
 	ds_load_b128 v[12:15], v73 offset:512
 	ds_load_b128 v[16:19], v73 offset:1024
@@ -3406,10 +3302,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s96
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:2048
-	ds_load_b32 v93, v81 offset:2176
-	ds_load_b32 v94, v81 offset:2304
-	ds_load_b32 v95, v81 offset:2432
+	ds_load_b32 v92, v81 offset:4096
+	ds_load_b32 v93, v81 offset:4224
+	ds_load_b32 v94, v81 offset:4352
+	ds_load_b32 v95, v81 offset:4480
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v78
 	ds_load_b128 v[196:199], v78 offset:512
@@ -3427,10 +3323,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v78 offset:5632
 	ds_load_b128 v[248:251], v78 offset:7168
 	ds_load_b128 v[252:255], v78 offset:7680
-	ds_load_b32 v82, v80 offset:2048
-	ds_load_b32 v83, v80 offset:2176
-	ds_load_b32 v84, v80 offset:2304
-	ds_load_b32 v85, v80 offset:2432
+	ds_load_b32 v82, v80 offset:1024
+	ds_load_b32 v83, v80 offset:1152
+	ds_load_b32 v84, v80 offset:1280
+	ds_load_b32 v85, v80 offset:1408
 	ds_load_b128 v[8:11], v74
 	ds_load_b128 v[12:15], v74 offset:512
 	ds_load_b128 v[16:19], v74 offset:1024
@@ -3495,10 +3391,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s33, s97
 	s_barrier_wait 0xffff
 	tensor_load_to_lds s[32:35], s[36:43]
-	ds_load_b32 v92, v81 offset:3072
-	ds_load_b32 v93, v81 offset:3200
-	ds_load_b32 v94, v81 offset:3328
-	ds_load_b32 v95, v81 offset:3456
+	ds_load_b32 v92, v81 offset:6144
+	ds_load_b32 v93, v81 offset:6272
+	ds_load_b32 v94, v81 offset:6400
+	ds_load_b32 v95, v81 offset:6528
 	s_wait_dscnt 0x4
 	ds_load_b128 v[192:195], v79
 	ds_load_b128 v[196:199], v79 offset:512
@@ -3516,10 +3412,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	ds_load_b128 v[244:247], v79 offset:5632
 	ds_load_b128 v[248:251], v79 offset:7168
 	ds_load_b128 v[252:255], v79 offset:7680
-	ds_load_b32 v82, v80 offset:3072
-	ds_load_b32 v83, v80 offset:3200
-	ds_load_b32 v84, v80 offset:3328
-	ds_load_b32 v85, v80 offset:3456
+	ds_load_b32 v82, v80 offset:1536
+	ds_load_b32 v83, v80 offset:1664
+	ds_load_b32 v84, v80 offset:1792
+	ds_load_b32 v85, v80 offset:1920
 	ds_load_b128 v[8:11], v75
 	ds_load_b128 v[12:15], v75 offset:512
 	ds_load_b128 v[16:19], v75 offset:1024
@@ -3643,24 +3539,24 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_branch .Lbranch_000000008e6c
 .Lbranch_00000000ab54:
 	s_mov_b32 s92, 0                                           ; 00000000AB54: BEDC0080
-	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB58: BFA00006 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB58: BFA00006 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_00000000ab5c:
 	s_mov_b32 s92, 1                                           ; 00000000AB5C: BEDC0081
-	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB60: BFA00004 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB60: BFA00004 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_00000000ab64:
 	s_mov_b32 s92, 2                                           ; 00000000AB64: BEDC0082
-	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB68: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB68: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_00000000ab6c:
 	s_mov_b32 s92, 3                                           ; 00000000AB6C: BEDC0083
-	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB70: BFA00000 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9274>
+	s_branch .Lbranch_00000000ab74                                                 ; 00000000AB70: BFA00000 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9274>
 .Lbranch_00000000ab74:
 	s_cmp_eq_u32 s92, 3                                        ; 00000000AB74: BF06835C
-	s_cbranch_scc0 .Lbranch_00000000ab80                                           ; 00000000AB78: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x9280>
+	s_cbranch_scc0 .Lbranch_00000000ab80                                           ; 00000000AB78: BFA10001 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x9280>
 	s_barrier_wait 0xfffd                                      ; 00000000AB7C: BF94FFFD
 .Lbranch_00000000ab80:
 	s_set_vgpr_msb 0
 	s_wait_idle
-	; 128x128 epilogue: drain, convert, stage to fixed output LDS, one 128-row TDM store
+	; 64x256 epilogue: drain, convert, stage four N quarters, then one 64-row TDM store.
 	s_wait_dscnt 0x0
 	s_wait_tensorcnt 0x0
 	s_wait_alu depctr_va_vdst(0)
@@ -3668,9 +3564,9 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_barrier_wait 0xffff
 	s_cmp_eq_u32 s22, 0
 	s_cbranch_scc0 .Lbranch_00000000ad68
-	s_mul_i32 s24, s55, 0x80
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s24, s17, s24
-	s_min_u32 s24, s24, 0x80
+	s_min_u32 s24, s24, 0x40
 	s_mul_i32 s24, s24, s12
 	s_wait_alu depctr_va_vdst(0)
 	v_mul_u32_u24_e32 v4, 0x10000, v0
@@ -3749,31 +3645,31 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_wait_alu depctr_va_vdst(0)
 	s_set_vgpr_msb 0
 	s_wait_alu depctr_va_vdst(0)
-	; stage the 64x64 quadrant into the row-major 128x128 tile at 0x22000, row stride 0x100
+	; Stage one wave's M64xN64 quarter into [0x2a800,0x32800), row stride 0x200.
 	ds_store_b128 v91, v[128:131] offset:0
 	ds_store_b128 v91, v[132:135] offset:32
 	ds_store_b128 v91, v[136:139] offset:64
 	ds_store_b128 v91, v[140:143] offset:96
-	ds_store_b128 v91, v[144:147] offset:4096
-	ds_store_b128 v91, v[148:151] offset:4128
-	ds_store_b128 v91, v[152:155] offset:4160
-	ds_store_b128 v91, v[156:159] offset:4192
-	ds_store_b128 v91, v[160:163] offset:8192
-	ds_store_b128 v91, v[164:167] offset:8224
-	ds_store_b128 v91, v[168:171] offset:8256
-	ds_store_b128 v91, v[172:175] offset:8288
-	ds_store_b128 v91, v[176:179] offset:12288
-	ds_store_b128 v91, v[180:183] offset:12320
-	ds_store_b128 v91, v[184:187] offset:12352
-	ds_store_b128 v91, v[188:191] offset:12384
+	ds_store_b128 v91, v[144:147] offset:8192
+	ds_store_b128 v91, v[148:151] offset:8224
+	ds_store_b128 v91, v[152:155] offset:8256
+	ds_store_b128 v91, v[156:159] offset:8288
+	ds_store_b128 v91, v[160:163] offset:16384
+	ds_store_b128 v91, v[164:167] offset:16416
+	ds_store_b128 v91, v[168:171] offset:16448
+	ds_store_b128 v91, v[172:175] offset:16480
+	ds_store_b128 v91, v[176:179] offset:24576
+	ds_store_b128 v91, v[180:183] offset:24608
+	ds_store_b128 v91, v[184:187] offset:24640
+	ds_store_b128 v91, v[188:191] offset:24672
 	s_wait_dscnt 0x0
 	s_barrier_signal -1
 	s_barrier_wait 0xffff
-	; one 128-row tensor_store_from_lds, issued by logical wave0 only
+	; One 64-row by 0x200-byte tensor_store_from_lds, issued by logical wave0 only.
 	s_cmp_eq_u32 s22, 0
 	s_cbranch_scc0 .Lbranch_00000000b7f0
 	s_mov_b32 s80, 1
-	s_mov_b32 s81, 0x22000
+	s_mov_b32 s81, 0x2a800
 	s_mov_b32 s82, s44
 	s_and_b32 s45, s45, 0x1ffffff
 	s_mov_b32 s83, 0x80000000
@@ -3788,23 +3684,23 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s90, 0
 	s_mov_b32 s91, 0
 	s_bitset0_b32 s84, 20
-	; tensor_dim0 = 0x100 bytes (bits 79:48)
-	s_or_b32 s85, s85, 0x1000000
-	; tensor_dim1 = 128 rows (bits 111:80), clamped to the tile M remainder
-	s_mul_i32 s24, s55, 0x80
+	; tensor_dim0 = 0x200 bytes (bits 79:48)
+	s_or_b32 s85, s85, 0x2000000
+	; tensor_dim1 = 64 rows (bits 111:80), clamped to the tile M remainder
+	s_mul_i32 s24, s55, 0x40
 	s_sub_co_u32 s24, s17, s24
 	s_max_i32 s24, s24, 0
-	s_min_u32 s24, s24, 0x80
+	s_min_u32 s24, s24, 0x40
 	s_lshl_b32 s25, s24, 16
 	s_or_b32 s86, s25, s86
 	s_lshr_b32 s25, s24, 16
 	s_or_b32 s87, s25, s87
-	; tile_dim0 = 0x100 byte-mode elements (bits 127:112)
+	; tile_dim0 = 0x200 byte-mode elements (bits 127:112)
 	s_and_b32 s87, s87, 0xffff
-	s_or_b32 s87, s87, 0x1000000
-	; tile_dim1 = 128 rows (bits 143:128)
+	s_or_b32 s87, s87, 0x2000000
+	; tile_dim1 = 64 rows (bits 143:128)
 	s_and_b32 s88, s88, 0xffff0000
-	s_or_b32 s88, s88, 0x80
+	s_or_b32 s88, s88, 0x40
 	; tensor_dim0_stride = N*2 bytes (bits 207:160)
 	s_mov_b32 s89, s12
 	tensor_store_from_lds s[80:83], s[84:91]
@@ -3820,54 +3716,44 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 .Lclusterwait_task:
 	s_barrier_wait 0xfffd
 	; restore the D pointer to the tile origin for the next persistent task
-	s_mul_i32 s24, 0x80, s54
+	s_mul_i32 s24, 0x100, s54
 	s_lshl_b32 s24, s24, 1
-	s_mul_i32 s25, 0x80, s55
+	s_mul_i32 s25, 0x40, s55
 	s_mul_i32 s25, s25, s12
 	s_add_co_u32 s26, s25, s24
-	s_and_b32 s24, s22, 1
-	s_mul_i32 s24, s24, 0x40
-	s_mul_i32 s24, s24, s12
-	s_lshr_b32 s25, s22, 1
-	s_mul_i32 s25, s25, 0x40
-	s_lshl_b32 s25, s25, 1
-	s_add_co_u32 s24, s25, s24
+	s_mul_i32 s24, s22, 0x40
+	s_lshl_b32 s24, s24, 1
 	s_add_co_u32 s26, s26, s24
 	s_sub_co_u32 s44, s44, s26
 	s_sub_co_ci_u32 s45, s45, 0
 	s_cmp_eq_u32 s60, 1                                        ; 00000000B888: BF06813C
-	s_cbranch_scc1 .Lbranch_00000000ba60                                         ; 00000000B88C: BFA20074 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa160>
+	s_cbranch_scc1 .Lbranch_00000000ba60                                         ; 00000000B88C: BFA20074 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa160>
 	s_set_vgpr_msb 0                                           ; 00000000B890: BF860000
 	s_mov_b32 s54, s68                                         ; 00000000B894: BEB60044
 	s_mov_b32 s55, s69                                         ; 00000000B898: BEB70045
-	s_mul_i32 s24, s55, 0x80                                  ; 00000000B89C: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_mul_i32 s24, s24, s13                                    ; 00000000B8A4: 96180D18
 	s_add_co_u32 s72, s4, s24                                  ; 00000000B8A8: 80481804
 	s_add_co_ci_u32 s73, 0, s5                                 ; 00000000B8AC: 82490580
-	s_mul_i32 s24, s55, 0x80                                  ; 00000000B8B0: 9618FF37 00000100
+	s_mul_i32 s24, s55, 0x40
 	s_mul_i32 s24, s24, s15                                    ; 00000000B8B8: 96180F18
 	s_add_co_u32 s76, s8, s24                                  ; 00000000B8BC: 804C1808
 	s_add_co_ci_u32 s77, 0, s9                                 ; 00000000B8C0: 824D0980
-	s_mul_i32 s24, s54, 0x80                                  ; 00000000B8C4: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_mul_i32 s24, s24, s14                                    ; 00000000B8CC: 96180E18
 	s_add_co_u32 s74, s6, s24                                  ; 00000000B8D0: 804A1806
 	s_add_co_ci_u32 s75, 0, s7                                 ; 00000000B8D4: 824B0780
-	s_mul_i32 s24, s54, 0x80                                  ; 00000000B8D8: 9618FF36 00000100
+	s_mul_i32 s24, s54, 0x100
 	s_mul_i32 s24, s24, s16                                    ; 00000000B8E0: 96181018
 	s_add_co_u32 s78, s10, s24                                 ; 00000000B8E4: 804E180A
 	s_add_co_ci_u32 s79, 0, s11                                ; 00000000B8E8: 824F0B80
-	s_mul_i32 s24, 0x80, s54                                  ; 00000000B8EC: 961836FF 00000100
+	s_mul_i32 s24, 0x100, s54
 	s_lshl_b32 s24, s24, 1                                     ; 00000000B8F4: 84188118
-	s_mul_i32 s25, 0x80, s55                                  ; 00000000B8F8: 961937FF 00000100
+	s_mul_i32 s25, 0x40, s55
 	s_mul_i32 s25, s25, s12                                    ; 00000000B900: 96190C19
 	s_add_co_u32 s26, s25, s24                                 ; 00000000B904: 801A1819
-	s_and_b32 s24, s22, 1                                      ; 00000000B908: 8B188116
-	s_mul_i32 s24, s24, 0x40                                   ; 00000000B90C: 9618FF18 00000080
-	s_mul_i32 s24, s24, s12                                    ; 00000000B914: 96180C18
-	s_lshr_b32 s25, s22, 1                                     ; 00000000B918: 85198116
-	s_mul_i32 s25, s25, 0x40                                   ; 00000000B91C: 9619FF19 00000080
-	s_lshl_b32 s25, s25, 1                                     ; 00000000B924: 84198119
-	s_add_co_u32 s24, s25, s24                                 ; 00000000B928: 80181819
+	s_mul_i32 s24, s22, 0x40
+	s_lshl_b32 s24, s24, 1
 	s_add_co_u32 s26, s26, s24                                 ; 00000000B92C: 801A181A
 	s_add_co_u32 s44, s44, s26                                 ; 00000000B930: 802C1A2C
 	s_add_co_ci_u32 s45, 0, s45                                ; 00000000B934: 822D2D80
@@ -3878,12 +3764,12 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s28, s28, s24                                 ; 00000000B948: 801C181C
 	s_cmp_lt_u32 s28, s29                                      ; 00000000B94C: BF0A1D1C
 	s_cselect_b32 s60, 0, 1                                    ; 00000000B950: 983C8180
-	s_cbranch_scc0 .Lbranch_00000000ba20                                          ; 00000000B954: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa120>
+	s_cbranch_scc0 .Lbranch_00000000ba20                                          ; 00000000B954: BFA10032 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa120>
 	s_mov_b32 s24, s61                                         ; 00000000B958: BE98003D
 	s_sub_co_u32 s25, s24, 1                                   ; 00000000B95C: 80998118
 	s_and_b32 s26, s24, s25                                    ; 00000000B960: 8B1A1918
 	s_cmp_eq_u32 s26, 0                                        ; 00000000B964: BF06801A
-	s_cbranch_scc0 .Lbranch_00000000b98c                                           ; 00000000B968: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa08c>
+	s_cbranch_scc0 .Lbranch_00000000b98c                                           ; 00000000B968: BFA10008 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa08c>
 	s_ctz_i32_b32 s26, s24                                     ; 00000000B96C: BE9A0818
 	s_lshr_b32 s27, s28, s26                                   ; 00000000B970: 851B1A1C
 	s_and_b32 s24, s28, s25                                    ; 00000000B974: 8B18191C
@@ -3891,7 +3777,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s69, s25, s50                                 ; 00000000B97C: 80453219
 	s_mul_i32 s25, s24, s51                                    ; 00000000B980: 96193318
 	s_add_co_u32 s68, s25, s49                                 ; 00000000B984: 80443119
-	s_branch .Lbranch_00000000ba28                                                ; 00000000B988: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa128>
+	s_branch .Lbranch_00000000ba28                                                ; 00000000B988: BFA00027 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa128>
 .Lbranch_00000000b98c:
 	v_cvt_f32_u32_e32 v4, s24                                  ; 00000000B98C: 7E080C18
 	s_sub_co_i32 s26, 0, s24                                   ; 00000000B990: 819A1880
@@ -3924,7 +3810,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_add_co_u32 s69, s25, s50                                 ; 00000000BA10: 80453219
 	s_mul_i32 s25, s24, s51                                    ; 00000000BA14: 96193318
 	s_add_co_u32 s68, s25, s49                                 ; 00000000BA18: 80443119
-	s_branch .Lbranch_00000000ba28                                                 ; 00000000BA1C: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0xa128>
+	s_branch .Lbranch_00000000ba28                                                 ; 00000000BA1C: BFA00002 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0xa128>
 .Lbranch_00000000ba20:
 	s_mov_b32 s68, s54                                         ; 00000000BA20: BEC40036
 	s_mov_b32 s69, s55                                         ; 00000000BA24: BEC50037
@@ -3936,21 +3822,21 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	s_mov_b32 s38, s66                                         ; 00000000BA38: BEA60042
 	s_mov_b32 s39, s67                                         ; 00000000BA3C: BEA70043
 	s_cmp_eq_u32 s22, 0                                        ; 00000000BA40: BF068016
-	s_cbranch_scc1 .Lbranch_000000005060                                       ; 00000000BA44: BFA2E586 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x3760>
+	s_cbranch_scc1 .Lbranch_000000005060                                       ; 00000000BA44: BFA2E586 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x3760>
 	s_cmp_eq_u32 s22, 1                                        ; 00000000BA48: BF068116
-	s_cbranch_scc1 .Lbranch_00000000554c                                       ; 00000000BA4C: BFA2E6BF <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x3c4c>
+	s_cbranch_scc1 .Lbranch_00000000554c                                       ; 00000000BA4C: BFA2E6BF <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x3c4c>
 	s_cmp_eq_u32 s22, 2                                        ; 00000000BA50: BF068216
-	s_cbranch_scc1 .Lbranch_000000005a58                                       ; 00000000BA54: BFA2E800 <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4158>
+	s_cbranch_scc1 .Lbranch_000000005a58                                       ; 00000000BA54: BFA2E800 <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4158>
 	s_cmp_eq_u32 s22, 3                                        ; 00000000BA58: BF068316
-	s_cbranch_scc1 .Lbranch_000000005f48                                       ; 00000000BA5C: BFA2E93A <f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps+0x4648>
+	s_cbranch_scc1 .Lbranch_000000005f48                                       ; 00000000BA5C: BFA2E93A <f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps+0x4648>
 .Lbranch_00000000ba60:
 	s_wait_idle                                                ; 00000000BA60: BF8A0000
 	s_endpgm                                                   ; 00000000BA64: BFB00000
 
 	.section	.rodata,"a",@progbits
 	.p2align	6, 0x0
-	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps
-		.amdhsa_group_segment_fixed_size 172032
+	.amdhsa_kernel f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps
+		.amdhsa_group_segment_fixed_size 206848
 		.amdhsa_private_segment_fixed_size 0
 		.amdhsa_kernarg_size 80
 		.amdhsa_user_sgpr_count 22
@@ -3980,6 +3866,8 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 		.amdhsa_fp16_overflow 0
 		.amdhsa_memory_ordered 1
 		.amdhsa_forward_progress 1
+		; Source-only conservative estimate inherited from the larger pre-transform text.
+		; Recompute ceil(final .text bytes / 128) from the gfx1250 object before release.
 		.amdhsa_inst_pref_size 176
 		.amdhsa_round_robin_scheduling 0
 		.amdhsa_exception_fp_ieee_invalid_op 0
@@ -3992,18 +3880,18 @@ f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps:
 	.end_amdhsa_kernel
 	.text
 .Lfunc_end0:
-	.size	f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps
+	.size	f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps, .Lfunc_end0-f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps
 
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.num_vgpr, 384
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.num_agpr, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.numbered_sgpr, 104
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.num_named_barrier, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.private_seg_size, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.uses_vcc, 1
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.uses_flat_scratch, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.has_dyn_sized_stack, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.has_recursion, 0
-	.set f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.has_indirect_call, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.num_vgpr, 384
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.num_agpr, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.numbered_sgpr, 104
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.num_named_barrier, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.private_seg_size, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.uses_vcc, 1
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.uses_flat_scratch, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.has_dyn_sized_stack, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.has_recursion, 0
+	.set f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.has_indirect_call, 0
 	.p2alignl 7, 3214868480
 	.fill 96, 4, 3214868480
 	.section	.AMDGPU.gpr_maximums,"",@progbits
@@ -4072,14 +3960,14 @@ amdhsa.kernels:
       - .offset:         76
         .size:           4
         .value_kind:     by_value
-    .group_segment_fixed_size: 172032
+    .group_segment_fixed_size: 206848
     .kernarg_segment_align: 8
     .kernarg_segment_size: 80
     .max_flat_workgroup_size: 128
-    .name:           f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps
+    .name:           f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps
     .private_segment_fixed_size: 0
     .sgpr_count:     106
-    .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps.kd
+    .symbol:         f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.kd
     .uniform_work_group_size: 1
     .uses_dynamic_stack: false
     .vgpr_count:     384
