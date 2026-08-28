@@ -3,7 +3,9 @@ r"""Compile, validate, and benchmark batched gfx1250 MXFP4 GEMM assembly.
 
 The batched kernel uses one physical grid-Z plane per independent matrix while
 retaining the original 64x256 workgroup tile, 4x1 cluster, and persistent X/Y
-task traversal in every plane.  Inputs are contiguous and batch-major:
+task traversal in every plane.  It launches one physical cluster per logical
+task up to 64; small non-power-of-two grids encode a separate power-of-two
+recurrence stride.  Inputs are contiguous and batch-major:
 
     A[batch,M,K/2], B[batch,N,K/2], sA[batch,M,K/32],
     sB[batch,N,K/32], C[batch,M,N]
@@ -44,6 +46,8 @@ BATCH_KERNEL_SYMBOL = (
 LEGACY_KERNEL_SYMBOL = single.KERNEL_SYMBOL_64X256
 # HIP's maximum grid-Z dimension is 65535 workgroups.
 MAX_BATCH = (1 << 16) - 1
+MAX_PERSISTENT_CLUSTERS = 64
+MAX_PERSISTENT_CLUSTER_GRID = (16, 4)
 UINT64_MAX = (1 << 64) - 1
 BATCH_KERNARG_SIZE = 120
 BATCH_KERNARG_LAYOUT = (
@@ -75,6 +79,10 @@ BATCH_SUMMARY_COLUMNS = (
     "seed",
     "dtype",
     "gfx",
+    "logical cluster tasks/plane",
+    "physical clusters/plane",
+    "physical WGs/plane",
+    "encoded recurrence stride/plane",
     "ref hash128",
     "gemm_a4w4 us",
     "gemm_a4w4 TFLOPS",
@@ -177,13 +185,43 @@ def make_contiguous_batch_strides(
     return values
 
 
+def _batch_scheduler_layout(
+    logical_tasks: int,
+) -> tuple[int, int, tuple[int, int], int]:
+    """Return physical cluster X/Y, encoded log2 X/Y, and recurrence stride."""
+
+    if logical_tasks < 1:
+        raise single.GemmIsaRunnerError(
+            f"logical cluster-task count must be positive, got {logical_tasks}"
+        )
+    if logical_tasks <= MAX_PERSISTENT_CLUSTERS:
+        persistent_stride = 1 << (logical_tasks - 1).bit_length()
+        return (
+            logical_tasks,
+            1,
+            (persistent_stride.bit_length() - 1, 0),
+            persistent_stride,
+        )
+
+    cluster_grid_x, cluster_grid_y = MAX_PERSISTENT_CLUSTER_GRID
+    return (
+        cluster_grid_x,
+        cluster_grid_y,
+        (
+            cluster_grid_x.bit_length() - 1,
+            cluster_grid_y.bit_length() - 1,
+        ),
+        MAX_PERSISTENT_CLUSTERS,
+    )
+
+
 def make_batched_launch_geometry(
     m: int,
     n: int,
     k: int,
     batch: int,
 ) -> single.LaunchGeometry:
-    """Replicate the unchanged persistent X/Y launch in grid Z."""
+    """Build an adaptive persistent X/Y launch and replicate it in grid Z."""
 
     batch = _validate_batch(batch)
     base = single.make_launch_geometry(m, n, k, profile=BATCH_PROFILE)
@@ -198,7 +236,44 @@ def make_batched_launch_geometry(
         ("ScaleB_stride0", k // single.MXFP4_SCALE_BLOCK),
     ):
         single._checked_unsigned(name, value, 32)
-    return replace(base, grid=(base.grid[0], base.grid[1], batch))
+
+    (
+        cluster_grid_x,
+        cluster_grid_y,
+        log2_grid,
+        persistent_stride,
+    ) = _batch_scheduler_layout(base.logical_cluster_tasks)
+    physical_clusters = cluster_grid_x * cluster_grid_y
+    if physical_clusters != min(
+        base.logical_cluster_tasks,
+        MAX_PERSISTENT_CLUSTERS,
+    ):
+        raise single.GemmIsaRunnerError(
+            f"adaptive physical cluster count {physical_clusters} does not "
+            f"equal min(T_XY,64) for T_XY={base.logical_cluster_tasks}"
+        )
+    if persistent_stride < physical_clusters:
+        raise single.GemmIsaRunnerError(
+            f"adaptive persistent stride {persistent_stride} is smaller than "
+            f"physical seed count {physical_clusters}"
+        )
+    if persistent_stride != 1 << sum(log2_grid):
+        raise single.GemmIsaRunnerError(
+            f"adaptive persistent stride {persistent_stride} does not match "
+            f"encoded log2 grid {log2_grid}"
+        )
+    cluster_x, cluster_y, _cluster_z = BATCH_PROFILE.cluster
+    return replace(
+        base,
+        grid=(
+            cluster_grid_x * cluster_x,
+            cluster_grid_y * cluster_y,
+            batch,
+        ),
+        cluster_grid=(cluster_grid_x, cluster_grid_y),
+        log2_grid=log2_grid,
+        persistent_stride=persistent_stride,
+    )
 
 
 def pack_batched_mxfp4_kernargs(
@@ -229,6 +304,42 @@ def pack_batched_mxfp4_kernargs(
         raise single.GemmIsaRunnerError(
             f"launch block/cluster {geometry.block}/{geometry.cluster} does "
             f"not match {BATCH_PROFILE.block}/{BATCH_PROFILE.cluster}"
+        )
+    expected_logical_grid = (
+        n // (BATCH_PROFILE.wg_tile[1] * BATCH_PROFILE.cluster[0]),
+        m // (BATCH_PROFILE.wg_tile[0] * BATCH_PROFILE.cluster[1]),
+    )
+    expected_logical_tasks = (
+        expected_logical_grid[0] * expected_logical_grid[1]
+    )
+    (
+        expected_cluster_grid_x,
+        expected_cluster_grid_y,
+        expected_log2_grid,
+        expected_stride,
+    ) = _batch_scheduler_layout(expected_logical_tasks)
+    expected_cluster_grid = (
+        expected_cluster_grid_x,
+        expected_cluster_grid_y,
+    )
+    expected_grid_xy = (
+        expected_cluster_grid_x * BATCH_PROFILE.cluster[0],
+        expected_cluster_grid_y * BATCH_PROFILE.cluster[1],
+    )
+    if (
+        geometry.logical_cluster_grid != expected_logical_grid
+        or geometry.logical_cluster_tasks != expected_logical_tasks
+        or geometry.cluster_grid != expected_cluster_grid
+        or geometry.grid[:2] != expected_grid_xy
+        or geometry.log2_grid != expected_log2_grid
+        or geometry.persistent_stride != expected_stride
+    ):
+        raise single.GemmIsaRunnerError(
+            "launch geometry does not match the exact batch scheduler layout: "
+            f"got {geometry}, expected logical grid "
+            f"{expected_logical_grid}, physical cluster grid "
+            f"{expected_cluster_grid}, WG grid XY {expected_grid_xy}, "
+            f"log2 {expected_log2_grid}, stride {expected_stride}"
         )
 
     stride_values = {
@@ -463,6 +574,21 @@ def validate_batch_assembly_contract_from_text(source: str) -> None:
             f"{first_memory_access}"
         )
 
+    scheduler_instruction_counts = {
+        "s_lshl_b32 s24, s24, s20": 1,
+        "s_add_co_u32 s28, s24, ttmp9": 1,
+        "s_add_co_i32 s24, s20, s21": 2,
+        "s_lshl_b32 s24, 1, s24": 2,
+        "s_add_co_u32 s28, s28, s24": 2,
+    }
+    for instruction, expected_count in scheduler_instruction_counts.items():
+        actual_count = instruction_lines.count(instruction)
+        if actual_count != expected_count:
+            raise single.GemmIsaRunnerError(
+                f"{symbol}: adaptive scheduler instruction {instruction!r} "
+                f"occurs {actual_count} times, expected {expected_count}"
+            )
+
 
 def select_kernel_mode(
     symbol: str,
@@ -555,6 +681,14 @@ def _assembly_contract_fixture() -> str:
 {prologue}
     s_mov_b32 s44, s2
     global_prefetch_b8 v4, s[24:25]
+    s_lshl_b32 s24, s24, s20
+    s_add_co_u32 s28, s24, ttmp9
+    s_add_co_i32 s24, s20, s21
+    s_lshl_b32 s24, 1, s24
+    s_add_co_u32 s28, s28, s24
+    s_add_co_i32 s24, s20, s21
+    s_lshl_b32 s24, 1, s24
+    s_add_co_u32 s28, s28, s24
     s_endpgm
 .amdhsa_kernel {BATCH_KERNEL_SYMBOL}
     .amdhsa_group_segment_fixed_size 206848
@@ -675,26 +809,91 @@ def run_static_contract_checks(
     ):
         raise AssertionError("batched profile changed cluster/resource contracts")
 
-    geometry_one = make_batched_launch_geometry(64, 1024, 256, 1)
     legacy_geometry = single.make_launch_geometry(
         64,
         1024,
         256,
         profile=single.KERNEL_PROFILE_64X256,
     )
-    if geometry_one != legacy_geometry:
-        raise AssertionError(
-            f"batch=1 geometry {geometry_one} differs from legacy "
-            f"{legacy_geometry}"
-        )
-    geometry_seven = make_batched_launch_geometry(64, 1024, 256, 7)
     if (
-        geometry_seven.grid != (64, 4, 7)
-        or geometry_seven.block != (128, 1, 1)
-        or geometry_seven.cluster != (4, 1, 1)
-        or geometry_seven.persistent_stride != 64
+        legacy_geometry.grid != (64, 4, 1)
+        or legacy_geometry.cluster_grid != (16, 4)
+        or legacy_geometry.log2_grid != (4, 2)
+        or legacy_geometry.persistent_stride != 64
     ):
-        raise AssertionError(f"unexpected batch geometry: {geometry_seven}")
+        raise AssertionError(
+            f"legacy fixed geometry changed unexpectedly: {legacy_geometry}"
+        )
+
+    test_task_counts = (1, 2, 3, 6, 8, 9, 16, 17, 32, 33, 63, 64, 65, 576)
+    geometry_by_tasks: dict[int, single.LaunchGeometry] = {}
+    for logical_tasks in test_task_counts:
+        geometry = make_batched_launch_geometry(
+            64,
+            logical_tasks * 1024,
+            256,
+            7,
+        )
+        geometry_by_tasks[logical_tasks] = geometry
+        expected_clusters = min(logical_tasks, MAX_PERSISTENT_CLUSTERS)
+        if logical_tasks <= MAX_PERSISTENT_CLUSTERS:
+            expected_grid_x = logical_tasks
+            expected_grid_y = 1
+            expected_stride = 1 << (logical_tasks - 1).bit_length()
+            expected_log2 = (expected_stride.bit_length() - 1, 0)
+        else:
+            expected_grid_x, expected_grid_y = (
+                MAX_PERSISTENT_CLUSTER_GRID
+            )
+            expected_stride = MAX_PERSISTENT_CLUSTERS
+            expected_log2 = (
+                expected_grid_x.bit_length() - 1,
+                expected_grid_y.bit_length() - 1,
+            )
+        expected_grid = (expected_grid_x * 4, expected_grid_y, 7)
+        if (
+            geometry.grid != expected_grid
+            or geometry.block != (128, 1, 1)
+            or geometry.cluster != (4, 1, 1)
+            or geometry.cluster_grid != (expected_grid_x, expected_grid_y)
+            or geometry.log2_grid != expected_log2
+            or geometry.logical_cluster_tasks != logical_tasks
+            or geometry.persistent_stride != expected_stride
+        ):
+            raise AssertionError(
+                f"unexpected adaptive geometry for T_XY={logical_tasks}: "
+                f"{geometry}"
+            )
+
+        initial_tasks = [
+            cluster_x + (cluster_y << geometry.log2_grid[0])
+            for cluster_y in range(geometry.cluster_grid[1])
+            for cluster_x in range(geometry.cluster_grid[0])
+        ]
+        if initial_tasks != list(range(expected_clusters)):
+            raise AssertionError(
+                f"T_XY={logical_tasks} initial p values are not [0,P): "
+                f"{initial_tasks}"
+            )
+        visited = [
+            task
+            for initial_task in initial_tasks
+            for task in range(
+                initial_task,
+                logical_tasks,
+                geometry.persistent_stride,
+            )
+        ]
+        if len(visited) != logical_tasks or sorted(visited) != list(
+            range(logical_tasks)
+        ):
+            raise AssertionError(
+                f"T_XY={logical_tasks} adaptive recurrence has duplicates "
+                f"or misses: {visited}"
+            )
+
+    geometry_one = make_batched_launch_geometry(64, 1024, 256, 1)
+    geometry_seven = geometry_by_tasks[1]
 
     attributes, config = single._make_hip_launch_config(
         geometry_seven,
@@ -702,10 +901,67 @@ def run_static_contract_checks(
     )
     cluster = attributes[0].value.clusterDim
     if (
-        (config.gridDimX, config.gridDimY, config.gridDimZ) != (64, 4, 7)
+        (config.gridDimX, config.gridDimY, config.gridDimZ) != (4, 1, 7)
         or (cluster.x, cluster.y, cluster.z) != (4, 1, 1)
     ):
         raise AssertionError("HIP launch config did not preserve batch grid Z")
+
+    observed_geometry = make_batched_launch_geometry(64, 6144, 7168, 96)
+    if (
+        observed_geometry.logical_cluster_tasks != 6
+        or observed_geometry.cluster_grid != (6, 1)
+        or observed_geometry.grid != (24, 1, 96)
+        or observed_geometry.log2_grid != (3, 0)
+        or observed_geometry.persistent_stride != 8
+    ):
+        raise AssertionError(
+            f"unexpected M64/N6144 adaptive geometry: {observed_geometry}"
+        )
+    observed_attributes, observed_config = single._make_hip_launch_config(
+        observed_geometry,
+        ctypes.c_void_p(0x1234),
+    )
+    observed_cluster = observed_attributes[0].value.clusterDim
+    if (
+        (
+            observed_config.gridDimX,
+            observed_config.gridDimY,
+            observed_config.gridDimZ,
+        )
+        != (24, 1, 96)
+        or (
+            observed_cluster.x,
+            observed_cluster.y,
+            observed_cluster.z,
+        )
+        != (4, 1, 1)
+    ):
+        raise AssertionError(
+            "observed HIP launch config did not preserve exact grid/batch Z"
+        )
+    observed_strides = make_contiguous_batch_strides(
+        64,
+        6144,
+        7168,
+        96,
+    )
+    observed_payload = pack_batched_mxfp4_kernargs(
+        ptr_d=1,
+        ptr_a=2,
+        ptr_b=3,
+        ptr_scale_a=4,
+        ptr_scale_b=5,
+        m=64,
+        n=6144,
+        k=7168,
+        batch=96,
+        batch_strides=observed_strides,
+        geometry=observed_geometry,
+    )
+    if struct.unpack_from("<II", observed_payload, 72) != (3, 0):
+        raise AssertionError(
+            "observed batch ABI did not encode stride-8 log2 grid (3,0)"
+        )
 
     strides = make_contiguous_batch_strides(64, 1024, 256, 1)
     batch_payload = pack_batched_mxfp4_kernargs(
@@ -733,10 +989,13 @@ def run_static_contract_checks(
         geometry=legacy_geometry,
         profile=single.KERNEL_PROFILE_64X256,
     )
-    if len(batch_payload) != 120 or batch_payload[:80] != legacy_payload:
+    if len(batch_payload) != 120 or batch_payload[:72] != legacy_payload[:72]:
         raise AssertionError(
-            "batch ABI does not preserve the legacy 80-byte prefix"
+            "batch ABI does not preserve legacy fields before adaptive log2 "
+            "grid values"
         )
+    if struct.unpack_from("<II", batch_payload, 72) != geometry_one.log2_grid:
+        raise AssertionError("batch ABI did not pack adaptive log2 grid X/Y")
     expected_strides = {
         "batch_stride_D": strides.d,
         "batch_stride_A": strides.a,
@@ -1155,6 +1414,7 @@ def _print_batch_contract(
     per_plane_clusters = (
         geometry.cluster_grid[0] * geometry.cluster_grid[1]
     )
+    per_plane_wgs = geometry.grid[0] * geometry.grid[1]
     print(
         f"[gemm_batch_isa_runner] selected profile: {BATCH_PROFILE.name}; "
         f"WG tile={BATCH_PROFILE.wg_tile}; wave tile="
@@ -1162,17 +1422,19 @@ def _print_batch_contract(
     )
     print(
         f"[gemm_batch_isa_runner] logical WG grid="
-        f"{(*geometry.tiles, batch)}; tasks="
+        f"{(*geometry.tiles, batch)}; WG tasks total="
         f"{geometry.logical_wg_tasks * batch}; logical cluster grid="
-        f"{(*geometry.logical_cluster_grid, batch)}; cluster tasks="
+        f"{(*geometry.logical_cluster_grid, batch)}; cluster tasks/plane="
+        f"{geometry.logical_cluster_tasks}; cluster tasks total="
         f"{geometry.logical_cluster_tasks * batch}"
     )
     print(
         f"[gemm_batch_isa_runner] physical launch={geometry.grid}; "
         f"block={geometry.block}; cluster={geometry.cluster}; physical "
-        f"cluster grid={(*geometry.cluster_grid, batch)}; clusters="
-        f"{per_plane_clusters * batch}; persistent WGs/plane="
-        f"{BATCH_PROFILE.persistent_tg}; persistent stride/plane="
+        f"cluster grid={(*geometry.cluster_grid, batch)}; clusters/plane="
+        f"{per_plane_clusters}; clusters total={per_plane_clusters * batch}; "
+        f"physical WGs/plane={per_plane_wgs}; physical WGs total="
+        f"{per_plane_wgs * batch}; encoded recurrence stride/plane="
         f"{geometry.persistent_stride}; log2 X/Y grid={geometry.log2_grid}"
     )
     print(
@@ -1306,8 +1568,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_static_contract_checks(source)
             print(
                 "[gemm_batch_isa_runner] self-test passed: batch ABI, "
-                "batch=1 compatibility, geometry, overflow gates, HIP launch "
-                "config, and repository ISA contract"
+                "batch=1 compatibility, adaptive geometry/task coverage, "
+                "overflow gates, HIP launch config, and repository ISA "
+                "contract"
             )
             return 0
 
@@ -1407,6 +1670,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     geometry,
                 )
 
+            row["logical cluster tasks/plane"] = (
+                geometry.logical_cluster_tasks
+            )
+            row["physical clusters/plane"] = (
+                geometry.cluster_grid[0] * geometry.cluster_grid[1]
+            )
+            row["physical WGs/plane"] = geometry.grid[0] * geometry.grid[1]
+            row["encoded recurrence stride/plane"] = (
+                geometry.persistent_stride
+            )
             single._print_cuda_event_timing(event_timing)
             _print_validations(validations)
             _print_summary(row, symbol=symbol, profile=profile)

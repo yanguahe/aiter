@@ -17,8 +17,13 @@
 set -x
 set -euo pipefail
 
+# accept-new avoids the first-connection prompt while still rejecting a changed
+# host key, unlike StrictHostKeyChecking=no.
 # export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i ~/.ssh/id_rsa.hyg -o IdentitiesOnly=yes}"
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i /data/yanguahe/code/id_rsa.hyg -o IdentitiesOnly=yes}"
+if [[ "$GIT_SSH_COMMAND" != *StrictHostKeyChecking=* ]]; then
+    export GIT_SSH_COMMAND="$GIT_SSH_COMMAND -o StrictHostKeyChecking=accept-new"
+fi
 # export DOCKER_IMAGE="${DOCKER_IMAGE:-rocm/pytorch:rocm7.1_ubuntu24.04_py3.12_pytorch_release_2.8.0}"
 export DOCKER_IMAGE="${DOCKER_IMAGE:-rocm/fw-bringup:gfx1250-atom-dev-team-20260626}"
 # export DOCKER_IMAGE="${DOCKER_IMAGE:-rocm/fw-bringup:satya_rocprofv3_2026_06_01}"
