@@ -10,13 +10,13 @@
   - [1.1 Four Waves in a 1x4 N Strip](#section-1-1-wave-output-strip)
   - [1.2 Four-Slot LDS Ring](#section-1-2-lds-ring)
   - [1.3 Final Kernel Contract](#section-1-3-final-kernel-contract)
-- [2. Geometry and Batch-Z Persistent Scheduling](#section-2-cluster-grid)
-  - [2.1 Wave Strip versus Workgroup Cluster](#section-2-1-wave-vs-cluster)
-  - [2.2 Logical X/Y Space and Shape Contract](#section-2-2-logical-grid)
-  - [2.3 Physical Persistent X/Y Mapping](#section-2-3-persistent-launch)
-  - [2.4 Batch-Z Planes and Base Pointers](#section-2-4-batch-z-pointers)
-  - [2.5 Synchronization, Isolation, and Batch=1](#section-2-5-isolation-compatibility)
-  - [2.6 Launch Examples](#section-2-6-launch-examples)
+- [2. 几何结构与 Batch-Z 持久化调度](#section-2-cluster-grid)
+  - [2.1 wave 条带与 workgroup cluster 的区别](#section-2-1-wave-vs-cluster)
+  - [2.2 逻辑 X/Y 任务空间与形状约束](#section-2-2-logical-grid)
+  - [2.3 物理持久化 X/Y 映射](#section-2-3-persistent-launch)
+  - [2.4 Batch-Z 平面与基址指针](#section-2-4-batch-z-pointers)
+  - [2.5 同步、隔离与 batch=1 兼容](#section-2-5-isolation-compatibility)
+  - [2.6 启动实例](#section-2-6-launch-examples)
 - [3. End-to-End Software Pipeline](#section-3-software-pipeline)
   - [3.1 wave0/2: `B-current -> A-current -> A-next -> B-next`](#section-3-1-wave02-flow)
   - [3.2 wave1/3: `A-current -> B-current -> B-next -> A-next`](#section-3-2-wave13-flow)
@@ -185,355 +185,415 @@ evidence only for the 64-row-height idiom.
 
 <a id="section-2-cluster-grid"></a>
 
-## 2. Geometry and Batch-Z Persistent Scheduling
+## 2. 几何结构与 Batch-Z 持久化调度
 
-This chapter describes the implemented `_batch_ps` ISA and
-`gemm_batch_isa_runner.py`, rather than a launch candidate. The batch kernel
-keeps the original non-batch kernel's logical X/Y cluster-task traversal and
-adds an independent physical grid-Z plane for each matrix. Its only
-batch-addressing change is a one-time five-pointer adjustment before the
-original descriptor, pipeline, epilogue, and persistent-restart path.
+本章描述的是**已经实现**的 `_batch_ps` ISA
+(`f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps.s`)与
+`gemm_batch_isa_runner.py`,不是待选方案。本章中的行号 `Lxxxx` 均指该 `.s`
+文件的行号。
+
+**一句话总结.** batch 版本原封不动地保留了非 batch 版本在 X/Y 平面上的
+cluster 持久化遍历,只是在物理 grid 的 Z 方向为每个矩阵多铺一层平面。整个
+batch 化改动只有 kernel 入口处一次性的"五个基址指针各加一个偏移";之后的
+描述符构造、K 流水、epilogue、持久化重启全部沿用原有指令流。
+
+**本章速读.**
+
+| 想知道的事 | 答案 | 小节 |
+| --- | --- | --- |
+| kernel 名字里的 `1x4` 指什么 | 一个 WG 内 4 个 wave 沿 N 排开,与 cluster 形状无关 | 2.1 |
+| 一个 cluster 产出多大输出 | `M64 x N1024`(4 个 WG,每个 `M64 x N256`) | 2.1 |
+| 一共有多少个调度任务 | `T_XY = (M/64) * (N/1024)`,每个 Z 平面各有一份 | 2.2 |
+| 实际启动多少个 cluster | `min(T_XY, 64)` 个,每个 cluster 循环领任务 | 2.3 |
+| batch 号从哪里来 | 物理 grid 的 Z 坐标,即 `TTMP7[31:16]` | 2.4 |
+| 不同 batch 之间会互相等待吗 | 不会,所有同步都封闭在单个 cluster 内部 | 2.5 |
+
+**全章符号.**
+
+```text
+M, N, K    矩阵维度
+W_M, W_N   逻辑 WG 网格      = (M/64, N/256)
+C_M, C_N   逻辑 cluster 网格 = (M/64, N/1024)
+T_XY       单个 Z 平面内的 cluster 任务总数 = C_M * C_N
+p          一个物理 cluster 领到的首个任务号
+S          持久化递推步长,由 ABI 编码,恒为 2 的幂
+b          batch 号,等于物理 grid 的 Z 坐标
+```
 
 <a id="section-2-1-wave-vs-cluster"></a>
 
-### 2.1 Wave Strip versus Workgroup Cluster
+### 2.1 wave 条带与 workgroup cluster 的区别
 
-The `1x4` in the kernel name is the output-tile distribution of four waves
-*inside one workgroup*. It is not the workgroup-cluster geometry. The two
-levels happen to both have a four-wide N dimension, but they are distinct
-levels of the hardware hierarchy:
+kernel 名字里的 `1x4` 描述的是**一个 workgroup 内部**四个 wave 的输出分工,
+不是 workgroup cluster 的形状。两层恰好在 N 方向上都是 4,但它们是硬件层级
+里不同的两层,必须分开看:
 
-| Level | Implemented distribution or dimensions | Output covered |
+| 层级 | 实现的形状 | 覆盖的输出 |
 | --- | --- | --- |
-| One wave | one wave32, one `64x64` output tile | `M64xN64` |
-| One WG | four waves arranged `(M,N)=(1,4)`; HIP block `(128,1,1)` | `M64xN256` |
-| One workgroup cluster | HIP `clusterDim=(x=N,y=M,z)=(4,1,1)`; four WGs | `M64xN1024` in one Z plane |
+| 一个 wave | 一个 wave32,一块 `64x64` 输出 tile | `M64xN64` |
+| 一个 WG | 4 个 wave,排布 `(M,N)=(1,4)`;HIP block `(128,1,1)` | `M64xN256` |
+| 一个 workgroup cluster | HIP `clusterDim=(x=N,y=M,z)=(4,1,1)`;4 个 WG | 单个 Z 平面内的 `M64xN1024` |
 
-Thus one cluster contains four WGs and 16 waves. Within each WG, wave `w`
-owns WG-relative N `[64*w,64*w+63]`. Across the cluster, local WG `wg_x`
-owns a different `N256` tile. The complete output origin is:
+所以一个 cluster = 4 个 WG = 16 个 wave:
+
+```text
+一个 cluster task 覆盖 M64 x N1024:
+
+  N 方向 ------------------------------------------------------->
+  +----------------+----------------+----------------+----------------+
+  | WG wg_x=0      | WG wg_x=1      | WG wg_x=2      | WG wg_x=3      |
+  | N[0:255]       | N[256:511]     | N[512:767]     | N[768:1023]    |
+  | w0 w1 w2 w3    | w0 w1 w2 w3    | w0 w1 w2 w3    | w0 w1 w2 w3    |
+  +----------------+----------------+----------------+----------------+
+  每个 w 是一个 wave,占 N64;四个 wave 的 M 起点都是 0(M 方向只有 64 行)
+```
+
+WG 内部,wave `w` 拥有 WG 相对 N 区间 `[64*w, 64*w+63]`;cluster 内部,
+`wg_x` 不同的 WG 拥有不同的 `N256` tile。完整的输出原点是:
 
 ```text
 Mbase = 64 * Mtile
 Nbase = 256 * Ntile + 64 * wave_id
 ```
 
-**Documented hardware facts.** CDNA5 defines the hierarchy as
-`Grid -> Cluster -> Workgroup -> Wave -> Work-item`; a cluster's WGs are
-scheduled on one shader engine and may use cluster barriers and multicast
-loads (CDNA5 ISA Sections 2.3-2.3.1, manual pages 10-11, local text
-L751-L815). The MI400 Shader Programming Guide independently gives the same
-hierarchy and TTMP6/TTMP7/TTMP9 cluster-state layout (Sections 2.3-2.3.1,
-manual pages 24-25, local text L1699-L1766). The extended compute AQL packet
-also distinguishes a 3-D grid count in clusters from a 3-D cluster size in
-WGs (`CLUSTER_COUNT_*` versus `CLUSTER_SIZE_*`; packet reference page 12,
-local text L599-L649). The workgroup-cluster scheduling corpus likewise
-states that a grid may be 3-D in clusters, a cluster may be 3-D in WGs, and
-partial clusters are not supported (Workgroup Clusters Scheduling Section 4,
-page 4, local text L277-L304).
+**硬件文档事实.** CDNA5 定义的层级是
+`Grid -> Cluster -> Workgroup -> Wave -> Work-item`;一个 cluster 的所有 WG
+调度在同一个 shader engine 上,可以使用 cluster barrier 和 multicast load
+(CDNA5 ISA 2.3-2.3.1 节,手册第 10-11 页,本地文本 L751-L815)。MI400
+Shader Programming Guide 独立给出了同样的层级以及 TTMP6/TTMP7/TTMP9 的
+cluster 状态布局(2.3-2.3.1 节,手册第 24-25 页,本地文本 L1699-L1766)。
+扩展 compute AQL packet 也区分了"以 cluster 为单位的三维 grid 计数"和
+"以 WG 为单位的三维 cluster 尺寸"(`CLUSTER_COUNT_*` 对 `CLUSTER_SIZE_*`;
+packet reference 第 12 页,本地文本 L599-L649)。workgroup-cluster 调度资料
+同样指出:grid 在 cluster 意义下可以是三维、cluster 在 WG 意义下可以是三维,
+且**不支持残缺 cluster**(Workgroup Clusters Scheduling 第 4 节,第 4 页,
+本地文本 L277-L304)。
 
-**Implementation deduction.** The runner and ISA assign cluster X to N and
-cluster Y to M. Therefore the implemented cluster footprint is
-`(1*64)x(4*256) = M64xN1024`. Cluster Z is one WG deep and has no output-tile
-extent; software uses the cluster-grid Z coordinate as a batch selector.
+**ISA 证据.** kernel 入口没有把 `4` 写死,而是直接从 TTMP 读硬件真值:
+
+| ISA 指令(行号) | 取到的位域 | 含义 |
+| --- | --- | --- |
+| `s_bfe_u32 s22, ttmp8, 0x50019`(L58/L79) | `ttmp8[29:25]` | `wave_id`,WG 内 wave 号 `0..3` |
+| `s_bfe_u32 s49, ttmp6, 0x40000`(L83) | `ttmp6[3:0]` | `wg_x`,cluster 内 WG 的 X 号 `0..3` |
+| `s_bfe_u32 s50, ttmp6, 0x40004`(L82) | `ttmp6[7:4]` | `wg_y`,本设计恒为 `0` |
+| `s_bfe_u32 s51, ttmp6, 0x4000c` 再 `+1`(L81/L85) | `ttmp6[15:12]+1` | `nwg_x = clusterDim.x = 4` |
+| `s_bfe_u32 s52, ttmp6, 0x40010` 再 `+1`(L80/L84) | `ttmp6[19:16]+1` | `nwg_y = clusterDim.y = 1` |
+
+这些位域含义与上述硬件文档一致(TTMP8 的 `waveIDinGroup[4:0]` 见 CDNA5 ISA
+本地文本 L2146-L2152)。2.2 会用到这一点:`C_N` 的除数 `1024` 不是常量,而是
+由读回来的 `nwg_x` 现算出来的。
+
+**实现推断.** runner 和 ISA 把 cluster X 分配给 N、cluster Y 分配给 M,所以
+实现出来的 cluster 输出足迹是 `(1*64)x(4*256) = M64xN1024`。cluster Z 只有
+一层 WG 深,不承担任何输出范围;软件把 cluster 网格的 Z 坐标当作 batch
+选择器使用。
 
 <a id="section-2-2-logical-grid"></a>
 
-### 2.2 Logical X/Y Space and Shape Contract
+### 2.2 逻辑 X/Y 任务空间与形状约束
 
-Let `W_N,W_M` be the original logical WG counts and `C_N,C_M` the logical
-cluster-task counts in X/Y:
+逻辑任务空间分两步切出来:
 
 ```text
-W_N = N / 256
-W_M = M / 64
+第一步:按 WG tile 切分输出
+  W_N = N / 256                              # N 方向的 WG 个数
+  W_M = M / 64                               # M 方向的 WG 个数
 
-C_N = W_N / clusterDim.x = N / (256*4) = N / 1024
-C_M = W_M / clusterDim.y = M / (64*1)  = M / 64
+第二步:沿 N 每 4 个 WG 打包成一个 cluster task
+  C_N = W_N / clusterDim.x = N / (256*4) = N / 1024
+  C_M = W_M / clusterDim.y = M / (64*1)  = M / 64
 
-T_XY = C_N * C_M                       # cluster tasks in one scheduler plane
+  T_XY = C_N * C_M                           # 一个调度平面内的 cluster 任务数
 ```
 
-The non-batch kernel's logical WG grid is `(W_N,W_M,1)` and its logical
-cluster grid is `(C_N,C_M,1)`. The batch runner reports
-`(W_N,W_M,batch)` and `(C_N,C_M,batch)`, but this appended logical Z count
-does not change `T_XY`: each Z plane has its own `T_XY`-task counter. N is
-the fastest coordinate in the flattened cluster-task space.
+非 batch kernel 的逻辑 WG 网格是 `(W_N,W_M,1)`,逻辑 cluster 网格是
+`(C_N,C_M,1)`。batch runner 报告的是 `(W_N,W_M,batch)` 与 `(C_N,C_M,batch)`,
+但追加的这个逻辑 Z 计数**不会改变 `T_XY`**:每个 Z 平面各自拥有一份 `T_XY`
+任务计数。在展平后的 cluster 任务编号里,N 是变化最快的维度。
 
-The runner enforces the following exact launch domain:
+**ISA 证据.** `T_XY` 由 kernel 自己算,除数来自 2.1 从 TTMP6 读到的
+`nwg_x/nwg_y`:
 
-| Quantity | Implemented constraint | Consequence |
+```text
+L92-L97  : sh   = ctz(nwg_x) + 8            # nwg_x=4  -> 1<<sh = 1024
+           C_N  = (N + (1<<sh) - 1) >> sh   # s61
+L98-L103 : sh   = ctz(nwg_y) + 6            # nwg_y=1  -> 1<<sh = 64
+           C_M  = (M + (1<<sh) - 1) >> sh
+L104     : T_XY = C_M * C_N                 # s29
+```
+
+其中 `+8` 是 `log2(256)`、`+6` 是 `log2(64)`,即 WG tile 的 N/M 尺寸。由于
+下表强制 `N % 1024 == 0`、`M % 64 == 0`,这里的向上取整永远等于精确整除。
+
+runner 强制的启动域:
+
+| 量 | 实现的约束 | 结果 |
 | --- | --- | --- |
-| `M` | positive uint32; `M % 64 == 0` | full `M64` WG tiles; `clusterDim.y=1` adds no stronger divisor |
-| `N` | positive uint32; `N % 1024 == 0` | full `N256` WG tiles and full groups of four N WGs |
-| `K` | positive uint32; `K % 256 == 0` | full K256 bodies; this also satisfies the K32 scale and K128 scale-shuffle gates |
-| `batch` | integer `1 <= batch <= 65535` | obeys the runner's HIP grid-Z limit; the largest launched batch ID is 65534 |
-| M/N/K tails | none | no boundary WG, partial cluster, or K tail is constructed |
+| `M` | 正 uint32,且 `M % 64 == 0` | 全部是完整 `M64` WG tile;`clusterDim.y=1` 不带来更强的整除要求 |
+| `N` | 正 uint32,且 `N % 1024 == 0` | 全部是完整 `N256` WG tile,且 4 个 N 方向 WG 正好凑满一个 cluster |
+| `K` | 正 uint32,且 `K % 256 == 0` | 全部是完整 K256 主体,同时满足 K32 scale 与 K128 scale-shuffle 的前提 |
+| `batch` | 整数 `1 <= batch <= 65535` | 遵守 runner 的 HIP grid-Z 上限;实际启动的最大 batch 号是 65534 |
+| M/N/K 尾块 | 无 | 不构造边界 WG、残缺 cluster 或 K 尾巴 |
 
-No power-of-two constraint is placed on `C_N`: the ISA uses a shift/mask
-path when `C_N` is a power of two and an integer-division path otherwise.
-For small non-power-of-two `T_XY`, the physical cluster-grid X count is also
-non-power-of-two while the independently encoded recurrence stride remains a
-power of two, as described below.
+`C_N` **不要求**是 2 的幂:`C_N` 是 2 的幂时 ISA 走移位/掩码路径,否则走整数
+除法路径。当 `T_XY` 较小且不是 2 的幂时,物理 cluster 网格 X 也会是非 2 的幂,
+而独立编码的递推步长仍是 2 的幂 —— 2.3 会解释为什么这样安全。
 
-The ABI adds two non-divisibility checks. The five inherited row strides
-`N*2`, `K/2`, `K/2`, `K/32`, and `K/32` must fit uint32. Each appended
-batch stride is uint64, positive, and is conservatively required by the
-runner to satisfy `batch_stride * batch <= 2^64-1`.
+ABI 另有两项非整除检查。五个继承下来的行 stride(`N*2`、`K/2`、`K/2`、
+`K/32`、`K/32`)必须放得进 uint32;每个新增的 batch stride 是 uint64、为正,
+且 runner 保守地要求 `batch_stride * batch <= 2^64-1`。
 
-There is one inherited validation gap. The ISA stores `T_XY`, persistent
-task IDs, and intra-matrix tile-origin byte arithmetic in 32-bit scalar
-registers, while the runner does not explicitly prove those derived values
-cannot wrap. Since the encoded recurrence stride `S <= 64`, a sufficient
-scheduler bound is `T_XY <= 2^32-64`, so the final `task+S` lookahead also
-fits. Every
-intra-matrix A/B/sA/sB/D tile-origin offset must likewise fit uint32; a
-simple conservative condition is that each single-matrix byte extent is at
-most `2^32`. These are implementation safety limits, not additional
-divisibility rules, and the requested `64x65536x32768` example satisfies
-them. The new 64-bit batch offset does not make the inherited intra-matrix
-indexing 64-bit.
+还有一处继承下来的校验缺口:ISA 用 32 位标量寄存器保存 `T_XY`、持久化任务号
+以及矩阵内部的 tile 原点字节运算,而 runner 并没有显式证明这些派生值不会回绕。
+由于编码步长 `S <= 64`,一个充分的调度器上界是 `T_XY <= 2^32-64`,这样最后一次
+`task+S` 前瞻也放得下。同样地,A/B/sA/sB/D 的矩阵内 tile 原点偏移都必须放得进
+uint32,一个简单的保守条件是每个单矩阵的字节跨度不超过 `2^32`。这些是实现安全
+上限,不是新增的整除规则,所要求的 `64x65536x32768` 例子满足它们。新增的 64 位
+batch 偏移**不会**把继承下来的矩阵内寻址变成 64 位。
 
 <a id="section-2-3-persistent-launch"></a>
 
-### 2.3 Physical Persistent X/Y Mapping
+### 2.3 物理持久化 X/Y 映射
 
-The batch-symbol runner chooses the physical seed count `C` and independently
-encodes the recurrence stride `S` from the logical cluster-task count:
+这一节分五步来看:先决定发多少个 cluster,再让每个 cluster 算出自己的起始
+任务号,然后把任务号翻译成 tile 坐标,接着按固定步长往后领任务,最后论证
+覆盖的完备性。
+
+#### 第 1 步:runner 决定启动多少个物理 cluster
+
+runner 根据逻辑任务数 `T_XY` 选择物理 seed 数 `C`,并**独立地**编码递推
+步长 `S`:
+
+| 情况 | 物理 cluster 网格 `(x,y)` | 物理 seed 数 `C` | 编码 `log2_grid_(x,y)` | 递推步长 `S` |
+| --- | --- | ---: | --- | ---: |
+| `T_XY <= 64` | `(T_XY, 1)` | `T_XY` | `(log2(S), 0)` | `next_pow2(T_XY)` |
+| `T_XY > 64` | `(16, 4)` | `64` | `(4, 2)` | `64` |
 
 ```text
-T_XY = (M/64) * (N/1024), with T_XY >= 1
-
-if T_XY <= 64:
-    C = T_XY
-    S = next_power_of_two(T_XY)
-    cluster_grid_x/y      = (T_XY,1)
-    physical cluster grid = (T_XY,1,batch)
-    log2_grid_x/y         = (log2(S),0)
-else:
-    C = 64
-    S = 64
-    cluster_grid_x/y      = (16,4)
-    physical cluster grid = (16,4,batch)
-    log2_grid_x/y         = (4,2)
-
-physical HIP WG grid = (cluster_grid_x*4,cluster_grid_y,batch)
+physical HIP WG grid  = (cluster_grid_x*4, cluster_grid_y, batch)
+physical cluster grid = (cluster_grid_x, cluster_grid_y, batch)
 clusterDim            = (4,1,1)
 block                 = (128,1,1)
-encoded recurrence S = 1 << (log2_grid_x+log2_grid_y)
+编码递推步长 S        = 1 << (log2_grid_x + log2_grid_y)
 ```
 
-**Implementation deduction.** Physical launch size and encoded recurrence
-stride are deliberately different for non-power-of-two `T_XY <= 64`.
-Exactly `T_XY` one-row seed clusters launch, but the existing log2 ABI encodes
-the next power of two `S`. For `T_XY > 64`, the proven `(16,4)` topology,
-64 seeds, and stride 64 remain unchanged. Each physical cluster contains four
-WGs, so a plane launches `4*C` WGs.
+**实现推断.** 对**非 2 的幂且 `T_XY <= 64`** 的情况,物理启动规模与编码递推
+步长是**故意不一致**的:实际只启动 `T_XY` 个单行 seed cluster,而沿用的旧
+log2 ABI 编码的是向上取到的 2 的幂 `S`。`T_XY > 64` 时,已验证过的 `(16,4)`
+拓扑、64 个 seed、步长 64 保持不变。每个物理 cluster 含 4 个 WG,所以一个
+平面共启动 `4*C` 个 WG。
 
-**Launch-interface inspection.** The CDNA5 ISA and MI400 guide document
-cluster-grid X as the independent 32-bit `TTMP9` coordinate and cluster-grid
-Y/Z in `TTMP7`; they do not define the kernel's `log2_grid_x/y` software ABI
-fields. In the runner, HIP `gridDimX/Y/Z` and `clusterDim` are populated from
-the physical `LaunchGeometry.grid` and `.cluster`, while the two log2 values
-are packed separately into kernargs. Neither `LaunchGeometry` nor the HIP
-configuration builder requires the physical cluster counts to equal
-`1 << (log2_grid_x+log2_grid_y)`.
+**启动接口核对.** CDNA5 ISA 与 MI400 指南把 cluster 网格 X 定义为独立的
+32 位 `TTMP9`、cluster 网格 Y/Z 放在 `TTMP7`;它们**没有**定义 kernel 的
+`log2_grid_x/y` 这一软件 ABI 字段。在 runner 里,HIP 的 `gridDimX/Y/Z` 和
+`clusterDim` 由物理 `LaunchGeometry.grid` 与 `.cluster` 填充,而两个 log2 值
+单独打进 kernarg。`LaunchGeometry` 和 HIP 配置构造器都**不要求**物理 cluster
+数等于 `1 << (log2_grid_x+log2_grid_y)`。
 
-For a physical cluster, gfx1250 provides cluster-grid X in `TTMP9`,
-cluster-grid Y in `TTMP7[15:0]`, local cluster-WG X/Y in TTMP6, and the
-cluster dimensions-minus-one in TTMP6. Decoding the implemented
-`clusterDim=(4,1,1)` gives:
+#### 第 2 步:每个 cluster 算出自己的起始任务号 `p`
+
+对一个物理 cluster,gfx1250 在 `TTMP9` 给出 cluster 网格 X、在 `TTMP7[15:0]`
+给出 cluster 网格 Y、在 TTMP6 给出 cluster 内 WG 的 X/Y 以及各维尺寸减一。
+按实现的 `clusterDim=(4,1,1)` 解码:
 
 ```text
 cx   = TTMP9
 cy   = TTMP7 & 0xffff
 wg_x =  TTMP6       & 0xf              # 0..3
-wg_y = (TTMP6 >> 4) & 0xf              # always 0
+wg_y = (TTMP6 >> 4) & 0xf              # 恒为 0
 
-p = cx + (cy << log2_grid_x)
-                                            # initial X/Y cluster-task ID
+p = cx + (cy << log2_grid_x)           # L86-L88,起始 X/Y cluster 任务号
 ```
 
-Equivalently, for a physical HIP WG coordinate `(gx,gy,gz)`,
-`cx=gx/4`, `wg_x=gx%4`, `cy=gy`, and `wg_y=0`. All four WGs in the
-cluster have the same `p` and advance in lockstep; `wg_x` selects one of
-the four logical N tiles within the cluster task. The implemented traversal
-is:
+等价地,对物理 HIP WG 坐标 `(gx,gy,gz)` 就是 `cx=gx/4`、`wg_x=gx%4`、
+`cy=gy`、`wg_y=0`。同一个 cluster 内的 4 个 WG 拿到**相同的 `p`** 并同步
+推进;`wg_x` 只用来在这个 cluster task 内部选出 4 个逻辑 N tile 中的一个。
+
+#### 第 3 步:把任务号翻译成 tile 坐标
 
 ```text
-C_N = N / 1024
-C_M = M / 64
-T_XY = C_N * C_M
-
 for task = p; task < T_XY; task += S:
-    cluster_n = task % C_N              # N is fastest
+    cluster_n = task % C_N              # N 是最快维
     cluster_m = task / C_N
 
-    Ntile = cluster_n*4 + wg_x
-    Mtile = cluster_m*1 + wg_y          # wg_y is zero
+    Ntile = cluster_n * nwg_x + wg_x    # nwg_x = 4
+    Mtile = cluster_m * nwg_y + wg_y    # nwg_y = 1,wg_y = 0
 
-    wave_M_origin = Mtile*64
-    wave_N_origin = Ntile*256 + wave_id*64
+    wave_M_origin = Mtile * 64
+    wave_N_origin = Ntile * 256 + wave_id * 64
 ```
 
-For `T_XY <= 64`, physical Y is one, so `cy=0` and the initial equation
-reduces to `p=cx` regardless of `log2_grid_x`. The exact X extent launches
-`cx=0..T_XY-1`, hence every seed is useful. Since `S >= T_XY`, every
-`p+S >= T_XY`; all clusters terminate after one task. This is why a
-non-power-of-two physical X extent is safe even though the recurrence remains
-power-of-two. It would not provide complete coverage if a second round were
-required.
+对应到 ISA:入口处若 `p >= T_XY` 立即结束(L148-L149);分解 `task` 时,
+`C_N` 是 2 的幂走移位/掩码(L150-L158),否则走整数除法(L159-L186);
+随后得到 `Mtile -> s55`、`Ntile -> s54`(L188-L191)。
 
-For `T_XY > 64`, physical X/Y is `(16,4)` and encoded log2 X/Y is `(4,2)`,
-so `p=cx+16*cy` covers `[0,64)` exactly. Every nonnegative task has one
-unique decomposition `task=p+k*64` with `0 <= p < 64`; the 64 persistent
-progressions therefore cover every logical task without duplicates or
-misses.
+#### 第 4 步:`+S` 递推与一次任务前瞻
 
-The source implements one-task lookahead. At entry, a cluster terminates
-immediately if `p >= T_XY`. Otherwise it maps `p`, computes and maps
-`p+S` when valid, and records whether the current task is the last one.
-After the current epilogue, all four WGs converge at the cluster barrier.
-Each wave then rewinds its output pointer by the current task's exact byte
-origin:
+源码实现的是**一次任务前瞻**:处理当前任务的同时,先把 `p+S` 也映射出来
+(`Mtile_next -> s69`、`Ntile_next -> s68`),并记下"当前任务是不是最后一个"
+(`s60`,L192-L197)。当前任务的 epilogue 结束后,任务切换按如下顺序进行:
+
+```text
+1. WG barrier,再由每个 WG 的 wave0 发 cluster barrier,全体等待  (L3751-L3758)
+2. 每个 wave 把输出指针按当前任务的精确字节原点减回去             (L3759-L3769)
+3. 若 s60 表示没有下一个任务,则 s_endpgm                          (L3770-L3771)
+4. 否则把前瞻坐标提升为当前坐标                                    (L3772-L3774)
+5. 从"已按 batch 平面调整过的基址"重建 A/B/sA/sB 描述符            (L3775-L3790)
+6. 给 D 指针加上新任务的字节原点,并复位 K 计数器                  (L3791-L3802)
+7. 再形成一次 p+S 前瞻,然后按 wave_id 跳回各自的流水入口          (L3803-L3872)
+```
+
+上面第 2 条的"减回去"是必需的:`D` 是绝对指针,每个任务都会在它上面叠加
+自己 tile 的字节原点,所以换任务之前必须精确退回。其字节量为:
 
 ```text
 D_delta(Mtile,Ntile,wave_id)
     = ((Mtile*64)*N + Ntile*256 + wave_id*64) * sizeof(BF16)
 
-D_wave_ptr -= D_delta(current)
+D_wave_ptr -= D_delta(current)          # 换任务前
+D_wave_ptr += D_delta(next)             # 换任务后
 ```
 
-If the lookahead is out of range, the kernel terminates. Otherwise the
-lookahead coordinates become current, A/B/sA/sB descriptors are rebuilt
-from their plane-adjusted bases, `D_delta(next)` is added, and another
-`+S` lookahead is formed. Thus physical cluster `p` visits exactly
-`p,p+S,p+2S,... < T_XY`; no task is taken from another physical cluster.
-The ISA does not encode 64 in this mapping: it uses ABI values
-`log2_grid_x` and `log2_grid_y` to form both the initial `p` and
-`1 << (log2_grid_x+log2_grid_y)` recurrence. The runner's static contract
-checks those instruction dependencies.
+ISA 里 `(Mtile*64)*N*2` 是用预加载的行 stride `strideD0 = N*2`(`s12`)乘出来
+的,而不是重新算 `N*2`。
+
+#### 第 5 步:为什么覆盖既完备又不重复
+
+- **`T_XY <= 64`**:物理 Y 只有一行,所以 `cy=0`,起始式退化为 `p = cx`,与
+  `log2_grid_x` 无关。X 方向恰好启动 `cx = 0..T_XY-1`,因此**每个 seed 都有
+  用**。又因为 `S >= T_XY`,所有 `p+S >= T_XY`,**每个 cluster 跑完一个任务
+  就退出**,递推步长根本轮不到用第二次。这就是"物理 X 数量不是 2 的幂也安全"
+  的原因;反过来说,如果需要跑第二轮,这个组合就不再是完整覆盖了。
+- **`T_XY > 64`**:物理 X/Y 是 `(16,4)`,编码 log2 X/Y 是 `(4,2)`,于是
+  `p = cx + 16*cy` 恰好覆盖 `[0,64)`。任意非负 task 都有唯一分解
+  `task = p + k*64`(`0 <= p < 64`),所以这 64 条持久化序列不重不漏地覆盖
+  全部逻辑任务。
+
+因此物理 cluster `p` 恰好访问 `p, p+S, p+2S, ... < T_XY`,不会抢走其他物理
+cluster 的任务。ISA 并没有把 `64` 写死在这个映射里:它用 ABI 的
+`log2_grid_x` 和 `log2_grid_y` 同时构造起始 `p` 和
+`1 << (log2_grid_x+log2_grid_y)` 递推步长,runner 的静态契约检查会核对这些
+指令依赖。
 
 <a id="section-2-4-batch-z-pointers"></a>
 
-### 2.4 Batch-Z Planes and Base Pointers
+### 2.4 Batch-Z 平面与基址指针
 
-**Documented hardware fact.** In cluster mode, gfx1250 exposes cluster-grid
-Z as `TTMP7[31:16]`, Y as `TTMP7[15:0]`, X as `TTMP9`, and local
-WG-in-cluster X/Y/Z plus cluster dimensions in `TTMP6` (CDNA5 ISA
-Section 2.3.1, local text L769-L815). The compute-shader initialization
-table further states that TTMP7 holds grid Z/Y and is loaded when grid Y/Z
-is enabled (CDNA5 ISA Section 3.5.3.1, manual pages 29-30, local text
-L2121-L2166; MI400 Shader Programming Guide Section 3.5.5.1, manual pages
-52-53, local text L3693-L3739).
+**硬件文档事实.** 在 cluster 模式下,gfx1250 把 cluster 网格 Z 暴露在
+`TTMP7[31:16]`、Y 在 `TTMP7[15:0]`、X 在 `TTMP9`,cluster 内 WG 的 X/Y/Z 以及
+cluster 各维尺寸放在 `TTMP6`(CDNA5 ISA 2.3.1 节,本地文本 L769-L815)。
+计算着色器初始化表进一步说明 TTMP7 保存 grid Z/Y,并在 grid Y/Z 使能时加载
+(CDNA5 ISA 3.5.3.1 节,手册第 29-30 页,本地文本 L2121-L2166;MI400 Shader
+Programming Guide 3.5.5.1 节,手册第 52-53 页,本地文本 L3693-L3739)。
 
-The runner launches:
+runner 的启动是:
 
 ```text
-physical HIP WG grid = (cluster_grid_x*4,cluster_grid_y,batch)
+physical HIP WG grid  = (cluster_grid_x*4, cluster_grid_y, batch)
 clusterDim            = (4,1,1)
-physical cluster grid = (cluster_grid_x,cluster_grid_y,batch)
+physical cluster grid = (cluster_grid_x, cluster_grid_y, batch)
 ```
 
-Because `clusterDim.z=1`, every cluster has `wg_z=0`, and its cluster-grid Z
-coordinate is also the physical WG Z coordinate. The batch ISA therefore
-implements:
+因为 `clusterDim.z=1`,每个 cluster 的 `wg_z=0`,它的 cluster 网格 Z 坐标也就
+等于物理 WG 的 Z 坐标。所以 batch ISA 直接实现为:
 
 ```text
-batch_id = TTMP7[31:16] = TTMP7 >> 16
+batch_id = TTMP7[31:16] = TTMP7 >> 16      # L25
 ```
 
-Calling this value a batch ID is a software design deduction, not a hardware
-definition: the hardware documents it only as cluster-grid Z. It becomes a
-batch ID because the runner programs exactly one cluster layer per matrix
-and a cluster depth of one.
+把这个值称作 batch ID 是**软件层面的设计推断**,不是硬件定义:硬件文档只把它
+定义为 cluster 网格 Z。它之所以成为 batch ID,是因为 runner 恰好为每个矩阵
+编排了一层 cluster、并且 cluster 深度为 1。
 
-Batch is deliberately not flattened into the original X/Y task counter.
-The initial task uses only `TTMP7[15:0]` and `TTMP9`, `T_XY` contains only
-`C_N*C_M`, and the `+S` recurrence contains no Z term. The high half of
-TTMP7 is consumed only by the following pointer prologue. Consequently
-every Z plane traverses the same set of X/Y task IDs and logical
-M/N tiles, independently.
+**batch 故意不并入原来的 X/Y 任务计数器.** 起始任务只用 `TTMP7[15:0]` 和
+`TTMP9`,`T_XY` 里只有 `C_N*C_M`,`+S` 递推里没有任何 Z 项。TTMP7 的高半部分
+只被下面这段指针前缀消费。于是每个 Z 平面互不影响地遍历同一套 X/Y 任务号和
+逻辑 M/N tile。
 
-The 120-byte batch ABI preserves the original 80-byte prefix and appends
-five little-endian uint64 byte strides:
+120 字节的 batch ABI 保留了原来的 80 字节前缀,并追加五个小端 uint64 字节
+stride:
 
-| Pointer after adjustment | Preloaded SGPRs / ABI offset | Contiguous batch-major layout | Byte stride |
+| 调整后的指针 | 预加载 SGPR / ABI 偏移 | 连续 batch-major 布局 | 字节 stride |
 | --- | --- | --- | ---: |
-| output `D` (runner output `C`) | `s[2:3]`; stride `s[22:23]` at 80 | BF16 `[batch,M,N]` | `M*N*2` |
-| `A` | `s[4:5]`; stride `s[24:25]` at 88 | uint8 packed FP4 `[batch,M,K/2]` | `M*(K/2)` |
-| `B` | `s[6:7]`; stride `s[26:27]` at 96 | uint8 packed FP4 `[batch,N,K/2]` | `N*(K/2)` |
-| `sA` | `s[8:9]`; stride `s[28:29]` at 104 | uint8 E8M0 `[batch,M,K/32]` | `M*(K/32)` |
-| `sB` | `s[10:11]`; stride `s[30:31]` at 112 | uint8 E8M0 `[batch,N,K/32]` | `N*(K/32)` |
+| 输出 `D`(runner 里叫 `C`) | `s[2:3]`;stride `s[22:23]` @ 80 | BF16 `[batch,M,N]` | `M*N*2` |
+| `A` | `s[4:5]`;stride `s[24:25]` @ 88 | uint8 packed FP4 `[batch,M,K/2]` | `M*(K/2)` |
+| `B` | `s[6:7]`;stride `s[26:27]` @ 96 | uint8 packed FP4 `[batch,N,K/2]` | `N*(K/2)` |
+| `sA` | `s[8:9]`;stride `s[28:29]` @ 104 | uint8 E8M0 `[batch,M,K/32]` | `M*(K/32)` |
+| `sB` | `s[10:11]`;stride `s[30:31]` @ 112 | uint8 E8M0 `[batch,N,K/32]` | `N*(K/32)` |
 
-The runner requires exactly these shapes, dtypes, and contiguous outer-batch
-strides. AB pre-shuffling changes the original kernel's within-matrix access
-interpretation, not the contiguous matrix byte extent used as the batch
-stride.
+runner 严格要求这些形状、dtype 和"外层 batch 连续"的 stride。AB 预 shuffle
+改变的是原 kernel 在矩阵**内部**的访问解释,不改变被用作 batch stride 的矩阵
+连续字节跨度。
 
-For each pointer, let `stride = stride_hi*2^32 + stride_lo` and
-`b=batch_id`. The entry prologue computes a full two-limb product:
+对每个指针,记 `stride = stride_hi*2^32 + stride_lo`、`b = batch_id`,入口前缀
+做一次完整的两肢(two-limb)乘法(L26-L55):
 
 ```text
-offset_lo = low32(b * stride_lo)
-offset_hi = low32(high32(b * stride_lo) + b * stride_hi)
+offset_lo = low32(b * stride_lo)                              # s_mul_i32
+offset_hi = low32(high32(b * stride_lo) + b * stride_hi)      # s_mul_hi_u32
 offset    = offset_lo + (offset_hi << 32)
-base_b    = base_0 + offset
+base_b    = base_0 + offset                                   # s_add_nc_u64
 ```
 
-The host-side span check makes this the exact unsigned 64-bit product rather
-than an intended wraparound. This adjustment executes once, before the
-legacy stream saves the D base or constructs any input descriptor. All
-current/next descriptor generation, the K pipeline, output store, D rewind,
-and persistent restart then operate unchanged on these five
-batch-adjusted bases.
+主机侧的地址跨度检查保证这是精确的无符号 64 位乘积,而不是有意的回绕。
+
+**为什么这段必须放在 kernel 最前面.** 五个 stride 预加载在 `s22..s31`,而这些
+寄存器紧接着就被复用作别的用途 —— 例如 L58 就把 `s22` 覆盖成了 `wave_id`。
+因此这次指针调整只发生一次,且必须早于保存 `D` 基址(L56-L57)和任何输入
+描述符的构造。此后所有 current/next 描述符生成、K 流水、输出 store、`D` 回退
+以及持久化重启,都原封不动地运行在这五个已按 batch 调整过的基址之上。
 
 <a id="section-2-5-isolation-compatibility"></a>
 
-### 2.5 Synchronization, Isolation, and Batch=1
+### 2.5 同步、隔离与 batch=1 兼容
 
-**Documented hardware facts.** A workgroup barrier synchronizes waves in one
-WG. Cluster barrier `-3` counts WGs in one cluster and releases the waves of
-that cluster after its member WGs signal (CDNA5 ISA Section 5.6.6, manual
-pages 50-51, local text L3319-L3367; MI400 Shader Programming Guide
-Section 4.3.6.6, manual pages 82-83, local text L5364-L5412). Multicast
-masks likewise name only WGs *within the same cluster* (CDNA5 ISA Section
-10.7, manual pages 134-135, local text L9880-L9919; MI400 Shader Programming
-Guide Section 4.9.8, manual pages 190-191, local text L13779-L13814).
+**硬件文档事实.** workgroup barrier 同步的是一个 WG 内的所有 wave。cluster
+barrier(`-3`)统计的是一个 cluster 内的 WG 数,等成员 WG 都发过信号后释放
+该 cluster 的全部 wave。文档明确推荐的用法是:先用 workgroup barrier 同步,
+再由**每个 WG 出一个 wave** 发 cluster barrier 信号,cluster 内所有 wave 都
+必须 wait(CDNA5 ISA 5.6.6 节,手册第 50-51 页,本地文本 L3319-L3367;MI400
+Shader Programming Guide 4.3.6.6 节,手册第 82-83 页,本地文本 L5364-L5412)。
+multicast mask 同样只能点名**同一个 cluster 内**的 WG(CDNA5 ISA 10.7 节,
+手册第 134-135 页,本地文本 L9880-L9919;MI400 Shader Programming Guide
+4.9.8 节,手册第 190-191 页,本地文本 L13779-L13814)。
 
-**Implementation consequence.** Since `clusterDim.z=1`, one cluster never
-contains WGs from two Z planes. The existing WG barriers, cluster barriers,
-and A/SA/B/SB multicast masks therefore remain local to one batch plane.
-There is no grid-wide barrier, cross-Z multicast bit, shared LDS allocation,
-or cross-batch pointer. Different batches may progress concurrently and at
-different rates without synchronizing or sharing operand payloads.
+**ISA 证据.** 任务切换处的序列正是文档推荐的模式(L3751-L3758):
 
-For `batch=1`, the only Z coordinate is zero. All five 64-bit products are
-exactly zero, so the post-prologue C/D, A, B, sA, and sB base pointers equal
-the original non-batch pointers bit-for-bit. The descriptors, tile mapping
-for each task, pipeline, barriers, epilogue, rewind, and termination logic
-remain the original instruction stream. The batch symbol still executes the
-extra zero-offset prologue and consumes the 120-byte ABI, and its physical
-X/Y schedule is adaptive: for `T_XY <= 64`, it launches only the useful
-initial task IDs and may encode a recurrence stride larger than that physical
-seed count. Alternatively, the batch runner accepts the original non-batch
-symbol only for `batch=1`; that compatibility path retains the exact original
-fixed geometry, 80-byte ABI, and execution schedule.
+```text
+s_barrier_signal -1 / s_barrier_wait 0xffff    # 先做 WG 内同步
+if wave_id == 0: s_barrier_signal -3           # 每个 WG 只由 wave0 发 cluster 信号
+s_barrier_wait 0xfffd                          # cluster 内所有 wave 一起等
+```
+
+**实现推论.** 因为 `clusterDim.z=1`,一个 cluster 永远不会同时包含两个 Z 平面
+的 WG。已有的 WG barrier、cluster barrier 以及 A/SA/B/SB multicast mask 因此
+天然局限在单个 batch 平面内。不存在 grid 级 barrier、跨 Z 的 multicast 位、
+共享 LDS 分配或跨 batch 指针。不同 batch 可以并发推进、进度不同,彼此既不需要
+同步,也不共享操作数负载。
+
+**`batch=1` 的情形.** 唯一的 Z 坐标是 0,五个 64 位乘积全部精确为零,所以前缀
+执行完之后 C/D、A、B、sA、sB 的基址与原非 batch 指针**逐位相同**。描述符、
+每个任务的 tile 映射、流水、barrier、epilogue、指针回退和终止逻辑都还是原来的
+指令流。batch 符号仍然会执行那段零偏移前缀、仍然消费 120 字节 ABI,而它的物理
+X/Y 调度是自适应的:`T_XY <= 64` 时只启动确实有用的那些起始任务号,并且可能
+编码一个比物理 seed 数更大的递推步长。另一条路是:batch runner 也允许在
+`batch=1` 时直接使用原来的非 batch 符号,那条兼容路径完整保留原有的固定几何、
+80 字节 ABI 和执行调度。
 
 <a id="section-2-6-launch-examples"></a>
 
-### 2.6 Launch Examples
+### 2.6 启动实例
 
-#### 2.6.1 Exact 64x65536x32768 Launches
+#### 2.6.1 精确的 64x65536x32768 启动
 
-For `M=64,N=65536,K=32768`, the runner derives:
+对 `M=64,N=65536,K=32768`,runner 推导出:
 
 ```text
 W_N = 65536/256 = 256
 W_M = 64/64     = 1
 C_N = 256/4     = 64
 C_M = 1/1       = 1
-T_XY             = 64 cluster tasks per Z plane
+T_XY            = 64                       # 每个 Z 平面 64 个 cluster 任务
 
 batch_stride_D  = 64*65536*2       =    8388608 B = 0x00800000
 batch_stride_A  = 64*(32768/2)     =    1048576 B = 0x00100000
@@ -542,60 +602,60 @@ batch_stride_sA = 64*(32768/32)    =      65536 B = 0x00010000
 batch_stride_sB = 65536*(32768/32) =   67108864 B = 0x04000000
 ```
 
-These are the exact values returned by `make_contiguous_batch_strides`.
-`make_batched_launch_geometry` produces:
+这些正是 `make_contiguous_batch_strides` 返回的精确值。
+`make_batched_launch_geometry` 给出:
 
-| Batch | Logical WG grid | Logical cluster grid | Physical HIP WG grid | `clusterDim` | Physical cluster grid | Block / encoded recurrence stride |
+| Batch | 逻辑 WG 网格 | 逻辑 cluster 网格 | 物理 HIP WG 网格 | `clusterDim` | 物理 cluster 网格 | Block / 编码递推步长 |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | `(256,1,1)` | `(64,1,1)` | `(256,1,1)` | `(4,1,1)` | `(64,1,1)` | `(128,1,1)` / 64 |
 | 2 | `(256,1,2)` | `(64,1,2)` | `(256,1,2)` | `(4,1,1)` | `(64,1,2)` | `(128,1,1)` / 64 |
 
-For batch 1, 256 WGs form 64 physical clusters. For batch 2, 512 WGs form
-128 physical clusters, split into two identical planes of 256 WGs and 64
-clusters. In either plane:
+batch=1 时,256 个 WG 组成 64 个物理 cluster;batch=2 时,512 个 WG 组成 128 个
+物理 cluster,分成两个完全相同的平面,每个平面 256 个 WG、64 个 cluster。
+在任一平面内:
 
 ```text
-p = cx, where cx=0..63 and cy=0
-p spans 0..63 exactly
+p = cx,其中 cx = 0..63、cy = 0
+p 恰好覆盖 0..63
 cluster_n = p
 cluster_m = 0
 Ntile = 4*p + wg_x
 Mtile = 0
-next task = p+64 >= T_XY, so every physical cluster terminates after one task
+下一个任务 p+64 >= T_XY,所以每个物理 cluster 跑完一个任务就退出
 ```
 
-For Z=0, the base offsets are zero. In the batch-2 launch, Z=1 follows the
-same `p=0..63` X/Y mapping but begins from each base plus the corresponding
-stride listed above. The equality of the two X/Y traversals is established
-by the ISA's omission of Z from `p` and `T_XY`; their address separation is
-established by the one-time Z-derived base adjustment.
+Z=0 时基址偏移全为零。在 batch=2 的启动里,Z=1 走的是完全相同的 `p=0..63`
+X/Y 映射,只是从"各自基址 + 上表对应 stride"开始。两个平面 X/Y 遍历相同,是
+因为 ISA 的 `p` 和 `T_XY` 都不含 Z;它们地址上互不重叠,则由那一次 Z 派生的
+基址调整保证。
 
-#### 2.6.2 Observed Batch-96 64x6144x7168 Launch
+#### 2.6.2 实测的 batch-96 64x6144x7168 启动
 
-For `batch=96,M=64,N=6144,K=7168`, the logical space is:
+对 `batch=96,M=64,N=6144,K=7168`,逻辑空间是:
 
 ```text
 W_N = 6144/256 = 24
 W_M = 64/64    = 1
 C_N = 24/4     = 6
 C_M = 1/1      = 1
-T_XY            = 6 cluster tasks per Z plane
+T_XY           = 6                         # 每个 Z 平面 6 个 cluster 任务
 
-physical seeds C = T_XY = 6
-recurrence S      = next_power_of_two(6) = 8
-cluster grid      = (6,1,96)
-HIP WG grid       = (6*4,1,96) = (24,1,96)
-log2_grid_x/y   = (3,0)
-encoded recurrence stride = 8
+物理 seed 数 C = T_XY = 6
+递推步长 S     = next_pow2(6) = 8
+cluster 网格   = (6,1,96)
+HIP WG 网格    = (6*4,1,96) = (24,1,96)
+log2_grid_x/y  = (3,0)
+编码递推步长   = 8
 ```
 
-Physical Y is one, so the initial `p` values are exactly `cx=0..5`: all six
-launched clusters are useful. Each next task is `p+8 >= 8 > 6`, so there is
-no second round. Compared with the former maximum topology, each Z plane
-drops from 64 clusters/256 WGs to 6 clusters/24 WGs. Across all 96 planes,
-that is 576 clusters/2304 WGs instead of 6144 clusters/24576 WGs. This
-removes the observed overlaunch while retaining one kernel dispatch and grid
-Z equal to batch.
+这是 2.3 里"物理规模与编码步长故意不一致"的典型例子:只发 6 个 cluster,却
+编码步长 8。物理 Y 只有一行,所以起始 `p` 恰好是 `cx=0..5`,**六个 cluster
+全都有用**;下一个任务是 `p+8 >= 8 > 6`,所以没有第二轮。
+
+与之前的"最大拓扑"相比,每个 Z 平面从 64 cluster / 256 WG 降到
+6 cluster / 24 WG;96 个平面合计是 576 cluster / 2304 WG,而不是
+6144 cluster / 24576 WG。这消除了实测到的过量启动,同时仍然保持单次 kernel
+dispatch、grid Z 等于 batch。
 
 <a id="section-3-software-pipeline"></a>
 

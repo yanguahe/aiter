@@ -2508,6 +2508,6 @@ per WG:
 - `hsa/gfx1250/f4gemm/f4gemm.csv`
 - `hsa/gfx1250/f4gemm/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.co`
 - `my_code/fmha/dump_asm/hsa/gfx1250/f4gemm/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps.s`
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
-- `C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt`
-- `C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\subsystem\CMM\GLX\Design\MI400_Multicast_Feature#9.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\subsystem\CMM\GLX\Design\MI400_Multicast_Feature#9.txt`

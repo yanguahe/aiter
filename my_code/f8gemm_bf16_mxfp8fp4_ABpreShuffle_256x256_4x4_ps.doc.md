@@ -906,6 +906,6 @@ _4x4                         = cluster_x × cluster_y
 - `csrc/py_itfs_cu/asm_mxfp8fp4gemm.cu`
 - `hsa/gfx1250/mxfp8fp4gemm/mxfp8fp4gemm.csv`
 - `my_code/fmha/dump_asm/hsa/gfx1250/mxfp8fp4gemm/f8gemm_bf16_mxfp8fp4_ABpreShuffle_256x256_4x4_ps.s`
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
-- `C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt`
-- `C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\subsystem\CMM\GLX\Design\MI400_Multicast_Feature#9.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\subsystem\CMM\GLX\Design\MI400_Multicast_Feature#9.txt`

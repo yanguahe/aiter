@@ -1048,17 +1048,17 @@ payload_per_tdm_req = TDM_bytes / TDM_request_cycles
 
 分享材料：
 
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\MI450-B0 GEMM Pipeline.pptx`
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\MI450-B0 GEMM Pipeline.vtt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\MI450-B0 GEMM Pipeline.pptx`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\MI450-B0 GEMM Pipeline.vtt`
 
 主要硬件资料：
 
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
-- `C:\Users\yanguahe\Documents\hardware_file\MI450\amd-cdna5-whitepaper.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\amd-instinct-cdna5-instruction-set-architecture.txt`
+- `C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\amd-cdna5-whitepaper.txt`
 
 以下省略路径均相对于：
 
-`C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt`
+`C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt`
 
 - `...\architecture\subsystem\SH\MI400_Shader_Programming#65.txt`
   - §1.4/1.5 hardware overview；§2.3 clusters；§3.3 VGPR/LDS；§4.6.12 WMMA；

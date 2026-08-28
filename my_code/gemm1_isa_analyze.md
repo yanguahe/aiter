@@ -862,7 +862,7 @@ for op in ("s_delay_alu", "s_wait_alu"):
 文件：
 
 ```text
-C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt
+C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\architecture\subsystem\SH\MI400_Shader_Programming#65.txt
 ```
 
 直接使用的章节和文本行如下：
@@ -884,7 +884,7 @@ C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\
 文件：
 
 ```text
-C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-set-architecture.txt
+C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\MI450\amd-instinct-cdna5-instruction-set-architecture.txt
 ```
 
 直接使用的章节和文本行如下：
@@ -904,7 +904,7 @@ C:\Users\yanguahe\Documents\hardware_file\MI450\amd-instinct-cdna5-instruction-s
 为调查 `DISABLE_XDL_ARB_STALL` 的 bit 位置，还查阅了：
 
 ```text
-C:\Users\yanguahe\Documents\code\llm-wiki\mi400_hw_wiki\raw\papers\mi400_hd_txt\block\sq.txt
+C:\Users\yanguahe\Documents\code\wk_sp1\mi400_hw_wiki\raw\papers\mi400_hd_txt\block\sq.txt
 ```
 
 其中 2.24 `GFXIPARCH-935: Disable SQ ALU scheduling stall for WMMA via SCHED_MODE` 行 23159-23186 明确把 `DISABLE_VALU_ARB_STALL` 定义为 `SQ_WAVE_SCHED_MODE bit[2]`。
