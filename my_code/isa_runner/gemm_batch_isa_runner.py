@@ -32,7 +32,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 try:
     from . import gemm_isa_runner as single
@@ -107,9 +107,8 @@ class BatchStrides:
 
 @dataclass(frozen=True)
 class BatchValidation:
-    """Correctness result for one matrix in the dispatch."""
+    """Correctness result for the complete dispatch."""
 
-    index: int
     reference_hash: str
     output_hash: str
     error: float
@@ -1262,8 +1261,7 @@ def _run_batch_gemm(
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
-    tuple[BatchValidation, ...],
-    bool,
+    Callable[[], tuple[BatchValidation, bool]],
 ]:
     m, n, k = args.shape
     batch = args.batch
@@ -1352,39 +1350,6 @@ def _run_batch_gemm(
         )
         us = float(event_timing["device_time_avg"])
 
-    validations: list[BatchValidation] = []
-    for index in range(batch):
-        error = dependencies.check_allclose(
-            reference[index],
-            timed_output[index],
-            rtol=1e-1,
-            atol=1.0,
-            msg=f"mxfp4 batched GEMM ISA runner batch={index}",
-        )
-        max_abs, rel_l2 = dependencies.f4_test._float32_error_metrics(
-            reference[index],
-            timed_output[index],
-        )
-        validations.append(
-            BatchValidation(
-                index=index,
-                reference_hash=dependencies.f4_test._tensor_blake2b128(
-                    reference[index]
-                ),
-                output_hash=dependencies.f4_test._tensor_blake2b128(
-                    timed_output[index]
-                ),
-                error=float(error),
-                max_abs=max_abs,
-                rel_l2=rel_l2,
-            )
-        )
-
-    output_hash = dependencies.f4_test._tensor_blake2b128(timed_output)
-    aggregate_max_abs, aggregate_rel_l2 = (
-        dependencies.f4_test._float32_error_metrics(reference, timed_output)
-    )
-    aggregate_error = max(item.error for item in validations)
     flops = 2 * batch * m * n * k
     logical_bytes = (
         inputs["A"].nbytes
@@ -1408,13 +1373,38 @@ def _run_batch_gemm(
         "gemm_a4w4 us": round(us, 2),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
         "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 2),
-        "gemm_a4w4 err": aggregate_error,
-        "gemm_a4w4 out hash128": output_hash,
-        "gemm_a4w4 max_abs": aggregate_max_abs,
-        "gemm_a4w4 rel_l2": aggregate_rel_l2,
     }
-    passed = all(item.error == 0.0 for item in validations)
-    return row, event_timing, tuple(validations), passed
+
+    # Deferred so the timing rows are printed before the single whole-batch
+    # comparison, which is allowed to fail without hiding them.
+    def validate() -> tuple[BatchValidation, bool]:
+        error = float(
+            dependencies.check_allclose(
+                reference,
+                timed_output,
+                rtol=1e-1,
+                atol=1.0,
+                msg="mxfp4 batched GEMM ISA runner",
+            )
+        )
+        max_abs, rel_l2 = dependencies.f4_test._float32_error_metrics(
+            reference,
+            timed_output,
+        )
+        validation = BatchValidation(
+            reference_hash=reference_hash,
+            output_hash=dependencies.f4_test._tensor_blake2b128(timed_output),
+            error=error,
+            max_abs=max_abs,
+            rel_l2=rel_l2,
+        )
+        row["gemm_a4w4 err"] = validation.error
+        row["gemm_a4w4 out hash128"] = validation.output_hash
+        row["gemm_a4w4 max_abs"] = validation.max_abs
+        row["gemm_a4w4 rel_l2"] = validation.rel_l2
+        return validation, validation.error == 0.0
+
+    return row, event_timing, validate
 
 
 def _print_batch_contract(
@@ -1457,16 +1447,13 @@ def _print_batch_contract(
     print(f"[gemm_batch_isa_runner] symbol: {BATCH_KERNEL_SYMBOL}")
 
 
-def _print_validations(
-    validations: Sequence[BatchValidation],
-) -> None:
-    for item in validations:
-        print(
-            f"[gemm_batch_isa_runner] batch {item.index}: "
-            f"ref hash128={item.reference_hash}; "
-            f"out hash128={item.output_hash}; err={item.error}; "
-            f"max_abs={item.max_abs}; rel_l2={item.rel_l2}"
-        )
+def _print_validation(item: BatchValidation) -> None:
+    print(
+        f"[gemm_batch_isa_runner] full batch: "
+        f"ref hash128={item.reference_hash}; "
+        f"out hash128={item.output_hash}; err={item.error}; "
+        f"max_abs={item.max_abs}; rel_l2={item.rel_l2}"
+    )
 
 
 def _print_summary(
@@ -1655,7 +1642,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             if mode == "legacy":
-                legacy_row, event_timing, passed = single._run_gemm(
+                legacy_row, event_timing, legacy_passed = single._run_gemm(
                     args,
                     result.code_object,
                     symbol,
@@ -1664,18 +1651,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 row = dict(legacy_row)
                 row["batch"] = 1
-                validations = (
-                    BatchValidation(
-                        index=0,
-                        reference_hash=str(row["ref hash128"]),
-                        output_hash=str(row["gemm_a4w4 out hash128"]),
-                        error=float(row["gemm_a4w4 err"]),
-                        max_abs=float(row["gemm_a4w4 max_abs"]),
-                        rel_l2=float(row["gemm_a4w4 rel_l2"]),
-                    ),
+                legacy_validation = BatchValidation(
+                    reference_hash=str(row["ref hash128"]),
+                    output_hash=str(row["gemm_a4w4 out hash128"]),
+                    error=float(row["gemm_a4w4 err"]),
+                    max_abs=float(row["gemm_a4w4 max_abs"]),
+                    rel_l2=float(row["gemm_a4w4 rel_l2"]),
                 )
+
+                def validate() -> tuple[BatchValidation, bool]:
+                    return legacy_validation, legacy_passed
+
             else:
-                row, event_timing, validations, passed = _run_batch_gemm(
+                row, event_timing, validate = _run_batch_gemm(
                     args,
                     result.code_object,
                     geometry,
@@ -1692,7 +1680,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 geometry.persistent_stride
             )
             single._print_cuda_event_timing(event_timing)
-            _print_validations(validations)
+            validation, passed = validate()
+            _print_validation(validation)
             _print_summary(row, symbol=symbol, profile=profile)
             return 0 if passed else 3
     except single.CompileError as exc:
