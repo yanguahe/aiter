@@ -1,0 +1,16 @@
+jobs:
+ -
+  kernel_include_regex: '^f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps$'
+  kernel_exclude_regex:
+  kernel_iteration_range: "[1]"
+  output_file: out
+  output_directory: my_code/.get_isa_runner_att_f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly.b96.m64n6144k7168.att_26966/thread_trace/simd1/kernel/rpf_v3
+  output_format: [csv]
+  truncate_kernels: false
+  sys_trace: false
+  advanced_thread_trace: true
+  att_target_cu: 1
+  att_shader_engine_mask: "0xf"
+  att_simd_select: "1"
+  att_buffer_size: "0x10000000"
+  att_library_path: ["/data/yanguahe/code/wk_sp1/decoder_new"]
