@@ -43,6 +43,22 @@ except ImportError:
 BATCH_KERNEL_SYMBOL = (
     "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps"
 )
+# gfx1250 shares one 384 KiB SRAM per WGP between LDS and the vector cache and
+# caps the LDS partition at 320 KiB, so this bounds one workgroup's LDS and
+# also fixes how many workgroups the declared size lets a WGP hold.
+MAX_LDS_PER_WGP = 320 * 1024
+# Mnemonic prefixes that write memory outside LDS.  ds_* is deliberately absent:
+# it targets LDS, not the D buffer.
+STORE_MNEMONIC_PREFIXES = (
+    "tensor_store",
+    "global_store",
+    "global_atomic",
+    "buffer_store",
+    "buffer_atomic",
+    "flat_store",
+    "flat_atomic",
+    "scratch_store",
+)
 LEGACY_KERNEL_SYMBOL = single.KERNEL_SYMBOL_64X256
 # HIP's maximum grid-Z dimension is 65535 workgroups.
 MAX_BATCH = (1 << 16) - 1
@@ -375,8 +391,24 @@ def pack_batched_mxfp4_kernargs(
     )
 
 
-def validate_batch_assembly_contract_from_text(source: str) -> None:
-    """Validate symbol, resources, ABI, Z ID, and pointer-offset prologue."""
+def isa_writes_output(source: str) -> bool:
+    """Report whether the assembly stores anything outside LDS."""
+
+    for line in source.splitlines():
+        clean = re.split(r";|//|#", line, maxsplit=1)[0].strip()
+        if not clean or clean.startswith(".") or clean.endswith(":"):
+            continue
+        if clean.split(maxsplit=1)[0].startswith(STORE_MNEMONIC_PREFIXES):
+            return True
+    return False
+
+
+def validate_batch_assembly_contract_from_text(source: str) -> int:
+    """Validate symbol, resources, ABI, Z ID, and pointer-offset prologue.
+
+    Returns the declared LDS size, which varies between the real kernel and the
+    reduced-LDS bandwidth variants.
+    """
 
     symbol = single.detect_kernel_symbol_from_text(source)
     if symbol != BATCH_KERNEL_SYMBOL:
@@ -388,7 +420,6 @@ def validate_batch_assembly_contract_from_text(source: str) -> None:
     descriptor = single._descriptor_body(source, symbol)
     metadata = single._metadata_body(source)
     descriptor_expected = {
-        "amdhsa_group_segment_fixed_size": 206848,
         "amdhsa_private_segment_fixed_size": 0,
         "amdhsa_kernarg_size": BATCH_KERNARG_SIZE,
         "amdhsa_user_sgpr_count": 32,
@@ -411,7 +442,6 @@ def validate_batch_assembly_contract_from_text(source: str) -> None:
             )
 
     metadata_expected = {
-        "group_segment_fixed_size": 206848,
         "kernarg_segment_align": 8,
         "kernarg_segment_size": BATCH_KERNARG_SIZE,
         "max_flat_workgroup_size": 128,
@@ -426,6 +456,29 @@ def validate_batch_assembly_contract_from_text(source: str) -> None:
             raise single.GemmIsaRunnerError(
                 f"{symbol}: metadata .{field} is {actual}, expected {expected}"
             )
+
+    # The LDS size is the one resource the bandwidth variants are allowed to
+    # shrink, so require descriptor/metadata agreement and a WGP-legal size
+    # instead of one fixed value.
+    group_segment = single._descriptor_int(
+        descriptor,
+        "amdhsa_group_segment_fixed_size",
+    )
+    metadata_group_segment = single._metadata_int(
+        metadata,
+        "group_segment_fixed_size",
+    )
+    if metadata_group_segment != group_segment:
+        raise single.GemmIsaRunnerError(
+            f"{symbol}: metadata .group_segment_fixed_size is "
+            f"{metadata_group_segment}, but .amdhsa_group_segment_fixed_size "
+            f"is {group_segment}"
+        )
+    if not 0 < group_segment <= MAX_LDS_PER_WGP:
+        raise single.GemmIsaRunnerError(
+            f"{symbol}: .amdhsa_group_segment_fixed_size is {group_segment}, "
+            f"expected a positive size at most {MAX_LDS_PER_WGP}"
+        )
 
     expected_args = tuple(
         (offset, struct.calcsize(f"<{kind}"))
@@ -587,6 +640,8 @@ def validate_batch_assembly_contract_from_text(source: str) -> None:
                 f"{symbol}: adaptive scheduler instruction {instruction!r} "
                 f"occurs {actual_count} times, expected {expected_count}"
             )
+
+    return group_segment
 
 
 def select_kernel_mode(
@@ -795,8 +850,37 @@ def run_static_contract_checks(
         "must precede the first original descriptor/global memory access",
     )
 
+    if isa_writes_output(contract_fixture):
+        raise AssertionError(
+            "store detection treated the store-free fixture as writing D"
+        )
+    if isa_writes_output("\ts_nop 0 ; tensor_store_from_lds was removed\n"):
+        raise AssertionError("store detection matched a comment")
+    for store in (
+        "tensor_store_from_lds s[32:35], s[36:43]",
+        "global_store_b128 v[4:5], v[8:11], off",
+        "buffer_store_dwordx4 v[8:11], v4, s[24:27], 0 offen",
+    ):
+        if not isa_writes_output(
+            contract_fixture.replace(
+                "    s_endpgm",
+                f"    {store}\n    s_endpgm",
+                1,
+            )
+        ):
+            raise AssertionError(f"store detection missed {store!r}")
+
     if actual_batch_source is not None:
-        validate_batch_assembly_contract_from_text(actual_batch_source)
+        if validate_batch_assembly_contract_from_text(
+            actual_batch_source
+        ) != 206848:
+            raise AssertionError(
+                "the repository batch ISA no longer declares 206848 LDS bytes"
+            )
+        if not isa_writes_output(actual_batch_source):
+            raise AssertionError(
+                "the repository batch ISA should store its D tiles"
+            )
 
     if BATCH_PROFILE.wg_tile != single.KERNEL_PROFILE_64X256.wg_tile:
         raise AssertionError("batched profile changed the 64x256 tile")
@@ -1258,6 +1342,7 @@ def _run_batch_gemm(
     args: argparse.Namespace,
     code_object: Path,
     geometry: single.LaunchGeometry,
+    writes_output: bool,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1351,13 +1436,26 @@ def _run_batch_gemm(
         us = float(event_timing["device_time_avg"])
 
     flops = 2 * batch * m * n * k
-    logical_bytes = (
+    # Distinct bytes each matrix contributes once; A/B/sA/sB are always read,
+    # but D is only touched by kernels that actually store.
+    input_bytes = (
         inputs["A"].nbytes
         + inputs["B"].nbytes
         + inputs["sA"].nbytes
         + inputs["sB"].nbytes
-        + output.nbytes
     )
+    logical_bytes = input_bytes + (output.nbytes if writes_output else 0)
+    if writes_output:
+        print(
+            f"[gemm_batch_isa_runner] logical_bytes={logical_bytes} = "
+            f"A+B+sA+sB ({input_bytes}) + D ({output.nbytes})"
+        )
+    else:
+        print(
+            f"[gemm_batch_isa_runner] logical_bytes={logical_bytes} = "
+            f"A+B+sA+sB ({input_bytes}); excludes D ({output.nbytes}) "
+            f"(no store found in ISA); TFLOPS is not reported"
+        )
     row = {
         "intype": args.intype,
         "batch": batch,
@@ -1371,7 +1469,9 @@ def _run_batch_gemm(
         "gfx": gfx,
         "ref hash128": reference_hash,
         "gemm_a4w4 us": round(us, 2),
-        "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
+        "gemm_a4w4 TFLOPS": (
+            round(flops / us / 1e6, 1) if writes_output else "n/a (no store)"
+        ),
         "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 2),
     }
 
@@ -1411,6 +1511,8 @@ def _print_batch_contract(
     isa: Path,
     geometry: single.LaunchGeometry,
     batch: int,
+    group_segment: int,
+    writes_output: bool,
 ) -> None:
     per_plane_clusters = (
         geometry.cluster_grid[0] * geometry.cluster_grid[1]
@@ -1441,7 +1543,10 @@ def _print_batch_contract(
     print(
         f"[gemm_batch_isa_runner] ABI={BATCH_PROFILE.abi_name}; "
         f"kernarg=120 bytes (legacy 80-byte prefix + five u64 byte "
-        f"strides); fixed LDS=206848; VGPR/SGPR metadata=384/106"
+        f"strides); fixed LDS={group_segment}; WGs/WGP by LDS="
+        f"{MAX_LDS_PER_WGP // group_segment} (LDS budget "
+        f"{MAX_LDS_PER_WGP}); VGPR/SGPR metadata=384/106; stores to D="
+        f"{writes_output}"
     )
     print(f"[gemm_batch_isa_runner] source: {isa}")
     print(f"[gemm_batch_isa_runner] symbol: {BATCH_KERNEL_SYMBOL}")
@@ -1579,6 +1684,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = single._read_isa_source(isa)
         symbol = single.resolve_kernel_symbol_from_text(source, args.symbol)
         mode, profile = select_kernel_mode(symbol, args.batch)
+        writes_output = isa_writes_output(source)
 
         if mode == "legacy":
             profile = single._validate_mode(
@@ -1609,12 +1715,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             _validate_batch_mode(args.intype, args.apre, args.dtype)
-            validate_batch_assembly_contract_from_text(source)
+            group_segment = validate_batch_assembly_contract_from_text(source)
             geometry = make_batched_launch_geometry(
                 *args.shape,
                 batch=args.batch,
             )
-            _print_batch_contract(isa, geometry, args.batch)
+            _print_batch_contract(
+                isa,
+                geometry,
+                args.batch,
+                group_segment,
+                writes_output,
+            )
 
         clang = single._resolve_clang(args.clang)
         with tempfile.TemporaryDirectory(
@@ -1667,6 +1779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args,
                     result.code_object,
                     geometry,
+                    writes_output,
                 )
 
             row["logical cluster tasks/plane"] = (
