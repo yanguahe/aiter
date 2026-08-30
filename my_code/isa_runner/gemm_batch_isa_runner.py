@@ -165,6 +165,7 @@ class BatchValidation:
     output_hash: str
     error: float
     max_abs: float
+    max_err_info: single.MaxErrorInfo
     rel_l2: float
 
 
@@ -175,6 +176,7 @@ class MabValidation:
     reference_hash: str
     output_hash: str
     max_abs: float
+    max_err_info: single.MaxErrorInfo
     rel_l2: float
     mismatch_count: int
     element_count: int
@@ -1090,14 +1092,13 @@ def _run_mab_gemm(
         reference_fp32 = target.float()
         output_fp32 = output.float()
         difference = output_fp32 - reference_fp32
-        max_abs = float(difference.abs().max().item())
-        denominator = torch.linalg.vector_norm(reference_fp32)
-        rel_l2 = float(
-            (
-                torch.linalg.vector_norm(difference)
-                / torch.clamp(denominator, min=torch.finfo(torch.float32).tiny)
-            ).item()
+        max_err_info, rel_l2 = single.float32_error_metrics(
+            reference_fp32,
+            output_fp32,
+            difference=difference,
+            clamp_rel_l2=True,
         )
+        max_abs = max_err_info[2]
         # FP16 output contributes about 4.88e-4 relative rounding error.  The
         # one-ULP absolute allowance covers a different FP32 reduction tree.
         rtol = 1.0e-3
@@ -1112,16 +1113,13 @@ def _run_mab_gemm(
         mismatch_count = int((~close).sum().item())
         dense_reference_fp32 = dense_reference.float()
         dense_difference = output_fp32 - dense_reference_fp32
-        dense_max_abs = float(dense_difference.abs().max().item())
-        dense_rel_l2 = float(
-            (
-                torch.linalg.vector_norm(dense_difference)
-                / torch.clamp(
-                    torch.linalg.vector_norm(dense_reference_fp32),
-                    min=torch.finfo(torch.float32).tiny,
-                )
-            ).item()
+        dense_max_err_info, dense_rel_l2 = single.float32_error_metrics(
+            dense_reference_fp32,
+            output_fp32,
+            difference=dense_difference,
+            clamp_rel_l2=True,
         )
+        dense_max_abs = dense_max_err_info[2]
         dense_mismatch_count = int(
             (
                 ~torch.isclose(
@@ -1140,6 +1138,7 @@ def _run_mab_gemm(
             reference_hash=target_hash,
             output_hash=output_hash,
             max_abs=max_abs,
+            max_err_info=max_err_info,
             rel_l2=rel_l2,
             mismatch_count=mismatch_count,
             element_count=output.numel(),
@@ -1153,7 +1152,7 @@ def _run_mab_gemm(
         )
         row["gemm_a4w4 err"] = mismatch_count / output.numel()
         row["gemm_a4w4 out hash128"] = output_hash
-        row["gemm_a4w4 max_abs"] = max_abs
+        row["gemm_a4w4 max_err_info"] = max_err_info
         row["gemm_a4w4 rel_l2"] = rel_l2
         return validation, validation.passed
 
@@ -1310,7 +1309,7 @@ def _run_batch_gemm(
                 msg="mxfp4 batched GEMM ISA runner",
             )
         )
-        max_abs, rel_l2 = dependencies.f4_test._float32_error_metrics(
+        max_err_info, rel_l2 = single.float32_error_metrics(
             reference,
             timed_output,
         )
@@ -1318,12 +1317,13 @@ def _run_batch_gemm(
             reference_hash=reference_hash,
             output_hash=dependencies.f4_test._tensor_blake2b128(timed_output),
             error=error,
-            max_abs=max_abs,
+            max_abs=max_err_info[2],
+            max_err_info=max_err_info,
             rel_l2=rel_l2,
         )
         row["gemm_a4w4 err"] = validation.error
         row["gemm_a4w4 out hash128"] = validation.output_hash
-        row["gemm_a4w4 max_abs"] = validation.max_abs
+        row["gemm_a4w4 max_err_info"] = validation.max_err_info
         row["gemm_a4w4 rel_l2"] = validation.rel_l2
         return validation, validation.error == 0.0
 
@@ -1558,11 +1558,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 row = dict(legacy_row)
                 row["batch"] = 1
+                max_err_info = row["gemm_a4w4 max_err_info"]
                 legacy_validation = BatchValidation(
                     reference_hash=str(row["ref hash128"]),
                     output_hash=str(row["gemm_a4w4 out hash128"]),
                     error=float(row["gemm_a4w4 err"]),
-                    max_abs=float(row["gemm_a4w4 max_abs"]),
+                    max_abs=float(max_err_info[2]),
+                    max_err_info=max_err_info,
                     rel_l2=float(row["gemm_a4w4 rel_l2"]),
                 )
 

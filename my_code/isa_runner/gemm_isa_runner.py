@@ -258,7 +258,7 @@ SUMMARY_COLUMNS = (
     "gemm_a4w4 TB/s",
     "gemm_a4w4 err",
     "gemm_a4w4 out hash128",
-    "gemm_a4w4 max_abs",
+    "gemm_a4w4 max_err_info",
     "gemm_a4w4 rel_l2",
 )
 assert len(SUMMARY_COLUMNS) == 22
@@ -2031,8 +2031,92 @@ def make_cuda_event_timing_row(
     }
 
 
+MaxErrorInfo = tuple[float, float, float]
+
+
+def float32_error_metrics(
+    reference: Any,
+    result: Any,
+    *,
+    difference: Any | None = None,
+    clamp_rel_l2: bool = False,
+) -> tuple[MaxErrorInfo, float]:
+    """Return max-error values and rel-L2 outside kernel timing.
+
+    Ties use the first flattened index, matching ``argmax`` semantics.  A
+    supplied float32 ``difference`` is consumed in place after its sign is no
+    longer needed.
+    """
+
+    reference_f32 = reference.detach().float()
+    result_f32 = result.detach().float()
+    if reference_f32.shape != result_f32.shape:
+        raise GemmIsaRunnerError(
+            f"error metrics require matching shapes, got "
+            f"{tuple(reference_f32.shape)} and {tuple(result_f32.shape)}"
+        )
+    if reference_f32.numel() == 0:
+        raise GemmIsaRunnerError("error metrics require a non-empty tensor")
+
+    if difference is None:
+        absolute_error = result_f32.clone()
+        absolute_error.sub_(reference_f32).abs_()
+    else:
+        if difference.shape != reference_f32.shape:
+            raise GemmIsaRunnerError(
+                f"supplied difference shape {tuple(difference.shape)} does "
+                f"not match {tuple(reference_f32.shape)}"
+            )
+        absolute_error = difference
+        absolute_error.abs_()
+
+    flat_index = int(absolute_error.reshape(-1).argmax().item())
+    reference_flat = reference_f32.reshape(-1)
+    result_flat = result_f32.reshape(-1)
+    error_flat = absolute_error.reshape(-1)
+    max_error_info = (
+        float(reference_flat[flat_index].item()),
+        float(result_flat[flat_index].item()),
+        float(error_flat[flat_index].item()),
+    )
+    import torch  # type: ignore[import-not-found]
+
+    diff_norm_tensor = torch.linalg.vector_norm(absolute_error)
+    ref_norm_tensor = torch.linalg.vector_norm(reference_f32)
+    if clamp_rel_l2:
+        rel_l2 = float(
+            (
+                diff_norm_tensor
+                / torch.clamp(
+                    ref_norm_tensor,
+                    min=torch.finfo(torch.float32).tiny,
+                )
+            ).item()
+        )
+    else:
+        diff_norm = float(diff_norm_tensor.item())
+        ref_norm = float(ref_norm_tensor.item())
+        if ref_norm == 0.0:
+            rel_l2 = 0.0 if diff_norm == 0.0 else float("inf")
+        else:
+            rel_l2 = diff_norm / ref_norm
+    return max_error_info, rel_l2
+
+
+def format_max_error_info(value: MaxErrorInfo) -> str:
+    """Format one max-error tuple as a single Markdown cell."""
+
+    reference, result, absolute_error = value
+    return f"({reference}, {result}, {absolute_error})"
+
+
 def _markdown_cell(value: Any) -> str:
-    return str(value).replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+    text = (
+        format_max_error_info(value)
+        if isinstance(value, tuple) and len(value) == 3
+        else str(value)
+    )
+    return text.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
 
 
 def _plain_markdown(
@@ -2172,7 +2256,7 @@ def _run_gemm(
         msg="mxfp4 gemm_a4w4 ISA runner",
     )
     output_hash = dependencies.f4_test._tensor_blake2b128(timed_output)
-    max_abs, rel_l2 = dependencies.f4_test._float32_error_metrics(
+    max_err_info, rel_l2 = float32_error_metrics(
         reference,
         timed_output,
     )
@@ -2206,7 +2290,7 @@ def _run_gemm(
         "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 2),
         "gemm_a4w4 err": error,
         "gemm_a4w4 out hash128": output_hash,
-        "gemm_a4w4 max_abs": max_abs,
+        "gemm_a4w4 max_err_info": max_err_info,
         "gemm_a4w4 rel_l2": rel_l2,
     }
     return row, event_timing, bool(error == 0)
