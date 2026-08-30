@@ -48,26 +48,32 @@ K = 10^12 / 1024^4
 
 | 符号 | 含义 | 当前机器示例 |
 |---|---|---:|
-| `fG` | GFXCLK/SYS，XCD Shader/GFX 时钟，GHz | 2.314 |
-| `fL` | GL2CLK，GL2 cache 专用时钟，GHz | 未由 `amd-smi static --clock` 报告 |
-| `fE` | EA 数据通路实际时钟，GHz | 未确认 |
-| `fF` | FCLK/DF clock，GHz | 1.950 |
-| `fU` | UCLK，HBM controller 时钟，GHz | 约 0.950 |
-| `fM` | MCLK，HBM PHY 配置时钟，GHz | 1.900 |
+| `fG` | per-XCD current GFXCLK/SYS，XCD Shader/GFX 时钟，GHz | current 2.308–2.322；DPM max 2.4 |
+| `fL` | GL2CLK，GL2 cache 专用时钟，GHz | 未确认；公开 AMD-SMI/ROCm-SMI 不报告 |
+| `fE` | EA 数据通路实际时钟，GHz | 未确认；公开 AMD-SMI/ROCm-SMI 不报告 |
+| `fF` | FCLK/DF selected/current DPM level，GHz | 1.950；不是 workload-average effective clock |
+| `fU,API` | AMD-SMI `current_uclk_aid`，per AID，GHz | AID0/AID1 均为 1.900 |
+| `fU,int` | HBM controller 内部 post-gearing 数据通路时钟，GHz | 未实测；若按 `/2` 假设则约 0.950 |
+| `fM` | MCLK，HBM PHY current/selected configuration，GHz | 1.900 |
 
-当前 MI450 POR 下：
+公开 API 的 `current_uclk_aid` 与 `MCLK` 在当前机器上都报告 1.900 GHz。因此，不能再用同一个
+`UCLK` 名称同时表示公开 API 字段和假设的 `/2` 后内部 controller clock。本文后续涉及 UMC
+内部每周期系数时使用 `fU,int`；`fU,API` 只表示 AMD-SMI 原样报告的字段。
+
+下面的 gearing 关系目前只是需要正式 clocking spec 或 silicon gear register 验证的定义/假设，
+不是当前实机 telemetry 已确认的事实：
 
 ```text
-UCLK = MCLK / 2
-HBM per-pin data rate = 4 × MCLK = 8 × UCLK
+fU,int ?= fM / 2
+HBM per-pin data rate ?= 4 × fM = 8 × fU,int
 ```
 
-因此：
+代入当前 MCLK configuration 得到的待验证推导为：
 
 ```text
-MCLK = 1.9 GHz
-UCLK = 0.95 GHz
-HBM data rate = 7.6 Gb/s/pin
+fM = 1.9 GHz
+fU,int = 0.95 GHz  # derived under the unverified /2 assumption
+HBM data rate = 7.6 Gb/s/pin  # derived under the unverified ×4 assumption
 ```
 
 ## 3. 数据路径
@@ -127,7 +133,7 @@ HBM4 → ... → GL1/TCP control → LDS
 | GL2C cached path | 192 channels | 128 B/cycle/channel | 128 B/cycle/channel | GL2CLK | 每方向 `22.351742 × fL` TB/s |
 | GL2C ↔ EA | 192 channels | 64 B/cycle/channel | 64 B/cycle/channel | EA clock | 每方向 `11.175871 × fE` TB/s |
 | DF | 全 GPU | 系数未知 | 系数未知 | FCLK | `CDF,R × fF`、`CDF,W × fF` |
-| UMC | 全 GPU | 系数未知 | 系数未知 | UCLK | `CUMC,R × fU`、`CUMC,W × fU` |
+| UMC | 全 GPU | 系数未知 | 系数未知 | 内部 controller clock | `CUMC,R × fU,int`、`CUMC,W × fU,int` |
 | HBM4 pins | 12×2048 bit | 3072 B/transfer | 3072 B/transfer | `4×MCLK` data rate | `11.175871 × fM` TB/s |
 
 其中第一项是 WGP 内部物理端口极限，并不代表端到端可以持续达到该值。
@@ -417,8 +423,8 @@ fE ≥ 1.896 GHz
 - DF 聚合端口数量
 - 每 FCLK 周期的数据 beat 数
 - DF → UMC 的实际总线宽度
-- UMC 聚合实例与每 UCLK beat 的有效数据宽度
-- UCLK/MCLK 与内部 controller datapath 的完整 gearing
+- UMC 聚合实例与每个内部 controller clock beat 的有效数据宽度
+- `fU,API`、MCLK 与内部 controller datapath `fU,int` 的完整 gearing
 
 因此保留为参数：
 
@@ -426,8 +432,8 @@ fE ≥ 1.896 GHz
 B_DF_read  = CDF,R × fF
 B_DF_write = CDF,W × fF
 
-B_UMC_read  = CUMC,R × fU
-B_UMC_write = CUMC,W × fU
+B_UMC_read  = CUMC,R × fU,int
+B_UMC_write = CUMC,W × fU,int
 ```
 
 这里的 `CDF,*` 和 `CUMC,*` 均定义为本文二进制带宽单位下的 TB/s/GHz 系数；若以后从十进制资料取得系数，也需要乘以 `K`。
@@ -660,7 +666,7 @@ B_read ≤ min(
     22.351742 × fL,    GL2 cached read
     11.175871 × fE,    GL2 → EA
     CDF,R × fF,        Data Fabric
-    CUMC,R × fU,       UMC
+    CUMC,R × fU,int,   UMC
     11.175871 × fM     HBM pins
 ) TB/s
 ```
@@ -674,7 +680,7 @@ B_write ≤ min(
     22.351742 × fL,    GL2 cached write
     11.175871 × fE,    GL2 → EA
     CDF,W × fF,        Data Fabric
-    CUMC,W × fU,       UMC
+    CUMC,W × fU,int,   UMC
     11.175871 × fM     HBM pins
 ) TB/s
 ```
@@ -709,12 +715,13 @@ B_read,HBM + B_write,HBM ≤ 21.234155 TB/s
 | GL2 ↔ EA | `11.175871 × fE ≥ 21.191227` | `fE ≥ 1.896 GHz` |
 | HBM pins | `11.175871 × fM ≥ 21.191227` | `fM ≥ 1.896 GHz` |
 
-当前机器：
+当前机器的公开接口读数：
 
 ```text
-fG = 2.314 GHz
-fF = 1.950 GHz
-fM = 1.900 GHz
+fG      = 2.308–2.322 GHz per XCD current；2.400 GHz max
+fF      = 1.950 GHz selected/current DPM level
+fU,API  = 1.900 GHz per AID current_uclk_aid
+fM      = 1.900 GHz current/selected MCLK configuration
 ```
 
 已知部分：
@@ -784,44 +791,59 @@ GL2CLK_target = max(
 ### 19.1 查看 DPM 表
 
 ```bash
-sudo amd-smi static --clock
+amd-smi static --clock --json
 ```
 
 当前示例：
 
 ```text
-SYS/GFXCLK = 2314 MHz current，2400 MHz max
-MEM/MCLK   = 1900 MHz
-DF/FCLK    = 1950 MHz
-SOC        = 1350 MHz
+SYS/GFXCLK = 2315 MHz selected current level，2400 MHz max
+MEM/MCLK   = 1900 MHz selected/current configuration
+DF/FCLK    = 1950 MHz selected current level
+SOC        = 1350 MHz selected/current MID SoC clock
 ```
 
-### 19.2 查看一秒平均时钟
+`static --clock` 给出 DPM frequency levels 和当前选中的 level，不给 workload-average effective
+clock。这里的 `SOC` 是 MID SoC clock，不是 GL2CLK、FCLK 或 EA clock。
+
+### 19.2 以一秒间隔采样 current clock
 
 ```bash
-watch -n 1 'sudo amd-smi metric --clock'
+watch -n 1 'amd-smi metric --clock --json'
 ```
+
+`watch` 只按一秒间隔重复查询，不计算一秒平均值。当前 AMD-SMI 实现中：
+
+- `clk` 来自 `gpu_metrics` 的 `current_*` 字段；GFXCLK 可按 XCD 报告。
+- `min_clk`/`max_clk` 来自 sysfs 的每 clock type 范围，不是采样区间内的最小值/最大值。
+- 当前机器的 `average_gfxclk_frequency` 和 `average_uclk_frequency` 都是 `N/A`。
+- FCLK 的 `clk` 由 CLI 回退到 DF DPM 当前 level，并非 workload-average effective FCLK。
+- `current_uclk_aid` 在 AID0/AID1 均为 1900 MHz，与 MCLK 同值；这不能证明内部
+  post-gearing controller clock 也是 1900 MHz，也不能验证 `fU,int=fM/2`。
 
 ### 19.3 使用 AGT PMLog
 
 ```bash
-cd /opt/amd-apps/agt_internal
-
-sudo ./agt_internal \
+sudo -n /opt/amd-apps/agt_internal/agt_internal \
+  -i=0 \
   -unilog=PM \
   -unilogallgroups \
+  -unilogstopcheck \
+  -unilognoesckey \
   -unilogperiod=50 \
-  -i=* \
-  -unilogoutput=mi450_pm.csv
+  -unilogcount=120 \
+  -unilogoutput=/path/to/mi450_pm.csv
 ```
 
-运行目标 workload 后重点检查：
+AGT 会创建输出文件；`-unilogcount=120` 在 50 ms period 下采集约 6 秒并由工具自行 flush/退出。
+长时间采集则需要用工具支持的 stop-check 或受控 signal 终止，以确保 CSV flush；
+采集结束后还必须确认没有遗留 AGT 进程。运行目标 workload 后应按 CSV 的真实 header 区分：
 
 ```text
-GFXCLK target/effective per XCD
-GL2CLK target/effective
-FCLK target/effective
-UCLK/MCLK
+GFXCLK Target Freq / Pre Deep Sleep Freq / Post Deep Sleep Freq per XCD
+FCLK Target Freq / pre-deepsleep Freq / post-deepsleep Freq per AID
+GL2CLK Target Freq / pre-deepsleep Freq / post-deepsleep Freq per AID
+MCLK target/effective fields（按 header 原名）
 SocketPowerLimit
 PptResidencyAcc
 ProchotResidencyAcc
@@ -829,6 +851,27 @@ SocketThmResidencyAcc
 VrThmResidencyAcc
 HbmThmResidencyAcc
 ```
+
+#### 当前实机 idle 短采集示例
+
+2026-08-29 11:20:53–11:20:59 UTC 在 `heliosr-2b805-b8-2` 上使用 AGT
+`4.1.147.0`、SMC FW `00.125.43.00`，以 50 ms 周期采集 120 个 sample；采集前后均无
+GPU process，GFX/UMC activity 均为 0%。这是 idle 状态示例，不能推广为 workload 时钟：
+
+- XCD0–7 `Target Freq` 为 2329.88–2329.96 MHz；各 XCD `Pre Deep Sleep Freq` 与
+  `Post Deep Sleep Freq` 在本次采集中相同，总范围为 2307.47–2323.89 MHz。
+- AID0/AID1 FCLK target 均为 1950 MHz；pre/post 分别为 1950–1952 MHz 和
+  1955–1957 MHz。
+- AID0/AID1 GL2CLK target 均为 2330 MHz；pre/post 分别为 2301–2302 MHz 和
+  2310–2312 MHz。
+- AID0/AID1 的 `MCLK_a`/`MCLK_b` target 和 `MCLK_a Eff`/`MCLK_b Eff` 均稳定为
+  1900 MHz。
+- 同期 AMD-SMI current GFXCLK 为 2308–2323 MHz，DF/FCLK selected level 为
+  1950 MHz，`current_uclk_aid` 为 1900 MHz。
+
+AGT 对 GFXCLK/FCLK/GL2CLK 的真实字段名称是 `Target Freq`、`Pre Deep Sleep Freq` 和
+`Post Deep Sleep Freq`，不能把 `Target Freq` 当作 effective clock；本次 CSV 只有 MCLK
+字段明确使用 `Effective Frequencies ... Eff` 命名，也没有 UCLK 字段。
 
 ### 19.4 需要的计数器
 

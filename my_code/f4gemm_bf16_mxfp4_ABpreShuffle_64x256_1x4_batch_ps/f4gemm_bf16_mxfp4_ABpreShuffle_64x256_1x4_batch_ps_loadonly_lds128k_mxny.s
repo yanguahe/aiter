@@ -4,9 +4,12 @@
 	; The ISA runner recognizes this zero-instruction opt-in and patches bits
 	; [20:18] in the linked <kernel>.kd COMPUTE_PGM_RSRC3 before loading it.
 	.set __aiter_tcp_split, 5
+	; Zero-instruction contract marker: physical X maps to logical M and
+	; physical Y maps to logical N.  The runner rejects layout/marker mismatch.
+	.set __aiter_grid_layout_mxny, 1
 	.text
 	; ---------------------------------------------------------------------
-	; REDUCED-LDS (128 KiB) LOAD-ONLY BANDWIDTH VARIANT of
+	; M-ON-X / N-ON-Y REDUCED-LDS (128 KiB) LOAD-ONLY BANDWIDTH VARIANT of
 	;   my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/
 	;   f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly.s
 	;
@@ -18,6 +21,18 @@
 	; four waves of in-flight TDM requests per WGP.  This variant's 131072-byte
 	; declaration permits two workgroups only when SPI configures at least a
 	; 256 KiB LDS partition; the TCP_SPLIT request above selects that partition.
+	;
+	; This file is derived from the latest loadonly_lds128k.s candidate.
+	; Relative to that file, the only executable changes are the four TTMP6
+	; bitfield decodes below.  They preserve the downstream logical register
+	; contract while transposing the physical cluster axes:
+	;   s49 = logical N WG id    <- physical wg_y
+	;   s50 = logical M WG id    <- physical wg_x
+	;   s51 = logical N WG count <- physical nwg_y
+	;   s52 = logical M WG count <- physical nwg_x
+	; All scheduler, address, descriptor, TDM, LDS, wait, and barrier
+	; instructions after those decodes remain byte-for-byte structurally
+	; identical to the N-on-X/M-on-Y candidate.
 	;
 	; What changed relative to the load-only variant: ONLY the LDS destination
 	; immediates of the TDM descriptors (s33, and the s95..s98 slot registers)
@@ -39,9 +54,10 @@
 	; Deliberately unchanged from the load-only variant: every global-side
 	; descriptor field (s[34:35] base address, s[36:43] shape and strides),
 	; every tensor_load_to_lds, every s_wait_tensorcnt throttle, every
-	; workgroup and cluster barrier, the persistent X/Y scheduler, the batch-Z
-	; pointer prologue, the 28 K256 bodies, the tile decomposition and the
-	; 120-byte kernarg ABI.  The distinct global read volume is therefore the
+	; workgroup and cluster barrier, the persistent scheduler arithmetic after
+	; physical-to-logical axis decoding, the batch-Z pointer prologue, the 28
+	; K256 bodies, the logical tile decomposition and the 120-byte kernarg ABI.
+	; The distinct global read volume is therefore the
 	; same 2269446144 bytes at M=64, N=6144, K=7168, batch=96, which is what
 	; makes the two timings comparable.
 	;
@@ -113,10 +129,10 @@ f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps:
 	v_and_b32_e32 v0, 31, v0                                   ; 000000001984: 3600009F
 	v_readfirstlane_b32 s22, v3                                ; 000000001988: 7E2C0503
 	s_bfe_u32 s22, ttmp8, 0x50019                              ; 00000000198C: 9316FF74 00050019
-	s_bfe_u32 s52, ttmp6, 0x40010                              ; 000000001994: 9334FF72 00040010
-	s_bfe_u32 s51, ttmp6, 0x4000c                              ; 00000000199C: 9333FF72 0004000C
-	s_bfe_u32 s50, ttmp6, 0x40004                              ; 0000000019A4: 9332FF72 00040004
-	s_bfe_u32 s49, ttmp6, 0x40000                              ; 0000000019AC: 9331FF72 00040000
+	s_bfe_u32 s52, ttmp6, 0x4000c                              ; logical M nwg-1 <- physical nwg_x-1
+	s_bfe_u32 s51, ttmp6, 0x40010                              ; logical N nwg-1 <- physical nwg_y-1
+	s_bfe_u32 s50, ttmp6, 0x40000                              ; logical M WG id <- physical wg_x
+	s_bfe_u32 s49, ttmp6, 0x40004                              ; logical N WG id <- physical wg_y
 	s_add_co_i32 s52, s52, 1                                   ; 0000000019B4: 81348134
 	s_add_co_i32 s51, s51, 1                                   ; 0000000019B8: 81338133
 	s_and_b32 s24, ttmp7, 0xffff                               ; 0000000019BC: 8B18FF73 0000FFFF
@@ -126,13 +142,13 @@ f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps:
 	s_mov_b32 s70, s19                                         ; 0000000019D0: BEC60013
 	s_add_co_u32 s71, s19, 0x200                               ; 0000000019D4: 8047FF13 00000200
 	s_ctz_i32_b32 s25, s51                                     ; 0000000019DC: BE990833
-	s_add_co_i32 s25, s25, 8                                   ; N cluster span = nwg_x * 256
+	s_add_co_i32 s25, s25, 8                                   ; N cluster span = logical N WG count * 256
 	s_lshl_b32 s26, 1, s25                                     ; 0000000019E4: 841A1981
 	s_sub_co_u32 s26, s26, 1                                   ; 0000000019E8: 809A811A
 	s_add_co_u32 s61, s18, s26                                 ; 0000000019EC: 803D1A12
 	s_lshr_b32 s61, s61, s25                                   ; 0000000019F0: 853D193D
 	s_ctz_i32_b32 s25, s52                                     ; 0000000019F4: BE990834
-	s_add_co_i32 s25, s25, 6                                   ; M cluster span = nwg_y * 64
+	s_add_co_i32 s25, s25, 6                                   ; M cluster span = logical M WG count * 64
 	s_lshl_b32 s26, 1, s25                                     ; 0000000019FC: 841A1981
 	s_sub_co_u32 s26, s26, 1                                   ; 000000001A00: 809A811A
 	s_add_co_u32 s29, s17, s26                                 ; 000000001A04: 801D1A11
@@ -501,7 +517,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps:
 	s_or_b32 s42, s42, s25                                     ; 000000002C48: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 000000002C4C: BEA41094
 	s_mov_b32 s53, 1
-	s_lshl_b32 s53, s53, s49                                  ; B has no M reuse: local requester 1 << wg_x
+	s_lshl_b32 s53, s53, s49                                  ; B has no M reuse: requester 1 << logical N WG id
 	s_and_b32 s36, s36, 0xffff0000                             ; 000000002C90: 8B24FF24 FFFF0000
 	s_or_b32 s36, s53, s36                                     ; 000000002CA0: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000002CA4: BEA41295
@@ -781,7 +797,7 @@ f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps:
 	s_or_b32 s42, s42, s25                                     ; 0000000044F8: 8C2A192A
 	s_bitset0_b32 s36, 20                                      ; 0000000044FC: BEA41094
 	s_mov_b32 s53, 1
-	s_lshl_b32 s53, s53, s49                                  ; SB has no M reuse: local requester 1 << wg_x
+	s_lshl_b32 s53, s53, s49                                  ; SB has no M reuse: requester 1 << logical N WG id
 	s_and_b32 s36, s36, 0xffff0000                             ; 000000004540: 8B24FF24 FFFF0000
 	s_or_b32 s36, s53, s36                                     ; 000000004550: 8C242435
 	s_bitset1_b32 s36, 21                                      ; 000000004554: BEA41295

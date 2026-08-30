@@ -299,6 +299,7 @@ class BuildResult:
 
     code_object: Path
     commands: tuple[tuple[str, ...], ...]
+    patches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -821,6 +822,307 @@ def _run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return process
 
 
+# gfx1250 divides the 384 KiB per-WGP SRAM between the LDS partition and the
+# vector cache, and COMPUTE_PGM_RSRC3.TCP_SPLIT selects the division.  The
+# clang 22 assembler in the ROCm container exposes no directive for that field,
+# so an ISA source asks for a value with the absolute symbol below and the
+# linked code object is rewritten here, before ROCr loads it.  ROCr does not
+# validate RSRC3; the field is forwarded to CP/SPI as written.
+TCP_SPLIT_REQUEST_SYMBOL = "__aiter_tcp_split"
+
+KERNEL_DESCRIPTOR_SIZE = 64
+_KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET = 0
+_KD_COMPUTE_PGM_RSRC3_OFFSET = 44
+# Field positions match LLVM's AMDHSAKernelDescriptor.h for gfx12.
+_RSRC3_TCP_SPLIT_SHIFT = 18
+_RSRC3_TCP_SPLIT_MASK = 0x7
+_RSRC3_INST_PREF_SIZE_SHIFT = 4
+_RSRC3_INST_PREF_SIZE_MASK = 0xFF
+_ELF64_SECTION_HEADER_SIZE = 64
+_ELF64_SYMBOL_SIZE = 24
+_SHT_SYMTAB = 2
+_SHT_STRTAB = 3
+_SHT_NOBITS = 8
+_SHT_DYNSYM = 11
+
+
+def parse_requested_tcp_split(source: str) -> int | None:
+    """Read the optional ``.set __aiter_tcp_split, N`` resource request."""
+
+    matches = re.findall(
+        rf"(?m)^[ \t]*\.set[ \t]+{re.escape(TCP_SPLIT_REQUEST_SYMBOL)}[ \t]*,"
+        rf"[ \t]*(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:(?:[;#]|//).*)?$",
+        source,
+    )
+    if not matches:
+        return None
+    values = {int(value, 0) for value in matches}
+    if len(values) != 1:
+        raise GemmIsaRunnerError(
+            f"ISA sets {TCP_SPLIT_REQUEST_SYMBOL} to conflicting values "
+            f"{sorted(values)}"
+        )
+    value = values.pop()
+    if not 0 <= value <= _RSRC3_TCP_SPLIT_MASK:
+        raise GemmIsaRunnerError(
+            f".set {TCP_SPLIT_REQUEST_SYMBOL} must be in 0..."
+            f"{_RSRC3_TCP_SPLIT_MASK} because COMPUTE_PGM_RSRC3.TCP_SPLIT is "
+            f"bits [20:18], got {value}"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class _ElfSection:
+    index: int
+    name_offset: int
+    type: int
+    addr: int
+    offset: int
+    size: int
+    link: int
+    entsize: int
+
+
+def _elf64_sections(data: bytes, label: str) -> tuple[_ElfSection, ...]:
+    if len(data) < _ELF64_SECTION_HEADER_SIZE or data[:4] != b"\x7fELF":
+        raise GemmIsaRunnerError(f"{label} is not an ELF file")
+    if data[4] != 2:
+        raise GemmIsaRunnerError(
+            f"{label} is not ELFCLASS64 (EI_CLASS={data[4]})"
+        )
+    if data[5] != 1:
+        raise GemmIsaRunnerError(
+            f"{label} is not ELFDATA2LSB (EI_DATA={data[5]})"
+        )
+    (e_shoff,) = struct.unpack_from("<Q", data, 0x28)
+    e_shentsize, e_shnum = struct.unpack_from("<HH", data, 0x3A)
+    if e_shentsize != _ELF64_SECTION_HEADER_SIZE:
+        raise GemmIsaRunnerError(
+            f"{label} has unexpected e_shentsize {e_shentsize}, "
+            f"expected {_ELF64_SECTION_HEADER_SIZE}"
+        )
+    if e_shoff == 0 or e_shnum == 0:
+        raise GemmIsaRunnerError(f"{label} has no section header table")
+    if e_shoff + e_shnum * e_shentsize > len(data):
+        raise GemmIsaRunnerError(f"{label} section header table is truncated")
+    sections = []
+    for index in range(e_shnum):
+        (
+            name_offset,
+            kind,
+            _flags,
+            addr,
+            offset,
+            size,
+            link,
+            _info,
+            _align,
+            entsize,
+        ) = struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + index * e_shentsize)
+        if kind != _SHT_NOBITS and offset + size > len(data):
+            raise GemmIsaRunnerError(
+                f"{label} section {index} extends past the end of the file"
+            )
+        sections.append(
+            _ElfSection(index, name_offset, kind, addr, offset, size, link, entsize)
+        )
+    return tuple(sections)
+
+
+def _elf64_string(
+    data: bytes,
+    table: _ElfSection,
+    offset: int,
+    label: str,
+) -> str:
+    if table.type != _SHT_STRTAB:
+        raise GemmIsaRunnerError(
+            f"{label} section {table.index} is not a string table"
+        )
+    if offset >= table.size:
+        raise GemmIsaRunnerError(
+            f"{label} string offset {offset} is outside section {table.index}"
+        )
+    start = table.offset + offset
+    end = data.find(b"\x00", start, table.offset + table.size)
+    if end < 0:
+        raise GemmIsaRunnerError(
+            f"{label} string at offset {offset} is unterminated"
+        )
+    return data[start:end].decode("utf-8", errors="replace")
+
+
+def _find_kernel_descriptor_offset(
+    data: bytes,
+    sections: Sequence[_ElfSection],
+    kd_name: str,
+    label: str,
+) -> tuple[int, str]:
+    """Map ``<kernel>.kd`` to the single file offset holding its 64 bytes."""
+
+    origins: dict[int, str] = {}
+    symbol_tables = 0
+    for section in sections:
+        if section.type not in (_SHT_SYMTAB, _SHT_DYNSYM):
+            continue
+        if section.entsize != _ELF64_SYMBOL_SIZE:
+            raise GemmIsaRunnerError(
+                f"{label} symbol table {section.index} has sh_entsize "
+                f"{section.entsize}, expected {_ELF64_SYMBOL_SIZE}"
+            )
+        if section.link >= len(sections):
+            raise GemmIsaRunnerError(
+                f"{label} symbol table {section.index} links to missing "
+                f"string table {section.link}"
+            )
+        strtab = sections[section.link]
+        symbol_tables += 1
+        for index in range(section.size // _ELF64_SYMBOL_SIZE):
+            base = section.offset + index * _ELF64_SYMBOL_SIZE
+            st_name, _info, _other, st_shndx, st_value, st_size = (
+                struct.unpack_from("<IBBHQQ", data, base)
+            )
+            if st_name == 0:
+                continue
+            if _elf64_string(data, strtab, st_name, label) != kd_name:
+                continue
+            if st_size < KERNEL_DESCRIPTOR_SIZE:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} has st_size {st_size}, expected at "
+                    f"least {KERNEL_DESCRIPTOR_SIZE}"
+                )
+            if st_shndx == 0 or st_shndx >= len(sections):
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} has unusable st_shndx {st_shndx}"
+                )
+            host = sections[st_shndx]
+            if host.type == _SHT_NOBITS:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} lives in SHT_NOBITS section "
+                    f"{host.index}, which has no file bytes to patch"
+                )
+            if st_value < host.addr:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} st_value 0x{st_value:x} is below "
+                    f"section {host.index} sh_addr 0x{host.addr:x}"
+                )
+            delta = st_value - host.addr
+            if delta + KERNEL_DESCRIPTOR_SIZE > host.size:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} does not fit inside section "
+                    f"{host.index}"
+                )
+            origins.setdefault(
+                host.offset + delta,
+                f"section {host.index} via symbol table {section.index}",
+            )
+    if symbol_tables == 0:
+        raise GemmIsaRunnerError(
+            f"{label} has neither .symtab nor .dynsym, so {kd_name} cannot be "
+            f"located"
+        )
+    if not origins:
+        raise GemmIsaRunnerError(f"{label} has no symbol named {kd_name}")
+    if len(origins) != 1:
+        found = ", ".join(
+            f"0x{offset:x} ({origin})" for offset, origin in sorted(origins.items())
+        )
+        raise GemmIsaRunnerError(
+            f"{label} resolves {kd_name} to {len(origins)} distinct file "
+            f"offsets: {found}"
+        )
+    return next(iter(origins.items()))
+
+
+def patch_code_object_tcp_split(
+    code_object: Path,
+    kernel_symbol: str,
+    tcp_split: int,
+    expected_group_segment_fixed_size: int,
+) -> str:
+    """Rewrite COMPUTE_PGM_RSRC3.TCP_SPLIT in a linked code object."""
+
+    if not 0 <= tcp_split <= _RSRC3_TCP_SPLIT_MASK:
+        raise GemmIsaRunnerError(
+            f"TCP_SPLIT must be in 0...{_RSRC3_TCP_SPLIT_MASK}, got {tcp_split}"
+        )
+    label = str(code_object)
+    try:
+        data = bytearray(code_object.read_bytes())
+    except OSError as exc:
+        raise GemmIsaRunnerError(
+            f"failed to read code object {label}: {exc}"
+        ) from exc
+    sections = _elf64_sections(bytes(data), label)
+    kd_name = f"{_validate_symbol_token(kernel_symbol, 'kernel symbol')}.kd"
+    offset, origin = _find_kernel_descriptor_offset(
+        bytes(data),
+        sections,
+        kd_name,
+        label,
+    )
+
+    (group_segment,) = struct.unpack_from(
+        "<I",
+        data,
+        offset + _KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET,
+    )
+    if group_segment != expected_group_segment_fixed_size:
+        raise GemmIsaRunnerError(
+            f"{label}: {kd_name} declares group_segment_fixed_size "
+            f"{group_segment}, but the ISA descriptor declares "
+            f"{expected_group_segment_fixed_size}; refusing to patch a "
+            f"descriptor that is not the one that was assembled"
+        )
+    (old_rsrc3,) = struct.unpack_from(
+        "<I",
+        data,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+    )
+    old_split = (old_rsrc3 >> _RSRC3_TCP_SPLIT_SHIFT) & _RSRC3_TCP_SPLIT_MASK
+    inst_pref_size = (
+        old_rsrc3 >> _RSRC3_INST_PREF_SIZE_SHIFT
+    ) & _RSRC3_INST_PREF_SIZE_MASK
+    new_rsrc3 = (
+        old_rsrc3 & ~(_RSRC3_TCP_SPLIT_MASK << _RSRC3_TCP_SPLIT_SHIFT)
+    ) | (tcp_split << _RSRC3_TCP_SPLIT_SHIFT)
+    struct.pack_into(
+        "<I",
+        data,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+        new_rsrc3,
+    )
+    try:
+        code_object.write_bytes(bytes(data))
+        verified = code_object.read_bytes()
+    except OSError as exc:
+        raise GemmIsaRunnerError(
+            f"failed to rewrite code object {label}: {exc}"
+        ) from exc
+    if verified != bytes(data):
+        raise GemmIsaRunnerError(
+            f"{label} does not read back byte-identical after patching"
+        )
+    (read_back,) = struct.unpack_from(
+        "<I",
+        verified,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+    )
+    if read_back != new_rsrc3:
+        raise GemmIsaRunnerError(
+            f"{label}: RSRC3 reads back 0x{read_back:08x}, expected "
+            f"0x{new_rsrc3:08x}"
+        )
+    return (
+        f"patched TCP_SPLIT {old_split} -> {tcp_split}, "
+        f"RSRC3 0x{old_rsrc3:08x} -> 0x{new_rsrc3:08x} "
+        f"(INST_PREF_SIZE {inst_pref_size} and every other RSRC3 bit "
+        f"unchanged; group_segment_fixed_size {group_segment}; {kd_name} at "
+        f"file offset 0x{offset:x}, {origin})"
+    )
+
+
 def compile_isa(
     isa: Path,
     clang: Path,
@@ -869,7 +1171,27 @@ def compile_isa(
             f"clang reported success but did not create a non-empty code object: "
             f"{code_object}"
         )
-    return BuildResult(code_object=code_object, commands=(assemble, link))
+    source = _read_isa_source(isa)
+    requested_tcp_split = parse_requested_tcp_split(source)
+    patches: tuple[str, ...] = ()
+    if requested_tcp_split is not None:
+        kernel_symbol = resolve_kernel_symbol_from_text(source, symbol)
+        patches = (
+            patch_code_object_tcp_split(
+                code_object,
+                kernel_symbol,
+                requested_tcp_split,
+                _descriptor_int(
+                    _descriptor_body(source, kernel_symbol),
+                    "amdhsa_group_segment_fixed_size",
+                ),
+            ),
+        )
+    return BuildResult(
+        code_object=code_object,
+        commands=(assemble, link),
+        patches=patches,
+    )
 
 
 def _is_power_of_two(value: int) -> bool:
@@ -1398,6 +1720,204 @@ amdhsa.version:
                 ) from exc
         else:
             raise AssertionError(f"{label} fixture did not fail")
+
+    if parse_requested_tcp_split(".text\n    s_endpgm\n") is not None:
+        raise AssertionError("a source without the request declared one")
+    requested = parse_requested_tcp_split(
+        f"\t.set {TCP_SPLIT_REQUEST_SYMBOL}, 5 ; 256 KiB LDS partition\n"
+    )
+    if requested != 5:
+        raise AssertionError(f"TCP_SPLIT request parsed as {requested!r}")
+    for label, text, message_fragment in (
+        (
+            "an out-of-range request",
+            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 8\n",
+            "bits [20:18]",
+        ),
+        (
+            "two disagreeing requests",
+            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 5\n"
+            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 4\n",
+            "conflicting values",
+        ),
+    ):
+        try:
+            parse_requested_tcp_split(text)
+        except GemmIsaRunnerError as exc:
+            if message_fragment not in str(exc):
+                raise AssertionError(
+                    f"{label} raised unexpected error: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(f"{label} was accepted")
+
+    def kernel_descriptor_elf(kd_name: str, group_segment: int, rsrc3: int) -> bytes:
+        """A minimal ELF64 shared object holding one kernel descriptor."""
+
+        descriptor = bytearray(KERNEL_DESCRIPTOR_SIZE)
+        struct.pack_into(
+            "<I",
+            descriptor,
+            _KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET,
+            group_segment,
+        )
+        struct.pack_into("<I", descriptor, _KD_COMPUTE_PGM_RSRC3_OFFSET, rsrc3)
+        strtab = b"\x00" + kd_name.encode("utf-8") + b"\x00"
+        shstrtab = b"\x00.rodata\x00.symtab\x00.strtab\x00.shstrtab\x00"
+        rodata_addr = 0x1000
+        rodata_offset = _ELF64_SECTION_HEADER_SIZE
+        symtab_offset = rodata_offset + len(descriptor)
+        symbols = bytearray(_ELF64_SYMBOL_SIZE)
+        symbols += struct.pack(
+            "<IBBHQQ",
+            1,
+            (1 << 4) | 10,
+            0,
+            1,
+            rodata_addr,
+            KERNEL_DESCRIPTOR_SIZE,
+        )
+        strtab_offset = symtab_offset + len(symbols)
+        shstrtab_offset = strtab_offset + len(strtab)
+        shoff = shstrtab_offset + len(shstrtab)
+        header = bytearray(_ELF64_SECTION_HEADER_SIZE)
+        header[0:4] = b"\x7fELF"
+        header[4] = 2  # ELFCLASS64
+        header[5] = 1  # ELFDATA2LSB
+        header[6] = 1  # EV_CURRENT
+        struct.pack_into("<HH", header, 0x10, 3, 0xE0)  # ET_DYN, EM_AMDGPU
+        struct.pack_into("<Q", header, 0x28, shoff)
+        struct.pack_into(
+            "<HHH",
+            header,
+            0x3A,
+            _ELF64_SECTION_HEADER_SIZE,
+            5,
+            4,
+        )
+
+        def section(
+            name_offset: int,
+            kind: int,
+            addr: int,
+            offset: int,
+            size: int,
+            link: int,
+            entsize: int,
+        ) -> bytes:
+            return struct.pack(
+                "<IIQQQQIIQQ",
+                name_offset,
+                kind,
+                0,
+                addr,
+                offset,
+                size,
+                link,
+                0,
+                1,
+                entsize,
+            )
+
+        headers = (
+            section(0, 0, 0, 0, 0, 0, 0)
+            + section(
+                shstrtab.index(b".rodata"),
+                1,
+                rodata_addr,
+                rodata_offset,
+                len(descriptor),
+                0,
+                0,
+            )
+            + section(
+                shstrtab.index(b".symtab"),
+                _SHT_SYMTAB,
+                0,
+                symtab_offset,
+                len(symbols),
+                3,
+                _ELF64_SYMBOL_SIZE,
+            )
+            + section(
+                shstrtab.index(b".strtab"),
+                _SHT_STRTAB,
+                0,
+                strtab_offset,
+                len(strtab),
+                0,
+                0,
+            )
+            + section(
+                shstrtab.index(b".shstrtab"),
+                _SHT_STRTAB,
+                0,
+                shstrtab_offset,
+                len(shstrtab),
+                0,
+                0,
+            )
+        )
+        return bytes(header + descriptor + symbols + strtab + shstrtab + headers)
+
+    with tempfile.TemporaryDirectory(prefix="gemm_isa_runner_selftest_") as temp:
+        fixture = Path(temp) / "fixture.co"
+        original = kernel_descriptor_elf(f"{current_symbol}.kd", 131072, 0x00000410)
+        fixture.write_bytes(original)
+        message = patch_code_object_tcp_split(fixture, current_symbol, 5, 131072)
+        if "TCP_SPLIT 0 -> 5" not in message:
+            raise AssertionError(f"unexpected TCP_SPLIT report: {message}")
+        if "0x00000410 -> 0x00140410" not in message:
+            raise AssertionError(f"unexpected RSRC3 report: {message}")
+        patched = fixture.read_bytes()
+        rsrc3_at = _ELF64_SECTION_HEADER_SIZE + _KD_COMPUTE_PGM_RSRC3_OFFSET
+        if (
+            patched[:rsrc3_at] != original[:rsrc3_at]
+            or patched[rsrc3_at + 4:] != original[rsrc3_at + 4:]
+        ):
+            raise AssertionError("the patch changed bytes outside RSRC3")
+        (patched_rsrc3,) = struct.unpack_from("<I", patched, rsrc3_at)
+        if patched_rsrc3 != 0x00140410:
+            raise AssertionError(f"patched RSRC3 is 0x{patched_rsrc3:08x}")
+        repeat = patch_code_object_tcp_split(fixture, current_symbol, 5, 131072)
+        if "TCP_SPLIT 5 -> 5" not in repeat or fixture.read_bytes() != patched:
+            raise AssertionError(f"re-patching was not idempotent: {repeat}")
+
+        not_elf = Path(temp) / "not_elf.co"
+        not_elf.write_bytes(b"this is not a code object")
+        for label, arguments, message_fragment in (
+            (
+                "a descriptor whose LDS size disagrees with the ISA",
+                (fixture, current_symbol, 5, 206848),
+                "refusing to patch",
+            ),
+            (
+                "a code object without the requested kernel",
+                (fixture, KERNEL_SYMBOL_128, 5, 131072),
+                "has no symbol named",
+            ),
+            (
+                "an out-of-range TCP_SPLIT",
+                (fixture, current_symbol, 8, 131072),
+                "TCP_SPLIT must be in",
+            ),
+            (
+                "a file that is not an ELF object",
+                (not_elf, current_symbol, 5, 131072),
+                "is not an ELF file",
+            ),
+        ):
+            try:
+                patch_code_object_tcp_split(*arguments)
+            except GemmIsaRunnerError as exc:
+                if message_fragment not in str(exc):
+                    raise AssertionError(
+                        f"{label} raised unexpected error: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(f"{label} was patched anyway")
+        if fixture.read_bytes() != patched:
+            raise AssertionError("a rejected patch still modified the fixture")
 
     timing_calls: list[tuple[Any, ...]] = []
 
@@ -2447,6 +2967,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = compile_isa(isa, clang, Path(temp), symbol)
             for command in result.commands:
                 print(f"[gemm_isa_runner] {_format_command(command)}")
+            for patch in result.patches:
+                print(f"[gemm_isa_runner] {patch}")
             print(f"[gemm_isa_runner] loading kernel symbol: {symbol}")
 
             if args.co_out or args.keep_co:
