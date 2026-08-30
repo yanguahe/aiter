@@ -7,9 +7,9 @@ descriptor or metadata.  It assembles and links the source, loads the resulting
 code object once, and then launches the selected symbol on PyTorch's current
 HIP stream.
 
-The input/reference construction and numerical reporting deliberately reuse
-``op_tests/test_f4gemm.py``.  The launch ABI and each profile's persistent
-cluster geometry mirror ``csrc/py_itfs_cu/asm_f4gemm.cu``.
+The input/reference construction embeds the production MXFP4 algorithm.  The
+launch ABI and each profile's persistent cluster geometry mirror
+``csrc/py_itfs_cu/asm_f4gemm.cu``.
 
 Typical use from the aiter repository root::
 
@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import os
 import re
 import shlex
@@ -40,14 +41,6 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-
-
-_HERE = Path(__file__).resolve().parent
-_REPO = _HERE.parents[1]
-for _path in (_REPO, _REPO / "op_tests"):
-    _text = str(_path)
-    if _text not in sys.path:
-        sys.path.insert(0, _text)
 
 
 ARCH = "gfx1250"
@@ -376,6 +369,20 @@ class ContractReport:
     geometry: LaunchGeometry
     resources: AssemblyResources
     stores_to_d: bool
+    dynamic_lds_bytes: int = 0
+
+
+def _format_lds_kb(byte_count: int) -> str:
+    """Format LDS using 1 KB = 1024 bytes."""
+
+    if byte_count < 0:
+        raise GemmIsaRunnerError(
+            f"LDS byte count must be non-negative, got {byte_count}"
+        )
+    whole_kb, remainder = divmod(byte_count, 1024)
+    if remainder == 0:
+        return str(whole_kb)
+    return f"{byte_count / 1024:.10f}".rstrip("0").rstrip(".")
 
 
 def print_contract(report: ContractReport) -> None:
@@ -388,15 +395,16 @@ def print_contract(report: ContractReport) -> None:
     physical_cluster_grid = (*geometry.cluster_grid, batch)
     clusters_per_plane = geometry.cluster_grid[0] * geometry.cluster_grid[1]
     physical_wgs_per_plane = geometry.grid[0] * geometry.grid[1]
-    effective_lds = (
-        f"{resources.metadata_lds} (metadata/AQL; "
-        f"descriptor={resources.descriptor_lds})"
+    static_lds = (
+        f"{_format_lds_kb(resources.metadata_lds)} KB (metadata/AQL; "
+        f"descriptor={_format_lds_kb(resources.descriptor_lds)} KB)"
         if resources.descriptor_lds != resources.metadata_lds
-        else str(resources.metadata_lds)
+        else f"{_format_lds_kb(resources.metadata_lds)} KB"
     )
+    total_lds = resources.metadata_lds + report.dynamic_lds_bytes
     wgs_per_wgp = (
-        str(MAX_LDS_PER_WGP // resources.metadata_lds)
-        if resources.metadata_lds
+        str(MAX_LDS_PER_WGP // total_lds)
+        if total_lds
         else "n/a"
     )
     print(
@@ -423,8 +431,10 @@ def print_contract(report: ContractReport) -> None:
     )
     print(
         f"{prefix} ABI={report.profile.abi_name}; "
-        f"kernarg={resources.kernarg_size} bytes; fixed LDS={effective_lds}; "
-        f"WGs/WGP by LDS={wgs_per_wgp} (LDS budget {MAX_LDS_PER_WGP}); "
+        f"kernarg={resources.kernarg_size} bytes; static LDS={static_lds}; "
+        f"dynamic LDS={_format_lds_kb(report.dynamic_lds_bytes)} KB; "
+        f"WGs/WGP by LDS={wgs_per_wgp} "
+        f"(LDS budget={_format_lds_kb(MAX_LDS_PER_WGP)} KB); "
         f"VGPR/SGPR metadata={resources.metadata_vgpr}/"
         f"{resources.metadata_sgpr}; stores to D={report.stores_to_d}"
     )
@@ -442,10 +452,109 @@ def isa_writes_output(source: str) -> bool:
     return False
 
 
+def _run_torch_mxfp4_reference(
+    xq: Any,
+    wq: Any,
+    xs: Any,
+    ws: Any,
+    dtype: Any,
+) -> Any:
+    """Decode packed MXFP4 inputs and compute the FP32 reference."""
+
+    from aiter.utility import fp4_utils
+
+    x_f32 = fp4_utils.mxfp4_to_f32(xq)
+    w_f32 = fp4_utils.mxfp4_to_f32(wq)
+    xs_f32 = fp4_utils.e8m0_to_f32(xs).repeat_interleave(
+        MXFP4_SCALE_BLOCK,
+        dim=1,
+    )
+    ws_f32 = fp4_utils.e8m0_to_f32(ws).repeat_interleave(
+        MXFP4_SCALE_BLOCK,
+        dim=1,
+    )
+    return ((x_f32 * xs_f32) @ (w_f32 * ws_f32).T).to(dtype)
+
+
+def prepare_mxfp4_inputs_and_reference(
+    m: int,
+    n: int,
+    k: int,
+    apre: int,
+    dtype: Any,
+    init: str,
+) -> tuple[dict[str, Any], Any]:
+    """Prepare the production MXFP4 inputs and decoded FP32 reference."""
+
+    import aiter
+    import torch  # type: ignore[import-not-found]
+    from aiter.ops.shuffle import shuffle_scale_f4, shuffle_weight_f4
+
+    device = torch.device("cuda", torch.cuda.current_device())
+    if init == "random":
+        quant = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+        x = torch.randn((m, k), dtype=dtype, device=device)
+        w = torch.randn((n, k), dtype=dtype, device=device)
+        xq, xs = quant(x, shuffle=False)
+        wq, ws = quant(w, shuffle=False)
+        xq, wq = xq.view(torch.uint8), wq.view(torch.uint8)
+        xs, ws = xs.view(torch.uint8), ws.view(torch.uint8)
+    else:
+        xq = torch.full(
+            (m, k // 2),
+            0x22,
+            dtype=torch.uint8,
+            device=device,
+        )
+        wq = torch.full(
+            (n, k // 2),
+            0x33,
+            dtype=torch.uint8,
+            device=device,
+        )
+        xs = torch.full(
+            (m, k // MXFP4_SCALE_BLOCK),
+            0x7F,
+            dtype=torch.uint8,
+            device=device,
+        )
+        ws = torch.full(
+            (n, k // MXFP4_SCALE_BLOCK),
+            0x7F,
+            dtype=torch.uint8,
+            device=device,
+        )
+
+    reference = _run_torch_mxfp4_reference(
+        xq,
+        wq,
+        xs,
+        ws,
+        dtype,
+    )
+    inputs = {
+        "A": shuffle_weight_f4(xq) if apre else xq,
+        "B": shuffle_weight_f4(wq),
+        "sA": shuffle_scale_f4(xs, 7),
+        "sB": shuffle_scale_f4(ws, 7),
+        "gA": None,
+        "gB": None,
+    }
+    return inputs, reference
+
+
+def tensor_blake2b128(tensor: Any) -> str:
+    """Hash raw contiguous tensor bytes without dtype/shape metadata."""
+
+    import torch  # type: ignore[import-not-found]
+
+    raw = tensor.detach().contiguous().view(torch.uint8).cpu()
+    return hashlib.blake2b(raw.numpy(), digest_size=16).hexdigest()
+
+
 @dataclass(frozen=True)
 class _Dependencies:
     torch: Any
-    f4_test: Any
     check_allclose: Any
     get_gfx: Any
 
@@ -1414,7 +1523,7 @@ def make_launch_geometry(
     if k % scale_shuffle_k:
         raise GemmIsaRunnerError(
             f"K={k} must be divisible by {scale_shuffle_k} for the "
-            "test_f4gemm MXFP4 scale shuffle"
+            "MXFP4 scale shuffle"
         )
     if k % profile.k_multiple:
         raise GemmIsaRunnerError(
@@ -1659,7 +1768,7 @@ def _make_hip_launch_config(
         blockDimX=geometry.block[0],
         blockDimY=geometry.block[1],
         blockDimZ=geometry.block[2],
-        # The assembly descriptor owns its fixed LDS segment; no dynamic LDS.
+        # The assembly descriptor owns its static LDS segment; no dynamic LDS.
         sharedMemBytes=0,
         hStream=stream,
         attrs=ctypes.cast(
@@ -1916,16 +2025,14 @@ def _load_dependencies(device: int) -> _Dependencies:
         ) from exc
 
     try:
-        import test_f4gemm as f4_test  # type: ignore[import-not-found]
         from aiter.jit.utils.chip_info import get_gfx_runtime
         from aiter.test_common import checkAllclose
     except ImportError as exc:
         raise GemmIsaRunnerError(
-            f"failed to import aiter from repository root {_REPO}: {exc}"
+            f"failed to import aiter runtime dependencies: {exc}"
         ) from exc
     return _Dependencies(
         torch=torch,
-        f4_test=f4_test,
         check_allclose=checkAllclose,
         get_gfx=get_gfx_runtime,
     )
@@ -2193,9 +2300,7 @@ def _run_gemm(
         # Re-seed every input preparation so results do not depend on run order.
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
-        # This is the exact test_f4gemm.py path: one per_1x32 quantization,
-        # one FP32 decoded reference matmul, and the same A/B/scale shuffles.
-        inputs, reference = dependencies.f4_test._prep_mxfp4(
+        inputs, reference = prepare_mxfp4_inputs_and_reference(
             m,
             n,
             k,
@@ -2204,7 +2309,7 @@ def _run_gemm(
             args.init,
         )
         # The digest forces reference/input preparation to finish before timing.
-        reference_hash = dependencies.f4_test._tensor_blake2b128(reference)
+        reference_hash = tensor_blake2b128(reference)
         output = torch.empty((m, n), dtype=dtype, device=inputs["A"].device)
         stream = torch.cuda.current_stream(args.device)
         payload = pack_mxfp4_kernargs(
@@ -2255,7 +2360,7 @@ def _run_gemm(
         atol=1.0,
         msg="mxfp4 gemm_a4w4 ISA runner",
     )
-    output_hash = dependencies.f4_test._tensor_blake2b128(timed_output)
+    output_hash = tensor_blake2b128(timed_output)
     max_err_info, rel_l2 = float32_error_metrics(
         reference,
         timed_output,
@@ -2422,6 +2527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 batch=1,
                 geometry=geometry,
                 resources=resources,
+                dynamic_lds_bytes=0,
                 stores_to_d=isa_writes_output(source),
             )
         )

@@ -135,7 +135,7 @@ MAB_PROFILE = single.KernelProfile(
     persistent_grid_y=256,
     apre=1,
     abi_name="mab-tdm-preload-v1-observed-112",
-    # These are the 64-byte descriptor values.  The metadata-only fixed LDS is
+    # These are the 64-byte descriptor values.  The metadata-only static LDS is
     # checked separately because the original object deliberately differs.
     kernarg_size=MAB_KERNARG_SIZE,
     kernarg_layout=MAB_KERNARG_LAYOUT,
@@ -613,7 +613,7 @@ def validate_batch_assembly_contract_from_text(
     )
     if resources.metadata_lds == 0:
         raise single.GemmIsaRunnerError(
-            f"{BATCH_KERNEL_SYMBOL}: fixed LDS must be positive"
+            f"{BATCH_KERNEL_SYMBOL}: static LDS must be positive"
         )
     return resources
 
@@ -777,7 +777,6 @@ def _runtime_batch_strides(
 
 
 def _prepare_batched_inputs(
-    dependencies: Any,
     torch_module: Any,
     *,
     batch: int,
@@ -789,7 +788,7 @@ def _prepare_batched_inputs(
     init: str,
 ) -> tuple[dict[str, Any], Any]:
     names = ("A", "B", "sA", "sB")
-    first_inputs, first_reference = dependencies.f4_test._prep_mxfp4(
+    first_inputs, first_reference = single.prepare_mxfp4_inputs_and_reference(
         m,
         n,
         k,
@@ -827,7 +826,7 @@ def _prepare_batched_inputs(
     del first_inputs, first_reference
 
     for index in range(1, batch):
-        inputs_i, reference_i = dependencies.f4_test._prep_mxfp4(
+        inputs_i, reference_i = single.prepare_mxfp4_inputs_and_reference(
             m,
             n,
             k,
@@ -1189,7 +1188,6 @@ def _run_batch_gemm(
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         inputs, reference = _prepare_batched_inputs(
-            dependencies,
             torch,
             batch=batch,
             m=m,
@@ -1199,7 +1197,7 @@ def _run_batch_gemm(
             dtype=dtype,
             init=args.init,
         )
-        reference_hash = dependencies.f4_test._tensor_blake2b128(reference)
+        reference_hash = single.tensor_blake2b128(reference)
         output = torch.empty(
             (batch, m, n),
             dtype=dtype,
@@ -1315,7 +1313,7 @@ def _run_batch_gemm(
         )
         validation = BatchValidation(
             reference_hash=reference_hash,
-            output_hash=dependencies.f4_test._tensor_blake2b128(timed_output),
+            output_hash=single.tensor_blake2b128(timed_output),
             error=error,
             max_abs=max_err_info[2],
             max_err_info=max_err_info,
@@ -1507,6 +1505,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 batch=args.batch,
                 geometry=geometry,
                 resources=resources,
+                dynamic_lds_bytes=0,
                 stores_to_d=writes_output,
             )
         )
