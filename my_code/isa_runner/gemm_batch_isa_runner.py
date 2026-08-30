@@ -162,17 +162,8 @@ MAB_RESTORED_MNEMONICS = (
     "v_cvt_pk_f16_f32 v50, v52 /*v308*/, v53 /*v309*/",
     "v_cvt_pk_f16_f32 v51, v54 /*v310*/, v55 /*v311*/",
 )
-MAB_DEFAULT_CLANG = Path(
-    "/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang"
-)
-MAB_LLVM_RUNTIME_LIBRARIES = (
-    Path(
-        "/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/"
-        "rocm_sysdeps/lib"
-    ),
-    Path("/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib"),
-    Path("/opt/rocm/lib"),
-)
+MAB_DEFAULT_CLANG = single.DEFAULT_CLANG
+MAB_LLVM_RUNTIME_LIBRARIES = single.DEFAULT_CLANG_RUNTIME_LIBRARIES
 MAB_KERNARG_LAYOUT = (
     ("sizeC", 0, "Q"),
     ("sizeA", 8, "Q"),
@@ -1512,9 +1503,13 @@ def run_static_contract_checks(
     mxny_candidate_source: str | None = None,
     mab_source: str | None = None,
 ) -> None:
-    """CPU-only checks for ABI, geometry, overflow, and compatibility."""
+    """CPU-only checks for contracts, compatibility, and clang selection."""
 
     single.run_static_contract_checks()
+    if MAB_DEFAULT_CLANG != single.DEFAULT_CLANG:
+        raise AssertionError(
+            "batch and single runners use different fixed default clang paths"
+        )
     mab_geometry = make_mab_launch_geometry(*MAB_SHAPE, MAB_BATCH)
     if (
         mab_geometry.grid != MAB_GRID
@@ -2232,9 +2227,25 @@ def run_static_contract_checks(
 
     parser = _build_parser()
     defaults = parser.parse_args(["--isa", "fixture.s"])
-    if defaults.batch != 1 or defaults.grid_layout != DEFAULT_GRID_LAYOUT:
+    if (
+        defaults.batch != 1
+        or defaults.grid_layout != DEFAULT_GRID_LAYOUT
+        or defaults.clang is not None
+    ):
         raise AssertionError(
-            f"unexpected default batch/grid layout: {defaults}"
+            f"unexpected default batch/grid layout/clang: {defaults}"
+        )
+    clang_action = next(
+        action for action in parser._actions if action.dest == "clang"
+    )
+    clang_help = clang_action.help or ""
+    if (
+        str(MAB_DEFAULT_CLANG) not in clang_help
+        or "no ROCm/PATH fallback" not in clang_help
+    ):
+        raise AssertionError(
+            f"batch --clang help does not describe the fixed-only policy: "
+            f"{clang_help}"
         )
     explicit = parser.parse_args(
         [
@@ -3076,8 +3087,8 @@ def _build_parser() -> argparse.ArgumentParser:
             )
         elif action.dest == "clang":
             action.help = (
-                "AMDGPU clang executable (default: "
-                f"{MAB_DEFAULT_CLANG}, then the standard ROCm/PATH fallback)"
+                "AMDGPU clang executable (explicit --clang path/name; "
+                f"otherwise fixed {MAB_DEFAULT_CLANG}; no ROCm/PATH fallback)"
             )
     parser.add_argument(
         "--batch",
@@ -3114,13 +3125,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _select_clang(override: str | None) -> tuple[Path, bool]:
-    """Select clang and report whether it needs the in-tree LLVM libraries."""
+    """Apply the single-runner clang policy and report runtime-library needs."""
 
-    default_resolved = MAB_DEFAULT_CLANG.resolve()
-    if override is None and MAB_DEFAULT_CLANG.is_file():
-        return default_resolved, True
     clang = single._resolve_clang(override)
-    return clang, clang.resolve() == default_resolved
+    return clang, single._clang_uses_default_runtime_libraries(clang)
 
 
 def _prepend_llvm_runtime_libraries() -> None:
@@ -3191,7 +3199,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "batch=1 compatibility, both physical axis layouts, adaptive "
                 "geometry/task coverage, strict ISA markers, 56-instruction "
                 "TDM equivalence, overflow gates, HIP launch config, fixed "
-                "MAB ABI/geometry/body, and repository ISA contracts"
+                "clang policy, MAB ABI/geometry/body, and repository ISA "
+                "contracts"
             )
             return 0
 

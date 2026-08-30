@@ -52,7 +52,17 @@ for _path in (_REPO, _REPO / "op_tests"):
 
 ARCH = "gfx1250"
 CODE_OBJECT_VERSION = 6
-DEFAULT_CLANG = Path("/opt/rocm/llvm/bin/clang")
+DEFAULT_CLANG = Path(
+    "/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang"
+)
+DEFAULT_CLANG_RUNTIME_LIBRARIES = (
+    Path(
+        "/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/"
+        "rocm_sysdeps/lib"
+    ),
+    Path("/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib"),
+    Path("/opt/rocm/lib"),
+)
 DEFAULT_SYMBOL: str | None = None
 KERNEL_SYMBOL_256 = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
 KERNEL_SYMBOL_128 = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
@@ -769,9 +779,14 @@ def validate_assembly_contract_from_text(
 
 
 def _resolve_clang(override: str | None) -> Path:
-    """Find clang, preferring /opt/rocm/llvm/bin/clang as requested."""
+    """Resolve explicit ``--clang`` or require the fixed default clang.
 
-    if override:
+    An explicit override is interpreted as a path first and then as a command
+    name for ``shutil.which``.  Without an override, no ROCm or PATH fallback
+    is attempted.
+    """
+
+    if override is not None:
         expanded = os.path.expandvars(os.path.expanduser(override))
         candidate = Path(expanded)
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -780,24 +795,38 @@ def _resolve_clang(override: str | None) -> Path:
         if found:
             return Path(found).resolve()
         raise GemmIsaRunnerError(
-            f"--clang is not an executable file and was not found on PATH: {override}"
+            f"--clang is neither an executable file nor a command found on "
+            f"PATH: {override}"
         )
 
-    candidates = [DEFAULT_CLANG]
-    rocm_path = os.environ.get("ROCM_PATH")
-    if rocm_path:
-        candidates.append(Path(rocm_path) / "llvm" / "bin" / "clang")
-    for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate.resolve()
-    found = shutil.which("clang")
-    if found:
-        return Path(found).resolve()
-    searched = ", ".join(str(path) for path in candidates)
+    if DEFAULT_CLANG.is_file() and os.access(DEFAULT_CLANG, os.X_OK):
+        return DEFAULT_CLANG.resolve()
     raise GemmIsaRunnerError(
-        f"AMDGPU clang was not found (checked {searched}, then PATH); "
-        "pass --clang explicitly"
+        f"fixed default AMDGPU clang is missing or not executable: "
+        f"{DEFAULT_CLANG}; pass --clang explicitly"
     )
+
+
+def _clang_uses_default_runtime_libraries(clang: Path) -> bool:
+    """Return whether clang is the fixed build with extra runtime dependencies."""
+
+    return clang.resolve() == DEFAULT_CLANG.resolve()
+
+
+def _prepend_default_clang_runtime_libraries() -> None:
+    """Prepend fixed-clang runtime dependencies without dropping user entries."""
+
+    requested = [str(path) for path in DEFAULT_CLANG_RUNTIME_LIBRARIES]
+    existing = [
+        entry
+        for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+        if entry
+    ]
+    combined: list[str] = []
+    for entry in (*requested, *existing):
+        if entry not in combined:
+            combined.append(entry)
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(combined)
 
 
 def _run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -1480,7 +1509,26 @@ def _make_hip_launch_config(
 
 
 def run_static_contract_checks() -> None:
-    """CPU-only fixture for every ABI offset and the default launch geometry."""
+    """CPU-only fixture for ABI, geometry, and the fixed clang policy."""
+
+    expected_clang = Path(
+        "/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang"
+    )
+    if DEFAULT_CLANG != expected_clang:
+        raise AssertionError(
+            f"default clang changed to {DEFAULT_CLANG}, expected {expected_clang}"
+        )
+    clang_action = next(
+        action for action in _build_parser()._actions if action.dest == "clang"
+    )
+    clang_help = clang_action.help or ""
+    if (
+        str(DEFAULT_CLANG) not in clang_help
+        or "no ROCm/PATH fallback" not in clang_help
+    ):
+        raise AssertionError(
+            f"--clang help does not describe the fixed-only policy: {clang_help}"
+        )
 
     def symbol_fixture(symbol: str) -> str:
         return f"""
@@ -2860,7 +2908,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--clang",
-        help="AMDGPU clang executable (default: /opt/rocm/llvm/bin/clang, then PATH)",
+        help=(
+            "AMDGPU clang executable (explicit --clang path/name; otherwise "
+            f"fixed {DEFAULT_CLANG}; no ROCm/PATH fallback)"
+        ),
     )
     parser.add_argument(
         "--symbol",
@@ -2962,6 +3013,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         geometry = make_launch_geometry(*args.shape, profile=profile)
         _print_selected_contract(isa, symbol, profile, geometry)
         clang = _resolve_clang(args.clang)
+        if _clang_uses_default_runtime_libraries(clang):
+            _prepend_default_clang_runtime_libraries()
 
         with tempfile.TemporaryDirectory(prefix="gemm_isa_runner_") as temp:
             result = compile_isa(isa, clang, Path(temp), symbol)
