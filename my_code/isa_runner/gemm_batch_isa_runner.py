@@ -22,9 +22,11 @@ The original symbol is rejected for ``--batch > 1``; use the
 ``..._64x256_1x4_batch_ps`` source instead.
 
 The independent ``mab_tdm_gemm`` mode is intentionally separate from those
-MXFP4 paths.  It reproduces the original MAB launch for exactly
-M=16,N=65536,K=16384,batch=1 with FP16 inputs/output, a 1x4 workgroup cluster,
-and the launcher-observed 112-byte preload ABI.
+MXFP4 paths.  It uses FP16 inputs/output, a 1x4 workgroup cluster, and the
+launcher-observed 112-byte preload ABI for shapes where M is divisible by 16,
+N by 1024, and K by 512.  The symbol
+``mab_tdm_gemm_full_batch`` uses the same ABI and instruction body with
+contiguous stride1 values and one grid-Z plane per batch item.
 """
 
 from __future__ import annotations
@@ -85,17 +87,31 @@ BATCH_PROFILE = replace(
 
 MAB_KERNEL_SYMBOL = "mab_tdm_gemm"
 MAB_FULL_KERNEL_SYMBOL = "mab_tdm_gemm_full"
-MAB_SHAPE = (16, 65536, 16384)
+MAB_FULL_BATCH_KERNEL_SYMBOL = "mab_tdm_gemm_full_batch"
+MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL = "mab_tdm_gemm_full_batch_loadonly"
+MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL = (
+    "mab_tdm_gemm_full_batch_loadonly_wv23_same_lds_256k"
+)
+MAB_FULL_BATCH_LOADONLY_SYMBOLS = (
+    MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL,
+    MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL,
+)
 MAB_BATCH = 1
 MAB_INIT = "UniformRandom"
 MAB_RANDOM_RANGE = (-1.0, 1.0)
+MAB_M_MULTIPLE = 16
+MAB_N_MULTIPLE = 1024
+MAB_K_MULTIPLE = 512
+# The immutable V# descriptors set num_records to 0x1000000 bytes.  Keep the
+# output span strictly below it because gfx1250 range checking clamps on >=.
+MAB_BUFFER_RANGE_BYTES = 0x1000000
 MAB_KERNARG_SIZE = 112
 MAB_METADATA_GROUP_SEGMENT_SIZE = 256 * 1024
 MAB_FULL_METADATA_GROUP_SEGMENT_SIZE = 320 * 1024
-MAB_GRID = (1, 256, 1)
+MAB_WV23_ALIAS_B_MAX_EXCLUSIVE = 0x264E0
+MAB_WV23_RETAINED_A_MAX_EXCLUSIVE = 0x485E0
 MAB_BLOCK = (128, 1, 1)
 MAB_CLUSTER = (1, 4, 1)
-MAB_CLUSTER_GRID = (1, 64)
 MAB_REFERENCE_CHUNK_N = 2048
 MAB_KERNARG_LAYOUT = (
     ("sizeC", 0, "Q"),
@@ -130,7 +146,7 @@ MAB_PROFILE = single.KernelProfile(
     output_quadrants=(1, 4),
     cluster=MAB_CLUSTER,
     block=MAB_BLOCK,
-    k_multiple=16384,
+    k_multiple=MAB_K_MULTIPLE,
     persistent_tg=256,
     persistent_grid_y=256,
     apre=1,
@@ -144,6 +160,40 @@ MAB_PROFILE = single.KernelProfile(
     next_free_sgpr=98,
     metadata_vgpr_count=1024,
     metadata_sgpr_count=97,
+)
+MAB_FULL_BATCH_PROFILE = single.KernelProfile(
+    name="fp16-mab-tdm-full-batch-z-wg16x256-wave16x64-1x4",
+    primary_symbol=MAB_FULL_BATCH_KERNEL_SYMBOL,
+    symbols=(MAB_FULL_BATCH_KERNEL_SYMBOL,),
+    wg_tile=MAB_PROFILE.wg_tile,
+    wave_tile=MAB_PROFILE.wave_tile,
+    output_quadrants=MAB_PROFILE.output_quadrants,
+    cluster=MAB_PROFILE.cluster,
+    block=MAB_PROFILE.block,
+    k_multiple=MAB_PROFILE.k_multiple,
+    persistent_tg=MAB_PROFILE.persistent_tg,
+    persistent_grid_y=MAB_PROFILE.persistent_grid_y,
+    apre=MAB_PROFILE.apre,
+    abi_name=MAB_PROFILE.abi_name,
+    kernarg_size=MAB_PROFILE.kernarg_size,
+    kernarg_layout=MAB_PROFILE.kernarg_layout,
+    group_segment_fixed_size=MAB_PROFILE.group_segment_fixed_size,
+    next_free_vgpr=MAB_PROFILE.next_free_vgpr,
+    next_free_sgpr=MAB_PROFILE.next_free_sgpr,
+    metadata_vgpr_count=MAB_PROFILE.metadata_vgpr_count,
+    metadata_sgpr_count=MAB_PROFILE.metadata_sgpr_count,
+)
+MAB_FULL_BATCH_LOADONLY_PROFILE = replace(
+    MAB_FULL_BATCH_PROFILE,
+    name="fp16-mab-tdm-full-batch-loadonly-z-wg16x256-wave16x64-1x4",
+    primary_symbol=MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL,
+    symbols=(MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL,),
+)
+MAB_FULL_BATCH_LOADONLY_WV23_256K_PROFILE = replace(
+    MAB_FULL_BATCH_PROFILE,
+    name="fp16-mab-tdm-full-batch-loadonly-wv23-same-lds-256k",
+    primary_symbol=MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL,
+    symbols=(MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL,),
 )
 
 @dataclass(frozen=True)
@@ -187,6 +237,7 @@ class MabValidation:
     dense_max_abs: float
     dense_rel_l2: float
     dense_mismatch_count: int
+    batch_mismatch_counts: tuple[int, ...]
 
 
 def _validate_batch(batch: int) -> int:
@@ -459,34 +510,88 @@ def pack_batched_mxfp4_kernargs(
     )
 
 
+def _validate_mab_shape(
+    m: int,
+    n: int,
+    k: int,
+    *,
+    require_output_range: bool = True,
+) -> tuple[int, int, int]:
+    """Validate the MAB tensor, ABI-stride, and fixed buffer-range contract."""
+
+    shape = (m, n, k)
+    for name, value in zip(("M", "N", "K"), shape):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise single.GemmIsaRunnerError(
+                f"{name} must be a positive integer, got {value!r}"
+            )
+        single._checked_unsigned(name, value, 32)
+    for name, value, multiple in (
+        ("M", m, MAB_M_MULTIPLE),
+        ("N", n, MAB_N_MULTIPLE),
+        ("K", k, MAB_K_MULTIPLE),
+    ):
+        if value % multiple:
+            raise single.GemmIsaRunnerError(
+                f"MAB requires {name} % {multiple} == 0, got {name}={value}"
+            )
+    for name, value in (
+        ("M*K", m * k),
+        ("N*K", n * k),
+        ("M*N", m * n),
+    ):
+        if value > 0xFFFFFFFF:
+            raise single.GemmIsaRunnerError(
+                f"MAB u32 element stride {name}={value} exceeds UINT32_MAX"
+            )
+    output_bytes = 2 * m * n
+    if require_output_range and output_bytes >= MAB_BUFFER_RANGE_BYTES:
+        raise single.GemmIsaRunnerError(
+            f"MAB D/C byte span {output_bytes} must be below the ISA buffer "
+            f"resource range {MAB_BUFFER_RANGE_BYTES}"
+        )
+    return shape
+
+
 def make_mab_launch_geometry(
     m: int,
     n: int,
     k: int,
     batch: int,
+    *,
+    symbol: str = MAB_KERNEL_SYMBOL,
 ) -> single.LaunchGeometry:
-    """Return the one launch geometry proven from the original AQL packets."""
+    """Return the symbol-scoped MAB launch geometry."""
 
-    shape = (m, n, k)
-    if shape != MAB_SHAPE:
+    loadonly = symbol in MAB_FULL_BATCH_LOADONLY_SYMBOLS
+    _validate_mab_shape(m, n, k, require_output_range=not loadonly)
+    batch = _validate_batch(batch)
+    if symbol not in (
+        MAB_FULL_BATCH_KERNEL_SYMBOL,
+        *MAB_FULL_BATCH_LOADONLY_SYMBOLS,
+    ) and batch != MAB_BATCH:
         raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} supports only shape={MAB_SHAPE}, got {shape}"
+            f"{symbol} supports only batch={MAB_BATCH}, got {batch}"
         )
-    if batch != MAB_BATCH:
-        raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} supports only batch={MAB_BATCH}, got {batch}"
-        )
+    wg_m = m // MAB_M_MULTIPLE
+    wg_n = n // 256
+    cluster_m = wg_m
+    cluster_n = n // MAB_N_MULTIPLE
+    cluster_tasks = cluster_m * cluster_n
     return single.LaunchGeometry(
-        grid=MAB_GRID,
+        grid=(wg_m, wg_n, batch),
         block=MAB_BLOCK,
         cluster=MAB_CLUSTER,
-        tiles=(1, 256),
-        cluster_grid=MAB_CLUSTER_GRID,
-        log2_grid=(0, 6),
-        logical_cluster_grid=MAB_CLUSTER_GRID,
-        logical_wg_tasks=256,
-        logical_cluster_tasks=64,
-        persistent_stride=64,
+        tiles=(wg_m, wg_n),
+        cluster_grid=(cluster_m, cluster_n),
+        log2_grid=(
+            (cluster_m - 1).bit_length(),
+            (cluster_n - 1).bit_length(),
+        ),
+        logical_cluster_grid=(cluster_m, cluster_n),
+        logical_wg_tasks=wg_m * wg_n,
+        logical_cluster_tasks=cluster_tasks,
+        persistent_stride=cluster_tasks,
     )
 
 
@@ -501,15 +606,22 @@ def pack_mab_kernargs(
     k: int,
     batch: int,
     geometry: single.LaunchGeometry,
+    symbol: str = MAB_KERNEL_SYMBOL,
 ) -> bytes:
-    """Pack the exact 112 bytes intercepted from ``gemm_launcher``.
+    """Pack the MAB 112-byte preload ABI.
 
-    The first two legacy size slots are zero in the launcher.  Stride1 is zero
-    because this fixed mode has no batched dimension.  NumWorkGroups1 is the
-    64-cluster Y grid, not the 256-workgroup physical Y grid.
+    The batch-capable symbol uses contiguous element strides in the existing
+    stride1 fields.  NumWorkGroups1 is the 64-cluster Y grid, not the
+    256-workgroup physical Y grid.
     """
 
-    expected_geometry = make_mab_launch_geometry(m, n, k, batch)
+    expected_geometry = make_mab_launch_geometry(
+        m,
+        n,
+        k,
+        batch,
+        symbol=symbol,
+    )
     if geometry != expected_geometry:
         raise single.GemmIsaRunnerError(
             f"MAB launch geometry is {geometry}, expected {expected_geometry}"
@@ -523,6 +635,10 @@ def pack_mab_kernargs(
     for name, value in pointer_values.items():
         single._checked_unsigned(name, value, 64)
 
+    batched = symbol in (
+        MAB_FULL_BATCH_KERNEL_SYMBOL,
+        *MAB_FULL_BATCH_LOADONLY_SYMBOLS,
+    )
     values: dict[str, int | float] = {
         "sizeC": 0,
         "sizeA": 0,
@@ -530,13 +646,13 @@ def pack_mab_kernargs(
         "alpha": 1.0,
         "beta": 0.0,
         "strideD0": m,
-        "strideD1": 0,
+        "strideD1": m * n if batched else 0,
         "strideC0": m,
-        "strideC1": 0,
+        "strideC1": m * n if batched else 0,
         "strideA0": k,
-        "strideA1": 0,
+        "strideA1": m * k if batched else 0,
         "strideB0": k,
-        "strideB1": 0,
+        "strideB1": n * k if batched else 0,
         "SizesFree0": m,
         "SizesFree1": n,
         "SizesFree2": batch,
@@ -624,11 +740,19 @@ def validate_mab_assembly_contract_from_text(
     symbol: str = MAB_KERNEL_SYMBOL,
 ) -> single.AssemblyResources:
     metadata_lds = (
-        MAB_FULL_METADATA_GROUP_SEGMENT_SIZE
-        if symbol == MAB_FULL_KERNEL_SYMBOL
-        else MAB_METADATA_GROUP_SEGMENT_SIZE
+        None
+        if symbol == MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL
+        else (
+            MAB_FULL_METADATA_GROUP_SEGMENT_SIZE
+            if symbol in (
+                MAB_FULL_KERNEL_SYMBOL,
+                MAB_FULL_BATCH_KERNEL_SYMBOL,
+                MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL,
+            )
+            else MAB_METADATA_GROUP_SEGMENT_SIZE
+        )
     )
-    return single.validate_runtime_assembly_contract(
+    resources = single.validate_runtime_assembly_contract(
         source,
         symbol,
         kernarg_size=MAB_KERNARG_SIZE,
@@ -643,6 +767,11 @@ def validate_mab_assembly_contract_from_text(
         expected_metadata_lds=metadata_lds,
         require_matching_lds=False,
     )
+    if resources.metadata_lds == 0:
+        raise single.GemmIsaRunnerError(
+            f"{symbol}: static LDS must be positive"
+        )
+    return resources
 
 
 def select_kernel_mode(
@@ -652,6 +781,15 @@ def select_kernel_mode(
     """Select one exact, symbol-scoped ABI and execution path."""
 
     batch = _validate_batch(batch)
+    if symbol == MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL:
+        return (
+            "mab-full-batch-loadonly-wv23-256k",
+            MAB_FULL_BATCH_LOADONLY_WV23_256K_PROFILE,
+        )
+    if symbol == MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL:
+        return "mab-full-batch-loadonly", MAB_FULL_BATCH_LOADONLY_PROFILE
+    if symbol == MAB_FULL_BATCH_KERNEL_SYMBOL:
+        return "mab-full-batch", MAB_FULL_BATCH_PROFILE
     if symbol in (MAB_KERNEL_SYMBOL, MAB_FULL_KERNEL_SYMBOL):
         if batch != MAB_BATCH:
             raise single.GemmIsaRunnerError(
@@ -674,29 +812,33 @@ def select_kernel_mode(
     raise single.GemmIsaRunnerError(
         f"unsupported kernel {symbol!r}; this runner accepts "
         f"{MAB_KERNEL_SYMBOL!r}, {MAB_FULL_KERNEL_SYMBOL!r}, and "
-        f"{LEGACY_KERNEL_SYMBOL!r} only for "
-        f"batch=1, or {BATCH_KERNEL_SYMBOL!r} for any supported batch"
+        f"{LEGACY_KERNEL_SYMBOL!r} for batch=1; "
+        f"{MAB_FULL_BATCH_KERNEL_SYMBOL!r} and "
+        f"{MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL!r} and "
+        f"{MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL!r} "
+        "for supported batches; or "
+        f"{BATCH_KERNEL_SYMBOL!r} for any supported batch"
     )
 
 
-def _validate_mab_mode(args: argparse.Namespace) -> None:
+def _validate_mab_mode(args: argparse.Namespace, symbol: str) -> None:
     if args.intype != "fp16":
         raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} requires --intype fp16"
+            f"{symbol} requires --intype fp16"
         )
     if args.dtype != "fp16":
         raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} writes FP16 and requires --dtype fp16"
+            f"{symbol} writes FP16 and requires --dtype fp16"
         )
     if args.apre != 1:
         raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} has no A-preshuffle variant; keep --apre 1"
+            f"{symbol} has no A-preshuffle variant; keep --apre 1"
         )
     if args.init != MAB_INIT:
         raise single.GemmIsaRunnerError(
-            f"{MAB_KERNEL_SYMBOL} supports only --init {MAB_INIT}"
+            f"{symbol} supports only --init {MAB_INIT}"
         )
-    make_mab_launch_geometry(*args.shape, args.batch)
+    make_mab_launch_geometry(*args.shape, args.batch, symbol=symbol)
 
 
 def _validate_batch_mode(
@@ -850,31 +992,21 @@ def _tensor_blake2b128(tensor: Any, torch_module: Any) -> str:
     ).hexdigest()
 
 
-def _build_mab_references(
+def _build_mab_dense_reference(
     torch_module: Any,
     a: Any,
     b: Any,
-) -> tuple[Any, Any]:
-    """Build both the dense target and the exact observed ISA result.
-
-    Hardware probes against the original code object establish that its TDM
-    pipeline omits repeatable K128 phases for part of every N256 tile.  The
-    dense result remains a separately reported ``A @ B.T`` oracle; the primary
-    pass/fail oracle reproduces the immutable instruction stream exactly.
-    """
+) -> Any:
+    """Build one dense FP32-accumulated, FP16 MAB reference in N-major storage."""
 
     m, k = tuple(a.shape)
     n, b_k = tuple(b.shape)
-    if (m, n, k) != MAB_SHAPE or b_k != k:
+    _validate_mab_shape(m, n, k)
+    if b_k != k:
         raise single.GemmIsaRunnerError(
-            f"MAB reference got A={tuple(a.shape)}, B={tuple(b.shape)}"
+            f"MAB dense reference got A={tuple(a.shape)}, B={tuple(b.shape)}"
         )
-    dense_storage = torch_module.empty(
-        (n, m),
-        dtype=torch_module.float16,
-        device=a.device,
-    )
-    isa_storage = torch_module.empty(
+    storage = torch_module.empty(
         (n, m),
         dtype=torch_module.float16,
         device=a.device,
@@ -885,61 +1017,44 @@ def _build_mab_references(
         torch_module.set_float32_matmul_precision("highest")
         if allow_tf32 is not None:
             torch_module.backends.cuda.matmul.allow_tf32 = False
-        k_index = torch_module.arange(k, device=a.device)
-        phase_mod4 = (k_index // 128) % 4
-        selectors = tuple(phase_mod4 == residue for residue in range(4))
-        special_selector = (phase_mod4 == 1) & ((k_index % 128) < 32)
-        a_parts = tuple(a[:, selector].float() for selector in selectors)
-        a_special = a[:, special_selector].float()
+        a_fp32 = a.float()
         for start in range(0, n, MAB_REFERENCE_CHUNK_N):
             stop = min(start + MAB_REFERENCE_CHUNK_N, n)
-            b_chunk = b[start:stop]
-            parts = tuple(
-                torch_module.mm(
-                    a_parts[residue],
-                    b_chunk[:, selector].float().transpose(0, 1),
-                )
-                for residue, selector in enumerate(selectors)
+            tile = torch_module.mm(
+                a_fp32,
+                b[start:stop].float().transpose(0, 1),
             )
-            dense_tile = parts[0] + parts[1] + parts[2] + parts[3]
-            isa_tile = dense_tile.clone()
-            n_mod_256 = (
-                torch_module.arange(start, stop, device=a.device) % 256
+            storage[start:stop].copy_(
+                tile.transpose(0, 1).to(torch_module.float16)
             )
-
-            half_all = (n_mod_256 >= 192) & (n_mod_256 <= 209)
-            isa_tile[:, half_all] = (parts[0] + parts[1])[:, half_all]
-
-            special = n_mod_256 == 210
-            if bool(special.any()):
-                special_part = torch_module.mm(
-                    a_special,
-                    b_chunk[:, special_selector].float().transpose(0, 1),
-                )
-                isa_tile[:, special] = (parts[0] + special_part)[:, special]
-                del special_part
-
-            quarter_all = n_mod_256 >= 211
-            isa_tile[:, quarter_all] = parts[0][:, quarter_all]
-
-            half_lower_m = (n_mod_256 >= 64) & (n_mod_256 <= 127)
-            isa_tile[8:, half_lower_m] = (
-                parts[0] + parts[1]
-            )[8:, half_lower_m]
-
-            dense_storage[start:stop].copy_(
-                dense_tile.transpose(0, 1).to(torch_module.float16)
-            )
-            isa_storage[start:stop].copy_(
-                isa_tile.transpose(0, 1).to(torch_module.float16)
-            )
-            del parts, dense_tile, isa_tile
-        del a_parts, a_special, selectors, special_selector, phase_mod4, k_index
+            del tile
+        del a_fp32
     finally:
         torch_module.set_float32_matmul_precision(old_precision)
         if allow_tf32 is not None:
             torch_module.backends.cuda.matmul.allow_tf32 = allow_tf32
-    return dense_storage, isa_storage
+    return storage
+
+
+def _mab_wv23_lds_note(metadata_lds_bytes: int) -> str:
+    static_lds = single._format_lds_kb(metadata_lds_bytes)
+    if metadata_lds_bytes >= MAB_WV23_RETAINED_A_MAX_EXCLUSIVE:
+        return (
+            f"the parsed {static_lds} KB static LDS keeps retained A and "
+            "aliased B destinations in range"
+        )
+    if metadata_lds_bytes >= MAB_WV23_ALIAS_B_MAX_EXCLUSIVE:
+        return (
+            f"the parsed {static_lds} KB static LDS keeps aliased B "
+            "destinations in range, but retained A high-plane/stage "
+            "destinations exceed it, so some A Global requests may be "
+            "suppressed"
+        )
+    return (
+        f"the parsed {static_lds} KB static LDS is smaller than both the "
+        "retained A and aliased B maximum destinations, so Global requests "
+        "may be suppressed"
+    )
 
 
 def _run_mab_gemm(
@@ -947,6 +1062,7 @@ def _run_mab_gemm(
     code_object: Path,
     geometry: single.LaunchGeometry,
     symbol: str,
+    metadata_lds_bytes: int,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -968,22 +1084,129 @@ def _run_mab_gemm(
     generator = torch.Generator(device=device)
     generator.manual_seed(args.seed)
     low, high = MAB_RANDOM_RANGE
-    a = torch.empty((m, k), dtype=torch.float16, device=device)
-    b = torch.empty((n, k), dtype=torch.float16, device=device)
-    c_storage = torch.empty((n, m), dtype=torch.float16, device=device)
-    for tensor in (a, b, c_storage):
-        tensor.uniform_(low, high, generator=generator)
+    batch = args.batch
+    a = torch.empty((batch, m, k), dtype=torch.float16, device=device)
+    b = torch.empty((batch, n, k), dtype=torch.float16, device=device)
+    loadonly = symbol in MAB_FULL_BATCH_LOADONLY_SYMBOLS
+    c_storage = torch.empty(
+        (batch, n, m),
+        dtype=torch.float16,
+        device=device,
+    ) if not loadonly else None
+    for index in range(batch):
+        tensors = (a[index], b[index]) if loadonly else (
+            a[index],
+            b[index],
+            c_storage[index],
+        )
+        for tensor in tensors:
+            tensor.uniform_(low, high, generator=generator)
+    if loadonly:
+        torch.cuda.synchronize()
+        stream = torch.cuda.current_stream(args.device)
+        payload = pack_mab_kernargs(
+            ptr_d=int(a.data_ptr()),
+            ptr_c=int(a.data_ptr()),
+            ptr_a=int(a.data_ptr()),
+            ptr_b=int(b.data_ptr()),
+            m=m,
+            n=n,
+            k=k,
+            batch=batch,
+            geometry=geometry,
+            symbol=symbol,
+        )
+        with single._LoadedClusterKernel(
+            code_object,
+            symbol,
+            args.device,
+        ) as module:
+            module.configure(
+                payload,
+                geometry,
+                int(stream.cuda_stream),
+                MAB_KERNARG_SIZE,
+            )
+
+            def launch_loadonly() -> None:
+                module.launch()
+
+            _, microseconds = single._run_batched_cuda_event_timing(
+                torch,
+                launch_loadonly,
+                stream,
+                num_warmup=args.warmup,
+                num_iters=args.iters,
+            )
+            module.mark_stream_synchronized()
+            event_timing = single.make_cuda_event_timing_row(
+                symbol,
+                args.iters,
+                args.warmup,
+                microseconds,
+                args.device,
+            )
+        us = float(event_timing["device_time_avg"])
+        logical_bytes = int(a.nbytes + b.nbytes)
+        not_validated = "n/a (not validated)"
+        if symbol == MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL:
+            lds_note = _mab_wv23_lds_note(metadata_lds_bytes)
+            print(
+                f"[gemm_batch_isa_runner] MAB TDM load-only nominal logical "
+                f"A+B bytes={logical_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
+                f"{lds_note}; actual HBM bytes also depend on multicast/cache "
+                "behavior, and descriptor payload is not claimed as HBM bytes"
+            )
+        else:
+            print(
+                f"[gemm_batch_isa_runner] MAB TDM load-only logical unique "
+                f"A+B bytes={logical_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
+                "descriptor payload=n/a (not claimed as HBM bytes)"
+            )
+        row = {
+            "intype": args.intype,
+            "batch": batch,
+            "M": m,
+            "N": n,
+            "K": k,
+            "apre": args.apre,
+            "init": args.init,
+            "seed": args.seed,
+            "dtype": args.dtype,
+            "gfx": gfx,
+            "logical cluster tasks/plane": geometry.logical_cluster_tasks,
+            "physical clusters/plane": (
+                geometry.cluster_grid[0] * geometry.cluster_grid[1]
+            ),
+            "physical WGs/plane": geometry.grid[0] * geometry.grid[1],
+            "encoded recurrence stride/plane": geometry.persistent_stride,
+            "ref hash128": not_validated,
+            "gemm_a4w4 us": round(us, 3),
+            "gemm_a4w4 TFLOPS": "n/a (no store)",
+            "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 3),
+            "gemm_a4w4 err": not_validated,
+            "gemm_a4w4 out hash128": not_validated,
+            "gemm_a4w4 max_err_info": not_validated,
+            "gemm_a4w4 rel_l2": not_validated,
+        }
+
+        def validate_loadonly() -> tuple[None, bool]:
+            return None, True
+
+        return row, event_timing, validate_loadonly
+
+    assert c_storage is not None
     output_storage = torch.full(
-        (n, m),
+        (batch, n, m),
         float("nan"),
         dtype=torch.float16,
         device=device,
     )
     expected_nbytes = {
-        "A": 524288,
-        "B": 2147483648,
-        "C": 2097152,
-        "D": 2097152,
+        "A": batch * m * k * 2,
+        "B": batch * n * k * 2,
+        "C": batch * n * m * 2,
+        "D": batch * n * m * 2,
     }
     actual_nbytes = {
         "A": int(a.nbytes),
@@ -997,12 +1220,21 @@ def _run_mab_gemm(
             f"{expected_nbytes}"
         )
 
-    # Both references and their digests finish before any timed launch.
-    dense_storage, reference_storage = _build_mab_references(torch, a, b)
-    dense_reference = dense_storage.transpose(0, 1)
-    reference = reference_storage.transpose(0, 1)
+    if symbol == MAB_KERNEL_SYMBOL:
+        print(
+            "[gemm_batch_isa_runner] correctness expected false: "
+            "mab_tdm_gemm is a nondeterministic B-LDS-alias experiment with "
+            "cross-wave WAW; dense comparison is diagnostic only"
+        )
+
+    # The dense reference and digest finish before any timed launch.
+    dense_storage = torch.empty_like(output_storage)
+    for index in range(batch):
+        dense_storage[index].copy_(
+            _build_mab_dense_reference(torch, a[index], b[index])
+        )
+    dense_reference = dense_storage.transpose(1, 2)
     dense_reference_hash = _tensor_blake2b128(dense_reference, torch)
-    reference_hash = _tensor_blake2b128(reference, torch)
     torch.cuda.synchronize()
 
     stream = torch.cuda.current_stream(args.device)
@@ -1016,6 +1248,7 @@ def _run_mab_gemm(
         k=k,
         batch=args.batch,
         geometry=geometry,
+        symbol=symbol,
     )
     with single._LoadedClusterKernel(
         code_object,
@@ -1052,7 +1285,7 @@ def _run_mab_gemm(
         )
     us = float(event_timing["device_time_avg"])
     logical_bytes = int(a.nbytes + b.nbytes + output_storage.nbytes)
-    flops = 2 * m * n * k
+    flops = 2 * batch * m * n * k
     print(
         f"[gemm_batch_isa_runner] MAB logical_bytes={logical_bytes} = "
         f"A ({a.nbytes}) + B ({b.nbytes}) + D ({output_storage.nbytes}); "
@@ -1073,22 +1306,15 @@ def _run_mab_gemm(
         "physical clusters/plane": geometry.cluster_grid[0] * geometry.cluster_grid[1],
         "physical WGs/plane": geometry.grid[0] * geometry.grid[1],
         "encoded recurrence stride/plane": geometry.persistent_stride,
-        "ref hash128": (
-            dense_reference_hash
-            if symbol == MAB_FULL_KERNEL_SYMBOL
-            else reference_hash
-        ),
+        "ref hash128": dense_reference_hash,
         "gemm_a4w4 us": round(us, 3),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 3),
         "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 3),
     }
 
     def validate() -> tuple[MabValidation, bool]:
-        output = timed_output_storage.transpose(0, 1)
-        dense_target = symbol == MAB_FULL_KERNEL_SYMBOL
-        target = dense_reference if dense_target else reference
-        target_hash = dense_reference_hash if dense_target else reference_hash
-        reference_fp32 = target.float()
+        output = timed_output_storage.transpose(1, 2)
+        reference_fp32 = dense_reference.float()
         output_fp32 = output.float()
         difference = output_fp32 - reference_fp32
         max_err_info, rel_l2 = single.float32_error_metrics(
@@ -1110,31 +1336,16 @@ def _run_mab_gemm(
             equal_nan=False,
         )
         mismatch_count = int((~close).sum().item())
-        dense_reference_fp32 = dense_reference.float()
-        dense_difference = output_fp32 - dense_reference_fp32
-        dense_max_err_info, dense_rel_l2 = single.float32_error_metrics(
-            dense_reference_fp32,
-            output_fp32,
-            difference=dense_difference,
-            clamp_rel_l2=True,
-        )
-        dense_max_abs = dense_max_err_info[2]
-        dense_mismatch_count = int(
-            (
-                ~torch.isclose(
-                    output_fp32,
-                    dense_reference_fp32,
-                    rtol=rtol,
-                    atol=atol,
-                    equal_nan=False,
-                )
-            )
-            .sum()
-            .item()
+        batch_mismatch_counts = tuple(
+            int(value)
+            for value in (~close)
+            .reshape(batch, -1)
+            .sum(dim=1)
+            .tolist()
         )
         output_hash = _tensor_blake2b128(output, torch)
         validation = MabValidation(
-            reference_hash=target_hash,
+            reference_hash=dense_reference_hash,
             output_hash=output_hash,
             max_abs=max_abs,
             max_err_info=max_err_info,
@@ -1145,15 +1356,16 @@ def _run_mab_gemm(
             atol=atol,
             passed=mismatch_count == 0,
             dense_reference_hash=dense_reference_hash,
-            dense_max_abs=dense_max_abs,
-            dense_rel_l2=dense_rel_l2,
-            dense_mismatch_count=dense_mismatch_count,
+            dense_max_abs=max_abs,
+            dense_rel_l2=rel_l2,
+            dense_mismatch_count=mismatch_count,
+            batch_mismatch_counts=batch_mismatch_counts,
         )
         row["gemm_a4w4 err"] = mismatch_count / output.numel()
         row["gemm_a4w4 out hash128"] = output_hash
         row["gemm_a4w4 max_err_info"] = max_err_info
         row["gemm_a4w4 rel_l2"] = rel_l2
-        return validation, validation.passed
+        return validation, validation.passed or symbol == MAB_KERNEL_SYMBOL
 
     return row, event_timing, validate
 
@@ -1334,11 +1546,13 @@ def _print_mab_validation(item: MabValidation) -> None:
     print(
         f"[gemm_batch_isa_runner] MAB dense diagnostic: "
         f"primary ref hash128={item.reference_hash}; out hash128="
-        f"{item.output_hash}; err={error}; max_abs={item.max_abs}; "
+        f"{item.output_hash}; mismatches={item.mismatch_count}/"
+        f"{item.element_count}; err={error}; max_abs={item.max_abs}; "
         f"rel_l2={item.rel_l2}; allclose={item.passed}; dense ref hash128="
         f"{item.dense_reference_hash}; dense err={dense_error}; "
         f"dense max_abs={item.dense_max_abs}; dense rel_l2="
-        f"{item.dense_rel_l2}"
+        f"{item.dense_rel_l2}; batch mismatches="
+        f"{item.batch_mismatch_counts}"
     )
 
 
@@ -1374,14 +1588,15 @@ def _build_parser() -> argparse.ArgumentParser:
     for action in parser._actions:
         if action.dest == "isa":
             action.help = (
-                "complete gfx1250 AMDGPU assembly source: mab_tdm_gemm and "
-                "the original 64x256_1x4_ps symbol require --batch 1; the "
-                "64x256_1x4_batch_ps symbol supports true batched dispatch"
+                "complete gfx1250 AMDGPU assembly source: the original MAB "
+                "symbols require --batch 1; mab_tdm_gemm_full_batch and "
+                "64x256_1x4_batch_ps support batched dispatch"
             )
         elif action.dest == "shape":
             action.help = (
-                "per-matrix GEMM shape M,N,K; mab_tdm_gemm requires exactly "
-                "16,65536,16384 (default for other modes: 18432,2048,7168)"
+                "per-matrix GEMM shape M,N,K; MAB modes require M%%16=0, "
+                "N%%1024=0, and K%%512=0 "
+                "(default for other modes: 18432,2048,7168)"
             )
         elif action.dest == "intype":
             action.choices = (*action.choices, "fp16")
@@ -1452,16 +1667,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         mode, profile = select_kernel_mode(symbol, args.batch)
         writes_output = single.isa_writes_output(source)
 
-        if mode in ("mab", "mab-full"):
-            _validate_mab_mode(args)
+        if mode in (
+            "mab",
+            "mab-full",
+            "mab-full-batch",
+            "mab-full-batch-loadonly",
+            "mab-full-batch-loadonly-wv23-256k",
+        ):
+            _validate_mab_mode(args, symbol)
             resources = validate_mab_assembly_contract_from_text(
                 source, symbol=symbol
             )
-            if not writes_output:
+            if mode in (
+                "mab-full-batch-loadonly",
+                "mab-full-batch-loadonly-wv23-256k",
+            ) and writes_output:
+                raise single.GemmIsaRunnerError(
+                    f"{symbol} load-only contract requires stores to D=False"
+                )
+            if mode not in (
+                "mab-full-batch-loadonly",
+                "mab-full-batch-loadonly-wv23-256k",
+            ) and not writes_output:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} contract requires FP16 D stores"
                 )
-            geometry = make_mab_launch_geometry(*args.shape, args.batch)
+            geometry = make_mab_launch_geometry(
+                *args.shape,
+                args.batch,
+                symbol=symbol,
+            )
         elif mode == "legacy":
             if args.grid_layout != DEFAULT_GRID_LAYOUT:
                 raise single.GemmIsaRunnerError(
@@ -1540,12 +1775,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 result.code_object,
             )
 
-            if mode in ("mab", "mab-full"):
+            if mode in (
+                "mab",
+                "mab-full",
+                "mab-full-batch",
+                "mab-full-batch-loadonly",
+                "mab-full-batch-loadonly-wv23-256k",
+            ):
                 row, event_timing, validate = _run_mab_gemm(
                     args,
                     result.code_object,
                     geometry,
                     symbol,
+                    resources.metadata_lds,
                 )
             elif mode == "legacy":
                 legacy_row, event_timing, legacy_passed = single._run_gemm(
@@ -1586,7 +1828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             row["encoded recurrence stride/plane"] = geometry.persistent_stride
             single._print_cuda_event_timing(event_timing)
             validation, passed = validate()
-            if mode in ("mab", "mab-full"):
+            if mode in ("mab", "mab-full", "mab-full-batch"):
                 _print_mab_validation(validation)
             row = {column: row[column] for column in single.SUMMARY_COLUMNS}
             single.print_summary(row, symbol=symbol, profile=profile)
