@@ -67,8 +67,6 @@ DEFAULT_SYMBOL: str | None = None
 KERNEL_SYMBOL_256 = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
 KERNEL_SYMBOL_128 = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
 KERNEL_SYMBOL_64X256 = "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps"
-# Retain this public constant for importers that used the original runner.
-EXPECTED_KERNEL_BASENAME = KERNEL_SYMBOL_256
 LEGACY_MANGLED_SYMBOL = (
     "_ZN5aiter45f4gemm_bf16_mxfp4_"
     "ABpreShuffle_256x256_4x4_psE"
@@ -82,6 +80,17 @@ _METADATA_BLOCK_RE = re.compile(
 )
 
 MXFP4_SCALE_BLOCK = 32
+MAX_LDS_PER_WGP = 320 * 1024
+STORE_MNEMONIC_PREFIXES = (
+    "tensor_store",
+    "global_store",
+    "global_atomic",
+    "buffer_store",
+    "buffer_atomic",
+    "flat_store",
+    "flat_atomic",
+    "scratch_store",
+)
 KERNARG_SIZE = 80
 KERNARG_LAYOUT = (
     ("ptr_D", 0, "Q"),
@@ -230,6 +239,7 @@ _KERNEL_PROFILE_BY_SYMBOL = _build_kernel_profile_lookup(
 
 SUMMARY_COLUMNS = (
     "intype",
+    "batch",
     "M",
     "N",
     "K",
@@ -238,6 +248,10 @@ SUMMARY_COLUMNS = (
     "seed",
     "dtype",
     "gfx",
+    "logical cluster tasks/plane",
+    "physical clusters/plane",
+    "physical WGs/plane",
+    "encoded recurrence stride/plane",
     "ref hash128",
     "gemm_a4w4 us",
     "gemm_a4w4 TFLOPS",
@@ -247,6 +261,7 @@ SUMMARY_COLUMNS = (
     "gemm_a4w4 max_abs",
     "gemm_a4w4 rel_l2",
 )
+assert len(SUMMARY_COLUMNS) == 22
 
 EVENT_TIMING_COLUMNS = (
     "name",
@@ -338,6 +353,93 @@ class LaunchGeometry:
     @property
     def physical_cluster_grid(self) -> tuple[int, int, int]:
         return (*self.cluster_grid, 1)
+
+
+@dataclass(frozen=True)
+class AssemblyResources:
+    descriptor_lds: int
+    metadata_lds: int
+    kernarg_size: int
+    next_free_vgpr: int
+    next_free_sgpr: int
+    metadata_vgpr: int
+    metadata_sgpr: int
+
+
+@dataclass(frozen=True)
+class ContractReport:
+    runner: str
+    profile: KernelProfile
+    symbol: str
+    shape: tuple[int, int, int]
+    batch: int
+    geometry: LaunchGeometry
+    resources: AssemblyResources
+    stores_to_d: bool
+
+
+def print_contract(report: ContractReport) -> None:
+    geometry = report.geometry
+    resources = report.resources
+    batch = report.batch
+    prefix = f"[{report.runner}]"
+    logical_wg_grid = (*geometry.tiles, batch)
+    logical_cluster_grid = (*geometry.logical_cluster_grid, batch)
+    physical_cluster_grid = (*geometry.cluster_grid, batch)
+    clusters_per_plane = geometry.cluster_grid[0] * geometry.cluster_grid[1]
+    physical_wgs_per_plane = geometry.grid[0] * geometry.grid[1]
+    effective_lds = (
+        f"{resources.metadata_lds} (metadata/AQL; "
+        f"descriptor={resources.descriptor_lds})"
+        if resources.descriptor_lds != resources.metadata_lds
+        else str(resources.metadata_lds)
+    )
+    wgs_per_wgp = (
+        str(MAX_LDS_PER_WGP // resources.metadata_lds)
+        if resources.metadata_lds
+        else "n/a"
+    )
+    print(
+        f"{prefix} selected profile: {report.profile.name}; "
+        f"symbol={report.symbol}; shape={report.shape}; "
+        f"WG tile={report.profile.wg_tile}; wave tile={report.profile.wave_tile}; "
+        f"batch={batch}"
+    )
+    print(
+        f"{prefix} logical WG grid={logical_wg_grid}; WG tasks total="
+        f"{geometry.logical_wg_tasks * batch}; logical cluster grid="
+        f"{logical_cluster_grid}; cluster tasks/plane="
+        f"{geometry.logical_cluster_tasks}; cluster tasks total="
+        f"{geometry.logical_cluster_tasks * batch}"
+    )
+    print(
+        f"{prefix} physical launch={geometry.grid}; block={geometry.block}; "
+        f"cluster={geometry.cluster}; physical cluster grid="
+        f"{physical_cluster_grid}; clusters/plane={clusters_per_plane}; "
+        f"clusters total={clusters_per_plane * batch}; physical WGs/plane="
+        f"{physical_wgs_per_plane}; physical WGs total="
+        f"{physical_wgs_per_plane * batch}; encoded recurrence stride/plane="
+        f"{geometry.persistent_stride}; log2 X/Y grid={geometry.log2_grid}"
+    )
+    print(
+        f"{prefix} ABI={report.profile.abi_name}; "
+        f"kernarg={resources.kernarg_size} bytes; fixed LDS={effective_lds}; "
+        f"WGs/WGP by LDS={wgs_per_wgp} (LDS budget {MAX_LDS_PER_WGP}); "
+        f"VGPR/SGPR metadata={resources.metadata_vgpr}/"
+        f"{resources.metadata_sgpr}; stores to D={report.stores_to_d}"
+    )
+
+
+def isa_writes_output(source: str) -> bool:
+    """Return whether the assembly stores outside LDS."""
+
+    for line in source.splitlines():
+        clean = _strip_asm_comment(line)
+        if not clean or clean.startswith(".") or clean.endswith(":"):
+            continue
+        if clean.split(maxsplit=1)[0].startswith(STORE_MNEMONIC_PREFIXES):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -694,12 +796,23 @@ def _metadata_arg_layout(body: str) -> tuple[tuple[int, int], ...]:
     return tuple(zip(offsets, sizes))
 
 
-def validate_assembly_contract_from_text(
+def validate_runtime_assembly_contract(
     source: str,
     symbol: str,
-    profile: KernelProfile,
-) -> None:
-    """Validate ABI and resource metadata before compiling or launching."""
+    *,
+    kernarg_size: int,
+    kernarg_layout: tuple[tuple[str, int, str], ...],
+    block: tuple[int, int, int],
+    user_sgpr_count: int,
+    next_free_vgpr: int,
+    next_free_sgpr: int,
+    metadata_vgpr: int,
+    metadata_sgpr: int,
+    expected_descriptor_lds: int | None,
+    expected_metadata_lds: int | None,
+    require_matching_lds: bool,
+) -> AssemblyResources:
+    """Validate only launch-critical numeric ABI and resource metadata."""
 
     actual_symbol = detect_kernel_symbol_from_text(source)
     if actual_symbol != symbol:
@@ -707,66 +820,79 @@ def validate_assembly_contract_from_text(
             f"selected symbol {symbol!r} does not match actual ISA symbol "
             f"{actual_symbol!r}"
         )
-    selected_profile = select_kernel_profile(actual_symbol)
-    if selected_profile != profile:
-        raise GemmIsaRunnerError(
-            f"kernel profile {profile.name!r} does not match symbol "
-            f"{actual_symbol!r}"
-        )
-
     descriptor = _descriptor_body(source, symbol)
     metadata = _metadata_body(source)
     descriptor_expected = {
-        "amdhsa_group_segment_fixed_size": profile.group_segment_fixed_size,
         "amdhsa_private_segment_fixed_size": 0,
-        "amdhsa_kernarg_size": profile.kernarg_size,
-        "amdhsa_user_sgpr_count": 22,
+        "amdhsa_kernarg_size": kernarg_size,
+        "amdhsa_user_sgpr_count": user_sgpr_count,
         "amdhsa_user_sgpr_kernarg_segment_ptr": 1,
-        "amdhsa_user_sgpr_kernarg_preload_length": (
-            profile.kernarg_size // 4
-        ),
+        "amdhsa_user_sgpr_kernarg_preload_length": kernarg_size // 4,
         "amdhsa_user_sgpr_kernarg_preload_offset": 0,
+        "amdhsa_system_sgpr_workgroup_id_x": 1,
+        "amdhsa_system_sgpr_workgroup_id_y": 1,
+        "amdhsa_system_sgpr_workgroup_id_z": 1,
         "amdhsa_wavefront_size32": 1,
-        "amdhsa_next_free_vgpr": profile.next_free_vgpr,
-        "amdhsa_next_free_sgpr": profile.next_free_sgpr,
+        "amdhsa_next_free_vgpr": next_free_vgpr,
+        "amdhsa_next_free_sgpr": next_free_sgpr,
     }
     for directive, expected in descriptor_expected.items():
         actual = _descriptor_int(descriptor, directive)
         if actual != expected:
             raise GemmIsaRunnerError(
-                f"{symbol}: .{directive} is {actual}, expected {expected} "
-                f"for profile {profile.name}"
+                f"{symbol}: .{directive} is {actual}, expected {expected}"
             )
 
     metadata_expected = {
-        "group_segment_fixed_size": profile.group_segment_fixed_size,
         "kernarg_segment_align": 8,
-        "kernarg_segment_size": profile.kernarg_size,
-        "max_flat_workgroup_size": (
-            profile.block[0] * profile.block[1] * profile.block[2]
-        ),
+        "kernarg_segment_size": kernarg_size,
+        "max_flat_workgroup_size": block[0] * block[1] * block[2],
         "private_segment_fixed_size": 0,
-        "sgpr_count": profile.metadata_sgpr_count,
-        "vgpr_count": profile.metadata_vgpr_count,
+        "sgpr_count": metadata_sgpr,
+        "vgpr_count": metadata_vgpr,
         "wavefront_size": 32,
     }
     for field, expected in metadata_expected.items():
         actual = _metadata_int(metadata, field)
         if actual != expected:
             raise GemmIsaRunnerError(
-                f"{symbol}: metadata .{field} is {actual}, expected "
-                f"{expected} for profile {profile.name}"
+                f"{symbol}: metadata .{field} is {actual}, expected {expected}"
             )
+
+    descriptor_lds = _descriptor_int(
+        descriptor, "amdhsa_group_segment_fixed_size"
+    )
+    metadata_lds = _metadata_int(metadata, "group_segment_fixed_size")
+    if expected_descriptor_lds is not None and descriptor_lds != expected_descriptor_lds:
+        raise GemmIsaRunnerError(
+            f"{symbol}: descriptor LDS is {descriptor_lds}, expected "
+            f"{expected_descriptor_lds}"
+        )
+    if expected_metadata_lds is not None and metadata_lds != expected_metadata_lds:
+        raise GemmIsaRunnerError(
+            f"{symbol}: metadata LDS is {metadata_lds}, expected "
+            f"{expected_metadata_lds}"
+        )
+    if require_matching_lds and descriptor_lds != metadata_lds:
+        raise GemmIsaRunnerError(
+            f"{symbol}: descriptor LDS {descriptor_lds} does not match "
+            f"metadata LDS {metadata_lds}"
+        )
+    if not 0 <= metadata_lds <= MAX_LDS_PER_WGP:
+        raise GemmIsaRunnerError(
+            f"{symbol}: metadata LDS {metadata_lds} is outside "
+            f"0...{MAX_LDS_PER_WGP}"
+        )
 
     expected_args = tuple(
         (offset, struct.calcsize(f"<{kind}"))
-        for _name, offset, kind in profile.kernarg_layout
+        for _name, offset, kind in kernarg_layout
     )
     actual_args = _metadata_arg_layout(metadata)
     if actual_args != expected_args:
         raise GemmIsaRunnerError(
             f"{symbol}: metadata kernarg layout {actual_args} does not match "
-            f"profile ABI {expected_args}"
+            f"host ABI {expected_args}"
         )
     if not re.search(
         rf"(?m)^amdhsa\.target:[ \t]+"
@@ -776,6 +902,43 @@ def validate_assembly_contract_from_text(
         raise GemmIsaRunnerError(
             f"{symbol}: metadata target is not amdgcn-amd-amdhsa--{ARCH}"
         )
+    return AssemblyResources(
+        descriptor_lds=descriptor_lds,
+        metadata_lds=metadata_lds,
+        kernarg_size=kernarg_size,
+        next_free_vgpr=next_free_vgpr,
+        next_free_sgpr=next_free_sgpr,
+        metadata_vgpr=metadata_vgpr,
+        metadata_sgpr=metadata_sgpr,
+    )
+
+
+def validate_assembly_contract_from_text(
+    source: str,
+    symbol: str,
+    profile: KernelProfile,
+) -> AssemblyResources:
+    """Validate one registered single-runner profile."""
+
+    if select_kernel_profile(symbol) != profile:
+        raise GemmIsaRunnerError(
+            f"kernel profile {profile.name!r} does not match symbol {symbol!r}"
+        )
+    return validate_runtime_assembly_contract(
+        source,
+        symbol,
+        kernarg_size=profile.kernarg_size,
+        kernarg_layout=profile.kernarg_layout,
+        block=profile.block,
+        user_sgpr_count=22,
+        next_free_vgpr=profile.next_free_vgpr,
+        next_free_sgpr=profile.next_free_sgpr,
+        metadata_vgpr=profile.metadata_vgpr_count,
+        metadata_sgpr=profile.metadata_sgpr_count,
+        expected_descriptor_lds=profile.group_segment_fixed_size,
+        expected_metadata_lds=profile.group_segment_fixed_size,
+        require_matching_lds=True,
+    )
 
 
 def _resolve_clang(override: str | None) -> Path:
@@ -1508,803 +1671,6 @@ def _make_hip_launch_config(
     return attributes, config
 
 
-def run_static_contract_checks() -> None:
-    """CPU-only fixture for ABI, geometry, and the fixed clang policy."""
-
-    expected_clang = Path(
-        "/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang"
-    )
-    if DEFAULT_CLANG != expected_clang:
-        raise AssertionError(
-            f"default clang changed to {DEFAULT_CLANG}, expected {expected_clang}"
-        )
-    clang_action = next(
-        action for action in _build_parser()._actions if action.dest == "clang"
-    )
-    clang_help = clang_action.help or ""
-    if (
-        str(DEFAULT_CLANG) not in clang_help
-        or "no ROCm/PATH fallback" not in clang_help
-    ):
-        raise AssertionError(
-            f"--clang help does not describe the fixed-only policy: {clang_help}"
-        )
-
-    def symbol_fixture(symbol: str) -> str:
-        return f"""
-        .text
-        .globl {symbol}
-        .type {symbol},@function
-        {symbol}:
-            s_endpgm
-        .amdhsa_kernel {symbol}
-        .end_amdhsa_kernel
-        .amdgpu_metadata
-        ---
-        amdhsa.kernels:
-          - .name: {symbol}
-            .symbol: {symbol}.kd
-        ...
-        .end_amdgpu_metadata
-        """
-
-    def assembly_contract_fixture(profile: KernelProfile) -> str:
-        symbol = profile.primary_symbol
-        args = "\n".join(
-            (
-                f"      - .offset:         {offset}\n"
-                f"        .size:           {struct.calcsize(f'<{kind}')}\n"
-                "        .value_kind:     by_value"
-            )
-            for _name, offset, kind in profile.kernarg_layout
-        )
-        return f"""
-.amdgcn_target "amdgcn-amd-amdhsa--{ARCH}"
-.text
-.globl {symbol}
-.type {symbol},@function
-{symbol}:
-    s_endpgm
-.amdhsa_kernel {symbol}
-    .amdhsa_group_segment_fixed_size {profile.group_segment_fixed_size}
-    .amdhsa_private_segment_fixed_size 0
-    .amdhsa_kernarg_size {profile.kernarg_size}
-    .amdhsa_user_sgpr_count 22
-    .amdhsa_user_sgpr_kernarg_segment_ptr 1
-    .amdhsa_user_sgpr_kernarg_preload_length {profile.kernarg_size // 4}
-    .amdhsa_user_sgpr_kernarg_preload_offset 0
-    .amdhsa_wavefront_size32 1
-    .amdhsa_next_free_vgpr {profile.next_free_vgpr}
-    .amdhsa_next_free_sgpr {profile.next_free_sgpr}
-.end_amdhsa_kernel
-.amdgpu_metadata
----
-amdhsa.kernels:
-  - .args:
-{args}
-    .group_segment_fixed_size: {profile.group_segment_fixed_size}
-    .kernarg_segment_align: 8
-    .kernarg_segment_size: {profile.kernarg_size}
-    .max_flat_workgroup_size: {profile.block[0] * profile.block[1] * profile.block[2]}
-    .name: {symbol}
-    .private_segment_fixed_size: 0
-    .sgpr_count: {profile.metadata_sgpr_count}
-    .symbol: {symbol}.kd
-    .vgpr_count: {profile.metadata_vgpr_count}
-    .wavefront_size: 32
-amdhsa.target: amdgcn-amd-amdhsa--{ARCH}
-amdhsa.version:
-  - 1
-  - 2
-...
-.end_amdgpu_metadata
-"""
-
-    current_symbol = EXPECTED_KERNEL_BASENAME
-    for profile in SUPPORTED_KERNEL_PROFILES:
-        for profile_symbol in profile.symbols:
-            detected = detect_kernel_symbol_from_text(
-                symbol_fixture(profile_symbol)
-            )
-            if detected != profile_symbol:
-                raise AssertionError(
-                    f"symbol fixture detected {detected!r}, "
-                    f"expected {profile_symbol!r}"
-                )
-            if select_kernel_profile(profile_symbol) != profile:
-                raise AssertionError(
-                    f"wrong profile selected for {profile_symbol!r}"
-                )
-            if (
-                _validate_mode("mxfp4", profile.apre, "bf16", profile_symbol)
-                != profile
-            ):
-                raise AssertionError(
-                    f"mode validation selected the wrong profile for "
-                    f"{profile_symbol!r}"
-                )
-        contract_source = assembly_contract_fixture(profile)
-        validate_assembly_contract_from_text(
-            contract_source,
-            profile.primary_symbol,
-            profile,
-        )
-        bad_descriptor = contract_source.replace(
-            f".amdhsa_next_free_vgpr {profile.next_free_vgpr}",
-            f".amdhsa_next_free_vgpr {profile.next_free_vgpr + 1}",
-            1,
-        )
-        try:
-            validate_assembly_contract_from_text(
-                bad_descriptor,
-                profile.primary_symbol,
-                profile,
-            )
-        except GemmIsaRunnerError as exc:
-            if ".amdhsa_next_free_vgpr" not in str(exc):
-                raise AssertionError(
-                    f"{profile.name} descriptor mismatch raised unexpected "
-                    f"error: {exc}"
-                ) from exc
-        else:
-            raise AssertionError(
-                f"{profile.name} accepted mismatched descriptor resources"
-            )
-        bad_metadata = contract_source.replace(
-            f".vgpr_count: {profile.metadata_vgpr_count}",
-            f".vgpr_count: {profile.metadata_vgpr_count + 1}",
-            1,
-        )
-        try:
-            validate_assembly_contract_from_text(
-                bad_metadata,
-                profile.primary_symbol,
-                profile,
-            )
-        except GemmIsaRunnerError as exc:
-            if "metadata .vgpr_count" not in str(exc):
-                raise AssertionError(
-                    f"{profile.name} metadata mismatch raised unexpected "
-                    f"error: {exc}"
-                ) from exc
-        else:
-            raise AssertionError(
-                f"{profile.name} accepted mismatched metadata resources"
-            )
-
-    try:
-        _build_kernel_profile_lookup(
-            (*SUPPORTED_KERNEL_PROFILES, KERNEL_PROFILE_64X256)
-        )
-    except ValueError as exc:
-        if "is registered by both" not in str(exc):
-            raise AssertionError(
-                f"profile-symbol collision raised unexpected error: {exc}"
-            ) from exc
-    else:
-        raise AssertionError("duplicate profile-symbol registration did not fail")
-
-    metadata_fallback = f"""
-    .globl {current_symbol}
-    .type {current_symbol},@function
-    .amdgpu_metadata
-    ---
-    amdhsa.kernels:
-      - .name: {current_symbol}
-        .symbol: {current_symbol}.kd
-    ...
-    .end_amdgpu_metadata
-    """
-    if detect_kernel_symbol_from_text(metadata_fallback) != current_symbol:
-        raise AssertionError("metadata fallback did not select the kernel")
-    globl_fallback = (
-        f".globl {current_symbol}\n"
-        f".type {current_symbol},@function\n"
-    )
-    if detect_kernel_symbol_from_text(globl_fallback) != current_symbol:
-        raise AssertionError(".globl/.type fallback did not select the kernel")
-
-    explicit = resolve_kernel_symbol_from_text(
-        symbol_fixture(current_symbol),
-        current_symbol,
-    )
-    if explicit != current_symbol:
-        raise AssertionError(f"explicit --symbol override changed to {explicit!r}")
-    try:
-        resolve_kernel_symbol_from_text(
-            symbol_fixture(current_symbol),
-            KERNEL_SYMBOL_128,
-        )
-    except GemmIsaRunnerError as exc:
-        if "does not match the actual ISA kernel symbol" not in str(exc):
-            raise AssertionError(
-                f"mismatched --symbol raised unexpected error: {exc}"
-            ) from exc
-    else:
-        raise AssertionError("mismatched --symbol override did not fail")
-    for profile in SUPPORTED_KERNEL_PROFILES:
-        for profile_symbol in profile.symbols:
-            try:
-                select_kernel_profile(f"{profile_symbol}_unrelated")
-            except GemmIsaRunnerError as exc:
-                if "supported exact basenames" not in str(exc):
-                    raise AssertionError(
-                        f"unrelated symbol raised unexpected error: {exc}"
-                    ) from exc
-            else:
-                raise AssertionError(
-                    f"unrelated suffix for {profile_symbol!r} did not fail"
-                )
-
-    conflict_fixture = symbol_fixture(current_symbol).replace(
-        f".name: {current_symbol}",
-        ".name: conflicting_kernel",
-    ).replace(
-        f".symbol: {current_symbol}.kd",
-        ".symbol: conflicting_kernel.kd",
-    )
-    multi_fixture = (
-        symbol_fixture(current_symbol)
-        + "\n.amdhsa_kernel second_kernel\n.end_amdhsa_kernel\n"
-    )
-    for label, text, message_fragment in (
-        (
-            "conflicting directives",
-            conflict_fixture,
-            "conflicts with metadata kernel",
-        ),
-        (
-            "multiple kernels",
-            multi_fixture,
-            "multiple kernel candidates",
-        ),
-    ):
-        try:
-            detect_kernel_symbol_from_text(text)
-        except GemmIsaRunnerError as exc:
-            if message_fragment not in str(exc):
-                raise AssertionError(
-                    f"{label} fixture raised unexpected error: {exc}"
-                ) from exc
-        else:
-            raise AssertionError(f"{label} fixture did not fail")
-
-    if parse_requested_tcp_split(".text\n    s_endpgm\n") is not None:
-        raise AssertionError("a source without the request declared one")
-    requested = parse_requested_tcp_split(
-        f"\t.set {TCP_SPLIT_REQUEST_SYMBOL}, 5 ; 256 KiB LDS partition\n"
-    )
-    if requested != 5:
-        raise AssertionError(f"TCP_SPLIT request parsed as {requested!r}")
-    for label, text, message_fragment in (
-        (
-            "an out-of-range request",
-            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 8\n",
-            "bits [20:18]",
-        ),
-        (
-            "two disagreeing requests",
-            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 5\n"
-            f".set {TCP_SPLIT_REQUEST_SYMBOL}, 4\n",
-            "conflicting values",
-        ),
-    ):
-        try:
-            parse_requested_tcp_split(text)
-        except GemmIsaRunnerError as exc:
-            if message_fragment not in str(exc):
-                raise AssertionError(
-                    f"{label} raised unexpected error: {exc}"
-                ) from exc
-        else:
-            raise AssertionError(f"{label} was accepted")
-
-    def kernel_descriptor_elf(kd_name: str, group_segment: int, rsrc3: int) -> bytes:
-        """A minimal ELF64 shared object holding one kernel descriptor."""
-
-        descriptor = bytearray(KERNEL_DESCRIPTOR_SIZE)
-        struct.pack_into(
-            "<I",
-            descriptor,
-            _KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET,
-            group_segment,
-        )
-        struct.pack_into("<I", descriptor, _KD_COMPUTE_PGM_RSRC3_OFFSET, rsrc3)
-        strtab = b"\x00" + kd_name.encode("utf-8") + b"\x00"
-        shstrtab = b"\x00.rodata\x00.symtab\x00.strtab\x00.shstrtab\x00"
-        rodata_addr = 0x1000
-        rodata_offset = _ELF64_SECTION_HEADER_SIZE
-        symtab_offset = rodata_offset + len(descriptor)
-        symbols = bytearray(_ELF64_SYMBOL_SIZE)
-        symbols += struct.pack(
-            "<IBBHQQ",
-            1,
-            (1 << 4) | 10,
-            0,
-            1,
-            rodata_addr,
-            KERNEL_DESCRIPTOR_SIZE,
-        )
-        strtab_offset = symtab_offset + len(symbols)
-        shstrtab_offset = strtab_offset + len(strtab)
-        shoff = shstrtab_offset + len(shstrtab)
-        header = bytearray(_ELF64_SECTION_HEADER_SIZE)
-        header[0:4] = b"\x7fELF"
-        header[4] = 2  # ELFCLASS64
-        header[5] = 1  # ELFDATA2LSB
-        header[6] = 1  # EV_CURRENT
-        struct.pack_into("<HH", header, 0x10, 3, 0xE0)  # ET_DYN, EM_AMDGPU
-        struct.pack_into("<Q", header, 0x28, shoff)
-        struct.pack_into(
-            "<HHH",
-            header,
-            0x3A,
-            _ELF64_SECTION_HEADER_SIZE,
-            5,
-            4,
-        )
-
-        def section(
-            name_offset: int,
-            kind: int,
-            addr: int,
-            offset: int,
-            size: int,
-            link: int,
-            entsize: int,
-        ) -> bytes:
-            return struct.pack(
-                "<IIQQQQIIQQ",
-                name_offset,
-                kind,
-                0,
-                addr,
-                offset,
-                size,
-                link,
-                0,
-                1,
-                entsize,
-            )
-
-        headers = (
-            section(0, 0, 0, 0, 0, 0, 0)
-            + section(
-                shstrtab.index(b".rodata"),
-                1,
-                rodata_addr,
-                rodata_offset,
-                len(descriptor),
-                0,
-                0,
-            )
-            + section(
-                shstrtab.index(b".symtab"),
-                _SHT_SYMTAB,
-                0,
-                symtab_offset,
-                len(symbols),
-                3,
-                _ELF64_SYMBOL_SIZE,
-            )
-            + section(
-                shstrtab.index(b".strtab"),
-                _SHT_STRTAB,
-                0,
-                strtab_offset,
-                len(strtab),
-                0,
-                0,
-            )
-            + section(
-                shstrtab.index(b".shstrtab"),
-                _SHT_STRTAB,
-                0,
-                shstrtab_offset,
-                len(shstrtab),
-                0,
-                0,
-            )
-        )
-        return bytes(header + descriptor + symbols + strtab + shstrtab + headers)
-
-    with tempfile.TemporaryDirectory(prefix="gemm_isa_runner_selftest_") as temp:
-        fixture = Path(temp) / "fixture.co"
-        original = kernel_descriptor_elf(f"{current_symbol}.kd", 131072, 0x00000410)
-        fixture.write_bytes(original)
-        message = patch_code_object_tcp_split(fixture, current_symbol, 5, 131072)
-        if "TCP_SPLIT 0 -> 5" not in message:
-            raise AssertionError(f"unexpected TCP_SPLIT report: {message}")
-        if "0x00000410 -> 0x00140410" not in message:
-            raise AssertionError(f"unexpected RSRC3 report: {message}")
-        patched = fixture.read_bytes()
-        rsrc3_at = _ELF64_SECTION_HEADER_SIZE + _KD_COMPUTE_PGM_RSRC3_OFFSET
-        if (
-            patched[:rsrc3_at] != original[:rsrc3_at]
-            or patched[rsrc3_at + 4:] != original[rsrc3_at + 4:]
-        ):
-            raise AssertionError("the patch changed bytes outside RSRC3")
-        (patched_rsrc3,) = struct.unpack_from("<I", patched, rsrc3_at)
-        if patched_rsrc3 != 0x00140410:
-            raise AssertionError(f"patched RSRC3 is 0x{patched_rsrc3:08x}")
-        repeat = patch_code_object_tcp_split(fixture, current_symbol, 5, 131072)
-        if "TCP_SPLIT 5 -> 5" not in repeat or fixture.read_bytes() != patched:
-            raise AssertionError(f"re-patching was not idempotent: {repeat}")
-
-        not_elf = Path(temp) / "not_elf.co"
-        not_elf.write_bytes(b"this is not a code object")
-        for label, arguments, message_fragment in (
-            (
-                "a descriptor whose LDS size disagrees with the ISA",
-                (fixture, current_symbol, 5, 206848),
-                "refusing to patch",
-            ),
-            (
-                "a code object without the requested kernel",
-                (fixture, KERNEL_SYMBOL_128, 5, 131072),
-                "has no symbol named",
-            ),
-            (
-                "an out-of-range TCP_SPLIT",
-                (fixture, current_symbol, 8, 131072),
-                "TCP_SPLIT must be in",
-            ),
-            (
-                "a file that is not an ELF object",
-                (not_elf, current_symbol, 5, 131072),
-                "is not an ELF file",
-            ),
-        ):
-            try:
-                patch_code_object_tcp_split(*arguments)
-            except GemmIsaRunnerError as exc:
-                if message_fragment not in str(exc):
-                    raise AssertionError(
-                        f"{label} raised unexpected error: {exc}"
-                    ) from exc
-            else:
-                raise AssertionError(f"{label} was patched anyway")
-        if fixture.read_bytes() != patched:
-            raise AssertionError("a rejected patch still modified the fixture")
-
-    timing_calls: list[tuple[Any, ...]] = []
-
-    class EventStub:
-        def __init__(self, label: str) -> None:
-            self.label = label
-
-        def record(self, stream: Any) -> None:
-            timing_calls.append(("event.record", self.label, stream))
-
-        def synchronize(self) -> None:
-            timing_calls.append(("event.synchronize", self.label))
-
-        def elapsed_time(self, other: Any) -> float:
-            timing_calls.append(
-                ("event.elapsed_time", self.label, other.label)
-            )
-            return 1.5  # milliseconds for the complete two-launch batch
-
-    class CudaStub:
-        def __init__(self) -> None:
-            self.event_count = 0
-
-        def synchronize(self) -> None:
-            timing_calls.append(("cuda.synchronize",))
-
-        def Event(self, *, enable_timing: bool) -> EventStub:
-            if not enable_timing:
-                raise AssertionError("timing event was not enabled")
-            label = "start" if self.event_count == 0 else "end"
-            self.event_count += 1
-            timing_calls.append(("event.create", label))
-            return EventStub(label)
-
-    class TorchStub:
-        def __init__(self) -> None:
-            self.cuda = CudaStub()
-
-    launch_count = 0
-
-    def launch_stub() -> str:
-        nonlocal launch_count
-        launch_count += 1
-        timing_calls.append(("launch", launch_count))
-        return f"fixture-output-{launch_count}"
-
-    stream_marker = object()
-    output_marker, event_avg = _run_batched_cuda_event_timing(
-        TorchStub(),
-        launch_stub,
-        stream_marker,
-        num_warmup=3,
-        num_iters=2,
-    )
-    expected_timing_calls = [
-        ("launch", 1),
-        ("launch", 2),
-        ("launch", 3),
-        ("cuda.synchronize",),
-        ("event.create", "start"),
-        ("event.create", "end"),
-        ("event.record", "start", stream_marker),
-        ("launch", 4),
-        ("launch", 5),
-        ("event.record", "end", stream_marker),
-        ("event.synchronize", "end"),
-        ("event.elapsed_time", "start", "end"),
-    ]
-    if timing_calls != expected_timing_calls:
-        raise AssertionError(
-            f"batched CUDA-event call order is {timing_calls}, "
-            f"expected {expected_timing_calls}"
-        )
-    if output_marker != "fixture-output-5" or event_avg != 750.0:
-        raise AssertionError(
-            f"batched CUDA-event result is {(output_marker, event_avg)}, "
-            "expected ('fixture-output-5', 750.0)"
-        )
-
-    defaults = _build_parser().parse_args(["--isa", "fixture.s"])
-    if defaults.warmup != 101 or defaults.iters != 100:
-        raise AssertionError(
-            f"timing CLI defaults are warmup={defaults.warmup}, "
-            f"iters={defaults.iters}; expected 101/100"
-        )
-    zero_warmup = _build_parser().parse_args(
-        ["--isa", "fixture.s", "--warmup", "0"]
-    )
-    if zero_warmup.warmup != 0:
-        raise AssertionError("--warmup 0 was not preserved")
-    timing_row = make_cuda_event_timing_row(
-        EXPECTED_KERNEL_BASENAME,
-        2,
-        3,
-        event_avg,
-        0,
-    )
-    if tuple(timing_row) != EVENT_TIMING_COLUMNS:
-        raise AssertionError(
-            f"event timing columns are {tuple(timing_row)}, "
-            f"expected {EVENT_TIMING_COLUMNS}"
-        )
-    if (
-        timing_row["name"] != EXPECTED_KERNEL_BASENAME
-        or timing_row["cnt"] != 2
-        or timing_row["warmup"] != 3
-        or timing_row["device_time_sum"] != 1500.0
-        or timing_row["device_time_avg"] != 750.0
-        or timing_row["device_type"] != "CUDA/HIP"
-        or timing_row["device_index"] != 0
-        or timing_row["source"] != "cuda.Event batched"
-    ):
-        raise AssertionError(f"unexpected CUDA-event timing row: {timing_row}")
-
-    fixture: dict[str, int] = {}
-    for index, (name, _offset, kind) in enumerate(KERNARG_LAYOUT, start=1):
-        fixture[name] = (
-            0x1100000000000000 + index
-            if kind == "Q"
-            else 0x22000000 + index
-        )
-    payload = _pack_kernarg_fields(fixture)
-    if len(payload) != KERNARG_SIZE:
-        raise AssertionError(
-            f"kernarg fixture size is {len(payload)}, expected {KERNARG_SIZE}"
-        )
-    for name, offset, kind in KERNARG_LAYOUT:
-        actual = struct.unpack_from(f"<{kind}", payload, offset)[0]
-        if actual != fixture[name]:
-            raise AssertionError(
-                f"kernarg field {name} at byte {offset}: "
-                f"got 0x{actual:x}, expected 0x{fixture[name]:x}"
-            )
-
-    expected_geometries = {
-        KERNEL_PROFILE_256: LaunchGeometry(
-            grid=(16, 16, 1),
-            block=(128, 1, 1),
-            cluster=(4, 4, 1),
-            tiles=(8, 72),
-            cluster_grid=(4, 4),
-            log2_grid=(2, 2),
-            logical_cluster_grid=(2, 18),
-            logical_wg_tasks=576,
-            logical_cluster_tasks=36,
-            persistent_stride=16,
-        ),
-        KERNEL_PROFILE_128: LaunchGeometry(
-            grid=(16, 16, 1),
-            block=(128, 1, 1),
-            cluster=(4, 4, 1),
-            tiles=(16, 144),
-            cluster_grid=(4, 4),
-            log2_grid=(2, 2),
-            logical_cluster_grid=(4, 36),
-            logical_wg_tasks=2304,
-            logical_cluster_tasks=144,
-            persistent_stride=16,
-        ),
-        KERNEL_PROFILE_64X256: LaunchGeometry(
-            grid=(64, 4, 1),
-            block=(128, 1, 1),
-            cluster=(4, 1, 1),
-            tiles=(8, 288),
-            cluster_grid=(16, 4),
-            log2_grid=(4, 2),
-            logical_cluster_grid=(2, 288),
-            logical_wg_tasks=2304,
-            logical_cluster_tasks=576,
-            persistent_stride=64,
-        ),
-    }
-    geometries: dict[KernelProfile, LaunchGeometry] = {}
-    for profile, expected_geometry in expected_geometries.items():
-        if profile.wg_tile != (
-            profile.wave_tile[0] * profile.output_quadrants[0],
-            profile.wave_tile[1] * profile.output_quadrants[1],
-        ):
-            raise AssertionError(
-                f"profile {profile.name} WG/wave arrangement is invalid"
-            )
-        if (
-            profile.output_quadrants[0] * profile.output_quadrants[1] != 4
-            or profile.block != (4 * 32, 1, 1)
-        ):
-            raise AssertionError(
-                f"profile {profile.name} is not block128/four wave32"
-            )
-        geometry = make_launch_geometry(18432, 2048, 7168, profile)
-        geometries[profile] = geometry
-        if geometry != expected_geometry:
-            raise AssertionError(
-                f"{profile.name} default geometry mismatch: got {geometry}, "
-                f"expected {expected_geometry}"
-            )
-
-    # Preserve the original profile's K%128 host gate while enforcing full
-    # K256 bodies for both newer profiles.
-    make_launch_geometry(1024, 1024, 128, KERNEL_PROFILE_256)
-    shape_rejections = {
-        KERNEL_PROFILE_256: (
-            (768, 1024, 128),
-            (1024, 768, 128),
-            (1024, 1024, 64),
-        ),
-        KERNEL_PROFILE_128: (
-            (384, 512, 256),
-            (512, 384, 256),
-            (512, 512, 128),
-        ),
-        KERNEL_PROFILE_64X256: (
-            (65, 1024, 256),
-            (64, 768, 256),
-            (64, 1024, 128),
-        ),
-    }
-    for profile, invalid_shapes in shape_rejections.items():
-        for invalid_shape in invalid_shapes:
-            try:
-                make_launch_geometry(*invalid_shape, profile)
-            except GemmIsaRunnerError:
-                pass
-            else:
-                raise AssertionError(
-                    f"profile {profile.name} accepted invalid shape "
-                    f"{invalid_shape}"
-                )
-
-    expected_default_fields = {
-        "ptr_D": 0x1010101010101010,
-        "ptr_A": 0x2020202020202020,
-        "ptr_B": 0x3030303030303030,
-        "ptr_ScaleA": 0x4040404040404040,
-        "ptr_ScaleB": 0x5050505050505050,
-        "strideD0": 4096,
-        "strideA0": 3584,
-        "strideB0": 3584,
-        "ScaleA_stride0": 224,
-        "ScaleB_stride0": 224,
-        "M": 18432,
-        "N": 2048,
-        "K": 7168,
-    }
-    profile_payloads: dict[KernelProfile, bytes] = {}
-    for profile, geometry in geometries.items():
-        if (
-            profile.kernarg_size != KERNARG_SIZE
-            or profile.kernarg_layout != KERNARG_LAYOUT
-        ):
-            raise AssertionError(
-                f"{profile.name} does not use the exact {KERNARG_SIZE}-byte "
-                "BF16 MXFP4 preload ABI"
-            )
-        default_payload = pack_mxfp4_kernargs(
-            ptr_d=0x1010101010101010,
-            ptr_a=0x2020202020202020,
-            ptr_b=0x3030303030303030,
-            ptr_scale_a=0x4040404040404040,
-            ptr_scale_b=0x5050505050505050,
-            m=18432,
-            n=2048,
-            k=7168,
-            geometry=geometry,
-            profile=profile,
-        )
-        profile_payloads[profile] = default_payload
-        if len(default_payload) != profile.kernarg_size:
-            raise AssertionError(
-                f"{profile.name} kernarg size is {len(default_payload)}, "
-                f"expected {profile.kernarg_size}"
-            )
-        for name, offset, kind in profile.kernarg_layout:
-            actual = struct.unpack_from(f"<{kind}", default_payload, offset)[0]
-            if name == "log2_grid_x":
-                expected_value = geometry.log2_grid[0]
-            elif name == "log2_grid_y":
-                expected_value = geometry.log2_grid[1]
-            else:
-                expected_value = expected_default_fields[name]
-            if actual != expected_value:
-                raise AssertionError(
-                    f"{profile.name} kernarg field {name} at byte {offset}: "
-                    f"got {actual}, expected {expected_value}"
-                )
-    # Pointer, runtime-stride, and shape fields are byte-identical.  The last
-    # eight bytes intentionally carry each physical cluster grid's log2 pair.
-    if len({payload[:72] for payload in profile_payloads.values()}) != 1:
-        raise AssertionError(
-            "the three source-declared BF16 MXFP4 ABI prefixes packed differently"
-        )
-
-    ctypes_contract = {
-        "attribute value size": (
-            ctypes.sizeof(_HipLaunchAttributeValue),
-            64,
-        ),
-        "attribute value offset": (_HipLaunchAttribute.value.offset, 8),
-        "attribute size": (ctypes.sizeof(_HipLaunchAttribute), 72),
-        "config stream offset": (_HipLaunchConfig.hStream.offset, 32),
-        "config attrs offset": (_HipLaunchConfig.attrs.offset, 40),
-        "config numAttrs offset": (_HipLaunchConfig.numAttrs.offset, 48),
-        "config size": (ctypes.sizeof(_HipLaunchConfig), 56),
-    }
-    for label, (actual, expected_value) in ctypes_contract.items():
-        if actual != expected_value:
-            raise AssertionError(
-                f"HIP ctypes {label} is {actual}, expected {expected_value}"
-            )
-    for profile, geometry in geometries.items():
-        attributes, config = _make_hip_launch_config(
-            geometry,
-            ctypes.c_void_p(0x1234),
-        )
-        config_grid = (
-            config.gridDimX,
-            config.gridDimY,
-            config.gridDimZ,
-        )
-        config_block = (
-            config.blockDimX,
-            config.blockDimY,
-            config.blockDimZ,
-        )
-        cluster_dim = attributes[0].value.clusterDim
-        config_cluster = (cluster_dim.x, cluster_dim.y, cluster_dim.z)
-        if (
-            config_grid != geometry.grid
-            or config_block != geometry.block
-            or config_cluster != geometry.cluster
-            or attributes[0].id
-            != _HIP_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
-            or config.numAttrs != 1
-        ):
-            raise AssertionError(
-                f"{profile.name} HIP launch config is grid={config_grid}, "
-                f"block={config_block}, cluster={config_cluster}"
-            )
-
-
 class _HipRuntime:
     """Minimal checked HIP runtime/driver binding used by the dense runner."""
 
@@ -2665,11 +2031,15 @@ def make_cuda_event_timing_row(
     }
 
 
+def _markdown_cell(value: Any) -> str:
+    return str(value).replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+
+
 def _plain_markdown(
     row: Mapping[str, Any],
     columns: Sequence[str] = SUMMARY_COLUMNS,
 ) -> str:
-    values = [str(row[column]) for column in columns]
+    values = [_markdown_cell(row[column]) for column in columns]
     widths = [
         max(len(column), len(value))
         for column, value in zip(columns, values)
@@ -2696,76 +2066,21 @@ def _print_cuda_event_timing(row: Mapping[str, Any]) -> None:
     print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
 
 
-def _print_summary(
+def print_summary(
     row: Mapping[str, Any],
-    pandas_module: Any,
     *,
-    symbol: str | None = None,
-    profile: KernelProfile | None = None,
-) -> None:
-    frame = pandas_module.DataFrame([row], columns=SUMMARY_COLUMNS)
-    try:
-        markdown = frame.to_markdown(index=False)
-    except ImportError:
-        markdown = _plain_markdown(row)
-    identity = (
-        f"; profile={profile.name}; symbol={symbol}"
-        if profile is not None and symbol is not None
-        else ""
-    )
-    print(
-        "gemm_a4w4 (F4GEMM ISA runner) summary "
-        f"(markdown{identity}):"
-    )
-    print(markdown)
-
-
-def _print_selected_contract(
-    isa: Path,
     symbol: str,
     profile: KernelProfile,
-    geometry: LaunchGeometry,
 ) -> None:
-    cluster_size = (
-        profile.cluster[0] * profile.cluster[1] * profile.cluster[2]
-    )
-    physical_clusters = geometry.cluster_grid[0] * geometry.cluster_grid[1]
+    if tuple(row) != SUMMARY_COLUMNS:
+        raise GemmIsaRunnerError(
+            f"summary columns {tuple(row)} do not match {SUMMARY_COLUMNS}"
+        )
     print(
-        f"[gemm_isa_runner] selected profile: {profile.name}; "
-        f"WG tile={profile.wg_tile}; wave tile={profile.wave_tile}; "
-        f"output wave arrangement (M,N)={profile.output_quadrants}"
+        "GEMM ISA runner summary "
+        f"(markdown; profile={profile.name}; symbol={symbol}):"
     )
-    print(
-        f"[gemm_isa_runner] logical WG grid="
-        f"{geometry.logical_wg_grid}; tasks={geometry.logical_wg_tasks}; "
-        f"logical cluster grid={geometry.logical_cluster_grid_3d}; "
-        f"cluster tasks={geometry.logical_cluster_tasks}"
-    )
-    print(
-        f"[gemm_isa_runner] physical launch={geometry.grid}; "
-        f"block={geometry.block}; cluster={geometry.cluster}; "
-        f"physical cluster grid={geometry.physical_cluster_grid}; "
-        f"physical clusters={physical_clusters}; cluster size={cluster_size}; "
-        f"persistent WGs={profile.persistent_tg}; "
-        f"persistent stride={geometry.persistent_stride}; "
-        f"log2 grid={geometry.log2_grid}"
-    )
-    print(
-        f"[gemm_isa_runner] exact shape contract: "
-        f"M%{profile.wg_tile[0] * profile.cluster[1]}=0; "
-        f"N%{profile.wg_tile[1] * profile.cluster[0]}=0; "
-        f"K%{profile.k_multiple}=0; no tails or partial clusters"
-    )
-    print(
-        f"[gemm_isa_runner] ABI={profile.abi_name}; "
-        f"kernarg={profile.kernarg_size} bytes; "
-        f"fixed LDS={profile.group_segment_fixed_size} bytes; "
-        f"next-free VGPR/SGPR={profile.next_free_vgpr}/"
-        f"{profile.next_free_sgpr}; metadata VGPR/SGPR="
-        f"{profile.metadata_vgpr_count}/{profile.metadata_sgpr_count}"
-    )
-    print(f"[gemm_isa_runner] source: {isa}")
-    print(f"[gemm_isa_runner] symbol: {symbol}")
+    print(_plain_markdown(row))
 
 
 def _run_gemm(
@@ -2872,6 +2187,7 @@ def _run_gemm(
     )
     row = {
         "intype": args.intype,
+        "batch": 1,
         "M": m,
         "N": n,
         "K": k,
@@ -2880,6 +2196,10 @@ def _run_gemm(
         "seed": args.seed,
         "dtype": args.dtype,
         "gfx": gfx,
+        "logical cluster tasks/plane": geometry.logical_cluster_tasks,
+        "physical clusters/plane": geometry.cluster_grid[0] * geometry.cluster_grid[1],
+        "physical WGs/plane": geometry.grid[0] * geometry.grid[1],
+        "encoded recurrence stride/plane": geometry.persistent_stride,
         "ref hash128": reference_hash,
         "gemm_a4w4 us": round(us, 2),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
@@ -3003,15 +2323,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--device must be non-negative")
 
     try:
-        run_static_contract_checks()
         isa = _resolve_isa(args.isa)
         source = _read_isa_source(isa)
         symbol = resolve_kernel_symbol_from_text(source, args.symbol)
         profile = _validate_mode(args.intype, args.apre, args.dtype, symbol)
-        validate_assembly_contract_from_text(source, symbol, profile)
-        # Validate profile-specific geometry before clang or device allocation.
+        resources = validate_assembly_contract_from_text(source, symbol, profile)
         geometry = make_launch_geometry(*args.shape, profile=profile)
-        _print_selected_contract(isa, symbol, profile, geometry)
+        print_contract(
+            ContractReport(
+                runner=Path(__file__).stem,
+                profile=profile,
+                symbol=symbol,
+                shape=args.shape,
+                batch=1,
+                geometry=geometry,
+                resources=resources,
+                stores_to_d=isa_writes_output(source),
+            )
+        )
         clang = _resolve_clang(args.clang)
         if _clang_uses_default_runtime_libraries(clang):
             _prepend_default_clang_runtime_libraries()
@@ -3050,12 +2379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 geometry,
             )
             _print_cuda_event_timing(event_timing)
-            _print_summary(
-                row,
-                _load_pandas_from_row_context(),
-                symbol=symbol,
-                profile=profile,
-            )
+            print_summary(row, symbol=symbol, profile=profile)
             return 0 if passed else 3
     except CompileError as exc:
         print(f"[gemm_isa_runner] compile failed:\n{exc}", file=sys.stderr)
@@ -3063,18 +2387,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except GemmIsaRunnerError as exc:
         print(f"[gemm_isa_runner] error: {exc}", file=sys.stderr)
         return 1
-
-
-def _load_pandas_from_row_context() -> Any:
-    """Import the repository's existing pandas dependency for final rendering."""
-
-    try:
-        import pandas as pd  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise GemmIsaRunnerError(
-            "pandas is required by test_f4gemm.py and for summary rendering"
-        ) from exc
-    return pd
 
 
 if __name__ == "__main__":
