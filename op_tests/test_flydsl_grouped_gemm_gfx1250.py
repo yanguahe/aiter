@@ -78,6 +78,9 @@ AITER_MOE_NUM_EXPERT_ACTIVATED = parse_num_expert_activated()
 
 SCALE_BLOCK = 32
 DEFAULT_SCALE_BYTE = 127  # e8m0 byte for 2^0 = 1.0
+# User-facing TB/s applies the requested binary/decimal conversion:
+# 1.024**4 = 2**40 / 10**12.
+TBPS_DIVISOR = 1.024 ** 4
 _ACT_BY_NAME = {
     "silu": ActivationType.Silu,
     "swiglu": ActivationType.Swiglu,
@@ -88,6 +91,15 @@ _STAGE1_ACT_ID = {
     ActivationType.Swiglu: 2,
     ActivationType.Situv2: 3,
 }
+
+
+def _bytes_per_microsecond_to_tbps(
+    bytes_count: int | float,
+    time_us: int | float,
+) -> float:
+    return bytes_count / time_us / 1e6 / TBPS_DIVISOR
+
+
 _GEMM_SUMMARY_COLUMNS = (
     "gemm1 executed",
     "gemm1 effective read",
@@ -226,9 +238,15 @@ def _calculate_effective_stage_metrics(
         "output_write_bytes": output_write_bytes,
         "effective_read_write_bytes": effective_read_write_bytes,
         "executed_tflops": executed_flops / latency_us / 1e6,
-        "effective_read_tbps": effective_read_bytes / latency_us / 1e6,
-        "output_write_tbps": output_write_bytes / latency_us / 1e6,
-        "effective_read_write_tbps": effective_read_write_bytes / latency_us / 1e6,
+        "effective_read_tbps": _bytes_per_microsecond_to_tbps(
+            effective_read_bytes, latency_us
+        ),
+        "output_write_tbps": _bytes_per_microsecond_to_tbps(
+            output_write_bytes, latency_us
+        ),
+        "effective_read_write_tbps": _bytes_per_microsecond_to_tbps(
+            effective_read_write_bytes, latency_us
+        ),
     }
 
 
@@ -463,19 +481,28 @@ def test_a4w4_effective_stage_metrics_fixture():
 
     assert gemm1["valid_rows"] == 3072
     assert gemm1["aligned_rows"] == 6144
+    assert TBPS_DIVISOR == pytest.approx(1.099511627776)
+    for key, bytes_count in (
+        ("effective_read_tbps", gemm1["effective_read_bytes"]),
+        ("output_write_tbps", gemm1["output_write_bytes"]),
+        ("effective_read_write_tbps", gemm1["effective_read_write_bytes"]),
+    ):
+        decimal_tbps = bytes_count / 144.7 / 1e6
+        assert gemm1[key] == pytest.approx(decimal_tbps / TBPS_DIVISOR)
+        assert gemm1[key] * TBPS_DIVISOR == pytest.approx(decimal_tbps)
     assert _format_effective_stage_metrics(gemm1) == (
         "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
-        "2,257,747,968 B \u2192 15.603 TB/s",
-        "18,874,368 B (BF16) \u2192 0.130 TB/s",
-        "2,276,622,336 B \u2192 15.733 TB/s",
+        "2,257,747,968 B \u2192 14.191 TB/s",
+        "18,874,368 B (BF16) \u2192 0.119 TB/s",
+        "2,276,622,336 B \u2192 14.309 TB/s",
     )
     assert gemm2["valid_rows"] == 3072
     assert gemm2["aligned_rows"] == 6144
     assert _format_effective_stage_metrics(gemm2) == (
         "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
-        "1,128,038,400 B \u2192 14.823 TB/s",
-        "44,040,192 B (BF16) \u2192 0.579 TB/s",
-        "1,172,078,592 B \u2192 15.402 TB/s",
+        "1,128,038,400 B \u2192 13.482 TB/s",
+        "44,040,192 B (BF16) \u2192 0.526 TB/s",
+        "1,172,078,592 B \u2192 14.008 TB/s",
     )
 
 
@@ -597,13 +624,13 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     )
     assert tuple(a8_summary.values()) == (
         "541,165,879,296 FLOP \u2192 1,090.6 TFLOP/s",
-        "2,428,895,232 B \u2192 4.895 TB/s",
-        "37,748,736 B (BF16) \u2192 0.076 TB/s",
-        "2,466,643,968 B \u2192 4.971 TB/s",
+        "2,428,895,232 B \u2192 4.452 TB/s",
+        "37,748,736 B (BF16) \u2192 0.069 TB/s",
+        "2,466,643,968 B \u2192 4.521 TB/s",
         "270,582,939,648 FLOP \u2192 1,036.1 TFLOP/s",
-        "1,147,994,112 B \u2192 4.396 TB/s",
-        "352,321,536 B (BF16) \u2192 1.349 TB/s",
-        "1,500,315,648 B \u2192 5.745 TB/s",
+        "1,147,994,112 B \u2192 3.998 TB/s",
+        "352,321,536 B (BF16) \u2192 1.227 TB/s",
+        "1,500,315,648 B \u2192 5.225 TB/s",
     )
     a8_gemm1_metrics = _calculate_effective_stage_metrics(
         route_counts=[64] * 384,
@@ -750,13 +777,13 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     assert tuple(a4_summary) == _GEMM_SUMMARY_COLUMNS
     assert tuple(a4_summary.values()) == (
         "541,165,879,296 FLOP \u2192 3,739.9 TFLOP/s",
-        "2,257,747,968 B \u2192 15.603 TB/s",
-        "18,874,368 B (BF16) \u2192 0.130 TB/s",
-        "2,276,622,336 B \u2192 15.733 TB/s",
+        "2,257,747,968 B \u2192 14.191 TB/s",
+        "18,874,368 B (BF16) \u2192 0.119 TB/s",
+        "2,276,622,336 B \u2192 14.309 TB/s",
         "270,582,939,648 FLOP \u2192 3,555.6 TFLOP/s",
-        "1,128,038,400 B \u2192 14.823 TB/s",
-        "44,040,192 B (BF16) \u2192 0.579 TB/s",
-        "1,172,078,592 B \u2192 15.402 TB/s",
+        "1,128,038,400 B \u2192 13.482 TB/s",
+        "44,040,192 B (BF16) \u2192 0.526 TB/s",
+        "1,172,078,592 B \u2192 14.008 TB/s",
     )
 
     duplicate_records = a8_records + [

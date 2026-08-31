@@ -74,6 +74,9 @@ _METADATA_BLOCK_RE = re.compile(
 
 MXFP4_SCALE_BLOCK = 32
 MAX_LDS_PER_WGP = 320 * 1024
+# User-facing TB/s applies the requested binary/decimal conversion:
+# 1.024**4 = 2**40 / 10**12.
+TBPS_DIVISOR = 1.024 ** 4
 STORE_MNEMONIC_PREFIXES = (
     "tensor_store",
     "global_store",
@@ -106,9 +109,16 @@ KERNARG_LAYOUT = (
 )
 
 
+def bytes_per_microsecond_to_tbps(
+    bytes_count: int | float,
+    time_us: int | float,
+) -> float:
+    return bytes_count / time_us / 1e6 / TBPS_DIVISOR
+
+
 @dataclass(frozen=True)
 class KernelProfile:
-    """Exact symbol, geometry, ABI, and resource contract for one ISA."""
+    """Exact symbol, geometry, and host ABI profile for one ISA."""
 
     name: str
     primary_symbol: str
@@ -125,11 +135,6 @@ class KernelProfile:
     abi_name: str
     kernarg_size: int
     kernarg_layout: tuple[tuple[str, int, str], ...]
-    group_segment_fixed_size: int
-    next_free_vgpr: int
-    next_free_sgpr: int
-    metadata_vgpr_count: int
-    metadata_sgpr_count: int
 
 
 KERNEL_PROFILE_256 = KernelProfile(
@@ -151,11 +156,6 @@ KERNEL_PROFILE_256 = KernelProfile(
     abi_name="bf16-mxfp4-preload-v1",
     kernarg_size=KERNARG_SIZE,
     kernarg_layout=KERNARG_LAYOUT,
-    group_segment_fixed_size=327680,
-    next_free_vgpr=1024,
-    next_free_sgpr=104,
-    metadata_vgpr_count=1024,
-    metadata_sgpr_count=106,
 )
 KERNEL_PROFILE_128 = KernelProfile(
     name="bf16-mxfp4-wg128-wave64-4x4-persistent",
@@ -173,11 +173,6 @@ KERNEL_PROFILE_128 = KernelProfile(
     abi_name="bf16-mxfp4-preload-v1",
     kernarg_size=KERNARG_SIZE,
     kernarg_layout=KERNARG_LAYOUT,
-    group_segment_fixed_size=172032,
-    next_free_vgpr=384,
-    next_free_sgpr=104,
-    metadata_vgpr_count=384,
-    metadata_sgpr_count=106,
 )
 KERNEL_PROFILE_64X256 = KernelProfile(
     name="bf16-mxfp4-wg64x256-wave64-1x4-persistent",
@@ -196,11 +191,6 @@ KERNEL_PROFILE_64X256 = KernelProfile(
     abi_name="bf16-mxfp4-preload-v1",
     kernarg_size=KERNARG_SIZE,
     kernarg_layout=KERNARG_LAYOUT,
-    group_segment_fixed_size=206848,
-    next_free_vgpr=384,
-    next_free_sgpr=104,
-    metadata_vgpr_count=384,
-    metadata_sgpr_count=106,
 )
 SUPPORTED_KERNEL_PROFILES = (
     KERNEL_PROFILE_256,
@@ -296,7 +286,7 @@ class CompileError(GemmIsaRunnerError):
 
 
 def select_kernel_profile(symbol: str) -> KernelProfile:
-    """Select a contract only for an explicitly supported, exact symbol."""
+    """Select a profile only for an explicitly supported, exact symbol."""
 
     profile = _KERNEL_PROFILE_BY_SYMBOL.get(symbol)
     if profile is None:
@@ -353,8 +343,6 @@ class AssemblyResources:
     descriptor_lds: int
     metadata_lds: int
     kernarg_size: int
-    next_free_vgpr: int
-    next_free_sgpr: int
     metadata_vgpr: int
     metadata_sgpr: int
 
@@ -871,57 +859,11 @@ def _metadata_int(body: str, field: str) -> int:
     )
 
 
-def _metadata_arg_layout(body: str) -> tuple[tuple[int, int], ...]:
-    match = re.search(
-        r"(?ms)^[ \t]*-[ \t]+\.args:[ \t]*$"
-        r"(?P<args>.*?)"
-        r"(?=^[ ]{4}\.[A-Za-z_])",
-        body,
-    )
-    if match is None:
-        raise GemmIsaRunnerError("metadata has no parseable .args list")
-    args = match.group("args")
-    offsets = [
-        int(value, 0)
-        for value in re.findall(
-            r"(?m)^[ \t]*(?:-[ \t]+)?\.offset:[ \t]*"
-            r"(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:#.*)?$",
-            args,
-        )
-    ]
-    sizes = [
-        int(value, 0)
-        for value in re.findall(
-            r"(?m)^[ \t]*\.size:[ \t]*"
-            r"(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:#.*)?$",
-            args,
-        )
-    ]
-    if not offsets or len(offsets) != len(sizes):
-        raise GemmIsaRunnerError(
-            "metadata .args offsets/sizes are incomplete: "
-            f"offsets={offsets}, sizes={sizes}"
-        )
-    return tuple(zip(offsets, sizes))
-
-
-def validate_runtime_assembly_contract(
+def parse_assembly_resources(
     source: str,
     symbol: str,
-    *,
-    kernarg_size: int,
-    kernarg_layout: tuple[tuple[str, int, str], ...],
-    block: tuple[int, int, int],
-    user_sgpr_count: int,
-    next_free_vgpr: int,
-    next_free_sgpr: int,
-    metadata_vgpr: int,
-    metadata_sgpr: int,
-    expected_descriptor_lds: int | None,
-    expected_metadata_lds: int | None,
-    require_matching_lds: bool,
 ) -> AssemblyResources:
-    """Validate only launch-critical numeric ABI and resource metadata."""
+    """Parse resource values needed for logging and code-object patching."""
 
     actual_symbol = detect_kernel_symbol_from_text(source)
     if actual_symbol != symbol:
@@ -931,122 +873,14 @@ def validate_runtime_assembly_contract(
         )
     descriptor = _descriptor_body(source, symbol)
     metadata = _metadata_body(source)
-    descriptor_expected = {
-        "amdhsa_private_segment_fixed_size": 0,
-        "amdhsa_kernarg_size": kernarg_size,
-        "amdhsa_user_sgpr_count": user_sgpr_count,
-        "amdhsa_user_sgpr_kernarg_segment_ptr": 1,
-        "amdhsa_user_sgpr_kernarg_preload_length": kernarg_size // 4,
-        "amdhsa_user_sgpr_kernarg_preload_offset": 0,
-        "amdhsa_system_sgpr_workgroup_id_x": 1,
-        "amdhsa_system_sgpr_workgroup_id_y": 1,
-        "amdhsa_system_sgpr_workgroup_id_z": 1,
-        "amdhsa_wavefront_size32": 1,
-        "amdhsa_next_free_vgpr": next_free_vgpr,
-        "amdhsa_next_free_sgpr": next_free_sgpr,
-    }
-    for directive, expected in descriptor_expected.items():
-        actual = _descriptor_int(descriptor, directive)
-        if actual != expected:
-            raise GemmIsaRunnerError(
-                f"{symbol}: .{directive} is {actual}, expected {expected}"
-            )
-
-    metadata_expected = {
-        "kernarg_segment_align": 8,
-        "kernarg_segment_size": kernarg_size,
-        "max_flat_workgroup_size": block[0] * block[1] * block[2],
-        "private_segment_fixed_size": 0,
-        "sgpr_count": metadata_sgpr,
-        "vgpr_count": metadata_vgpr,
-        "wavefront_size": 32,
-    }
-    for field, expected in metadata_expected.items():
-        actual = _metadata_int(metadata, field)
-        if actual != expected:
-            raise GemmIsaRunnerError(
-                f"{symbol}: metadata .{field} is {actual}, expected {expected}"
-            )
-
-    descriptor_lds = _descriptor_int(
-        descriptor, "amdhsa_group_segment_fixed_size"
-    )
-    metadata_lds = _metadata_int(metadata, "group_segment_fixed_size")
-    if expected_descriptor_lds is not None and descriptor_lds != expected_descriptor_lds:
-        raise GemmIsaRunnerError(
-            f"{symbol}: descriptor LDS is {descriptor_lds}, expected "
-            f"{expected_descriptor_lds}"
-        )
-    if expected_metadata_lds is not None and metadata_lds != expected_metadata_lds:
-        raise GemmIsaRunnerError(
-            f"{symbol}: metadata LDS is {metadata_lds}, expected "
-            f"{expected_metadata_lds}"
-        )
-    if require_matching_lds and descriptor_lds != metadata_lds:
-        raise GemmIsaRunnerError(
-            f"{symbol}: descriptor LDS {descriptor_lds} does not match "
-            f"metadata LDS {metadata_lds}"
-        )
-    if not 0 <= metadata_lds <= MAX_LDS_PER_WGP:
-        raise GemmIsaRunnerError(
-            f"{symbol}: metadata LDS {metadata_lds} is outside "
-            f"0...{MAX_LDS_PER_WGP}"
-        )
-
-    expected_args = tuple(
-        (offset, struct.calcsize(f"<{kind}"))
-        for _name, offset, kind in kernarg_layout
-    )
-    actual_args = _metadata_arg_layout(metadata)
-    if actual_args != expected_args:
-        raise GemmIsaRunnerError(
-            f"{symbol}: metadata kernarg layout {actual_args} does not match "
-            f"host ABI {expected_args}"
-        )
-    if not re.search(
-        rf"(?m)^amdhsa\.target:[ \t]+"
-        rf"amdgcn-amd-amdhsa--{re.escape(ARCH)}[ \t]*$",
-        metadata,
-    ):
-        raise GemmIsaRunnerError(
-            f"{symbol}: metadata target is not amdgcn-amd-amdhsa--{ARCH}"
-        )
     return AssemblyResources(
-        descriptor_lds=descriptor_lds,
-        metadata_lds=metadata_lds,
-        kernarg_size=kernarg_size,
-        next_free_vgpr=next_free_vgpr,
-        next_free_sgpr=next_free_sgpr,
-        metadata_vgpr=metadata_vgpr,
-        metadata_sgpr=metadata_sgpr,
-    )
-
-
-def validate_assembly_contract_from_text(
-    source: str,
-    symbol: str,
-    profile: KernelProfile,
-) -> AssemblyResources:
-    """Validate one registered single-runner profile."""
-
-    if select_kernel_profile(symbol) != profile:
-        raise GemmIsaRunnerError(
-            f"kernel profile {profile.name!r} does not match symbol {symbol!r}"
-        )
-    return validate_runtime_assembly_contract(
-        source,
-        symbol,
-        kernarg_size=profile.kernarg_size,
-        kernarg_layout=profile.kernarg_layout,
-        block=profile.block,
-        user_sgpr_count=22,
-        next_free_vgpr=profile.next_free_vgpr,
-        next_free_sgpr=profile.next_free_sgpr,
-        metadata_vgpr=profile.metadata_vgpr_count,
-        metadata_sgpr=profile.metadata_sgpr_count,
-        expected_descriptor_lds=profile.group_segment_fixed_size,
-        expected_metadata_lds=profile.group_segment_fixed_size,
-        require_matching_lds=True,
+        descriptor_lds=_descriptor_int(
+            descriptor, "amdhsa_group_segment_fixed_size"
+        ),
+        metadata_lds=_metadata_int(metadata, "group_segment_fixed_size"),
+        kernarg_size=_metadata_int(metadata, "kernarg_segment_size"),
+        metadata_vgpr=_metadata_int(metadata, "vgpr_count"),
+        metadata_sgpr=_metadata_int(metadata, "sgpr_count"),
     )
 
 
@@ -2392,7 +2226,9 @@ def _run_gemm(
         "ref hash128": reference_hash,
         "gemm_a4w4 us": round(us, 2),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
-        "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 2),
+        "gemm_a4w4 TB/s": round(
+            bytes_per_microsecond_to_tbps(logical_bytes, us), 2
+        ),
         "gemm_a4w4 err": error,
         "gemm_a4w4 out hash128": output_hash,
         "gemm_a4w4 max_err_info": max_err_info,
@@ -2516,7 +2352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = _read_isa_source(isa)
         symbol = resolve_kernel_symbol_from_text(source, args.symbol)
         profile = _validate_mode(args.intype, args.apre, args.dtype, symbol)
-        resources = validate_assembly_contract_from_text(source, symbol, profile)
+        resources = parse_assembly_resources(source, symbol)
         geometry = make_launch_geometry(*args.shape, profile=profile)
         print_contract(
             ContractReport(

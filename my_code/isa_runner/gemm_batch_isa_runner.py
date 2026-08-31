@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-r"""Compile, validate, and benchmark batched gfx1250 MXFP4 GEMM assembly.
+r"""Compile and benchmark batched gfx1250 MXFP4 GEMM assembly.
 
 The batched kernel uses one physical grid-Z plane per independent matrix while
 retaining the original 64x256 workgroup tile and persistent X/Y task traversal
@@ -106,8 +106,6 @@ MAB_K_MULTIPLE = 512
 # output span strictly below it because gfx1250 range checking clamps on >=.
 MAB_BUFFER_RANGE_BYTES = 0x1000000
 MAB_KERNARG_SIZE = 112
-MAB_METADATA_GROUP_SEGMENT_SIZE = 256 * 1024
-MAB_FULL_METADATA_GROUP_SEGMENT_SIZE = 320 * 1024
 MAB_WV23_ALIAS_B_MAX_EXCLUSIVE = 0x264E0
 MAB_WV23_RETAINED_A_MAX_EXCLUSIVE = 0x485E0
 MAB_BLOCK = (128, 1, 1)
@@ -151,15 +149,8 @@ MAB_PROFILE = single.KernelProfile(
     persistent_grid_y=256,
     apre=1,
     abi_name="mab-tdm-preload-v1-observed-112",
-    # These are the 64-byte descriptor values.  The metadata-only static LDS is
-    # checked separately because the original object deliberately differs.
     kernarg_size=MAB_KERNARG_SIZE,
     kernarg_layout=MAB_KERNARG_LAYOUT,
-    group_segment_fixed_size=0,
-    next_free_vgpr=1024,
-    next_free_sgpr=98,
-    metadata_vgpr_count=1024,
-    metadata_sgpr_count=97,
 )
 MAB_FULL_BATCH_PROFILE = single.KernelProfile(
     name="fp16-mab-tdm-full-batch-z-wg16x256-wave16x64-1x4",
@@ -177,11 +168,6 @@ MAB_FULL_BATCH_PROFILE = single.KernelProfile(
     abi_name=MAB_PROFILE.abi_name,
     kernarg_size=MAB_PROFILE.kernarg_size,
     kernarg_layout=MAB_PROFILE.kernarg_layout,
-    group_segment_fixed_size=MAB_PROFILE.group_segment_fixed_size,
-    next_free_vgpr=MAB_PROFILE.next_free_vgpr,
-    next_free_sgpr=MAB_PROFILE.next_free_sgpr,
-    metadata_vgpr_count=MAB_PROFILE.metadata_vgpr_count,
-    metadata_sgpr_count=MAB_PROFILE.metadata_sgpr_count,
 )
 MAB_FULL_BATCH_LOADONLY_PROFILE = replace(
     MAB_FULL_BATCH_PROFILE,
@@ -709,71 +695,6 @@ def validate_batch_isa_grid_layout(
     return isa_grid_layout
 
 
-def validate_batch_assembly_contract_from_text(
-    source: str,
-) -> single.AssemblyResources:
-    resources = single.validate_runtime_assembly_contract(
-        source,
-        BATCH_KERNEL_SYMBOL,
-        kernarg_size=BATCH_KERNARG_SIZE,
-        kernarg_layout=BATCH_KERNARG_LAYOUT,
-        block=BATCH_PROFILE.block,
-        user_sgpr_count=32,
-        next_free_vgpr=BATCH_PROFILE.next_free_vgpr,
-        next_free_sgpr=BATCH_PROFILE.next_free_sgpr,
-        metadata_vgpr=BATCH_PROFILE.metadata_vgpr_count,
-        metadata_sgpr=BATCH_PROFILE.metadata_sgpr_count,
-        expected_descriptor_lds=None,
-        expected_metadata_lds=None,
-        require_matching_lds=True,
-    )
-    if resources.metadata_lds == 0:
-        raise single.GemmIsaRunnerError(
-            f"{BATCH_KERNEL_SYMBOL}: static LDS must be positive"
-        )
-    return resources
-
-
-def validate_mab_assembly_contract_from_text(
-    source: str,
-    *,
-    symbol: str = MAB_KERNEL_SYMBOL,
-) -> single.AssemblyResources:
-    metadata_lds = (
-        None
-        if symbol == MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL
-        else (
-            MAB_FULL_METADATA_GROUP_SEGMENT_SIZE
-            if symbol in (
-                MAB_FULL_KERNEL_SYMBOL,
-                MAB_FULL_BATCH_KERNEL_SYMBOL,
-                MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL,
-            )
-            else MAB_METADATA_GROUP_SEGMENT_SIZE
-        )
-    )
-    resources = single.validate_runtime_assembly_contract(
-        source,
-        symbol,
-        kernarg_size=MAB_KERNARG_SIZE,
-        kernarg_layout=MAB_KERNARG_LAYOUT,
-        block=MAB_PROFILE.block,
-        user_sgpr_count=30,
-        next_free_vgpr=MAB_PROFILE.next_free_vgpr,
-        next_free_sgpr=MAB_PROFILE.next_free_sgpr,
-        metadata_vgpr=MAB_PROFILE.metadata_vgpr_count,
-        metadata_sgpr=MAB_PROFILE.metadata_sgpr_count,
-        expected_descriptor_lds=0,
-        expected_metadata_lds=metadata_lds,
-        require_matching_lds=False,
-    )
-    if resources.metadata_lds == 0:
-        raise single.GemmIsaRunnerError(
-            f"{symbol}: static LDS must be positive"
-        )
-    return resources
-
-
 def select_kernel_mode(
     symbol: str,
     batch: int,
@@ -1183,7 +1104,9 @@ def _run_mab_gemm(
             "ref hash128": not_validated,
             "gemm_a4w4 us": round(us, 3),
             "gemm_a4w4 TFLOPS": "n/a (no store)",
-            "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 3),
+            "gemm_a4w4 TB/s": round(
+                single.bytes_per_microsecond_to_tbps(logical_bytes, us), 3
+            ),
             "gemm_a4w4 err": not_validated,
             "gemm_a4w4 out hash128": not_validated,
             "gemm_a4w4 max_err_info": not_validated,
@@ -1309,7 +1232,9 @@ def _run_mab_gemm(
         "ref hash128": dense_reference_hash,
         "gemm_a4w4 us": round(us, 3),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 3),
-        "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 3),
+        "gemm_a4w4 TB/s": round(
+            single.bytes_per_microsecond_to_tbps(logical_bytes, us), 3
+        ),
     }
 
     def validate() -> tuple[MabValidation, bool]:
@@ -1504,7 +1429,9 @@ def _run_batch_gemm(
         "gemm_a4w4 TFLOPS": (
             round(flops / us / 1e6, 1) if writes_output else "n/a (no store)"
         ),
-        "gemm_a4w4 TB/s": round(logical_bytes / us / 1e6, 2),
+        "gemm_a4w4 TB/s": round(
+            single.bytes_per_microsecond_to_tbps(logical_bytes, us), 2
+        ),
     }
 
     # Deferred so the timing rows are printed before the single whole-batch
@@ -1675,9 +1602,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "mab-full-batch-loadonly-wv23-256k",
         ):
             _validate_mab_mode(args, symbol)
-            resources = validate_mab_assembly_contract_from_text(
-                source, symbol=symbol
-            )
+            resources = single.parse_assembly_resources(source, symbol)
             if mode in (
                 "mab-full-batch-loadonly",
                 "mab-full-batch-loadonly-wv23-256k",
@@ -1709,9 +1634,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.dtype,
                 symbol,
             )
-            resources = single.validate_assembly_contract_from_text(
-                source, symbol, profile
-            )
+            resources = single.parse_assembly_resources(source, symbol)
             geometry = single.make_launch_geometry(
                 *args.shape,
                 profile=profile,
@@ -1724,7 +1647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _validate_batch_mode(args.intype, args.apre, args.dtype)
             validate_batch_isa_grid_layout(source, args.grid_layout)
-            resources = validate_batch_assembly_contract_from_text(source)
+            resources = single.parse_assembly_resources(source, symbol)
             geometry = make_batched_launch_geometry(
                 *args.shape,
                 batch=args.batch,
