@@ -291,20 +291,29 @@ GL1 可立即对已经到达的 requester 返回，不继续等待晚到 request
 ### 4.1 A descriptor
 
 目标 A 初始化位于 ISA L321-L392，首次四槽 issue 位于
-L398/L413/L428/L620。
+L398/L413/L428/L620。wave0 是 WG 内唯一 A TDM specialist，
+A data 全部由它发出。
 
-| 字段 | 值 | 含义 |
+| descriptor 字段 | 值 | 解释 |
 |---|---:|---|
-| issuer | wave0 | WG 内唯一 A TDM specialist |
 | `global_addr(q)` | `A_b + M0*P + q*0x800` | 当前 M64、K256 的 preshuffle 起点 |
-| `tensor_dim0` | `16*P = 8*K` | 一个 M16 super-row 的完整 packed-K byte extent |
+| `tensor_dim0` | `16*P = 8*K B` | 一个 M16 super-row 的完整 packed-K byte extent |
 | `tensor_dim1` | `(M-M0)/16` | 从当前 tile 到矩阵末端还剩多少个 M16 block |
-| `tensor_dim0_stride` | `16*P` | 相邻 M16 block 的物理间距 |
-| `tile_dim0` | `0x800 = 2048` | 8 个连续 16×16 packed-byte tile |
+| `tensor_dim0_stride` | `16*P B` | 相邻 M16 block 的物理间距 |
+| `tile_dim0` | `0x800 = 2048 B` | 8 个连续 16×16 packed-byte tile |
 | `tile_dim1` | 4 | M64 含 4 个 M16 block |
+| `iterate_count` | 编码 0 | 不使用 descriptor iteration（见 §3.2） |
+| `global_addr_increment` | 不适用 | 迭代关闭；K 推进在软件：每 K256 加 `s56=0x800` |
 | `workgroup_mask` | `0x000f` | cluster 内四个 N WG 请求相同 A |
-| software address step | `+0x800` | 下一个 K256；`s56=0x800` |
-| descriptor payload | `0x800*4 = 0x2000` | 8192 B |
+
+**单位.** 所有 `tensor_dim*`/`tile_dim*`/`tensor_dim0_stride` 均以
+`data_size` 为单位；本 kernel `data_size=0`（1 B，见 §3.2/§10.1），
+所以这些数值同时是**元素数**和**字节数**。ISA 来源：s36 清零后置
+flags（§3.2 的 `s_bitset0/1_b32 s36,20/21` 位操作），descriptor dword
+实例见 §10.1 dump；"dim 以 `data_size` 为单位"的规则见 CDNA5 ISA
+§10.11.2/§10.11.4。
+
+descriptor payload 固定 `0x800*4 = 0x2000 = 8192 B`（见 4.2 表）。
 
 ### 4.2 Global 二维展开
 
@@ -372,25 +381,45 @@ byte offset in slot
 - cluster 侧：4 个 WG 的 wave0 都发匹配请求，地址相同且 mask 为 `0xf`；
   目标不是“一个 leader 替四个 WG 发指令”。
 
+**wave 分工小结.** A 是“单发行者 + 全共享”模式，与 MAB 里 wave0/wave1
+各搬一份副本不同：这里 WG 内只有 wave0 发 descriptor，WG 内也只有 1 份
+LDS A slot，不存在按 wave 的分区。分工只体现在发行者和 multicast
+接收者上：
+
+| 层面 | 分工 |
+|---|---|
+| 发行 | 仅 wave0，每 WG 每 K256 一条 8192-B descriptor |
+| cluster 接收 | mask `0x000f`（见 4.1 表），每份 payload multicast 到 4 个 WG，每 WG 收 1 份 |
+| WG 内 LDS 消费 | 1 份 `0x2000` slot；4 个 wave 共享，各用 16 条 `ds_load_b128` 覆盖整 slot |
+
 ## 5. B data：N256 分片 tile
 
 ### 5.1 B descriptor
 
 目标 B 初始化位于 ISA L633-L705，首次四槽 issue 位于
-L841/L856/L871/L932。
+L841/L856/L871/L932。wave1 是 WG 内唯一 B TDM specialist，
+B data 全部由它发出。
 
-| 字段 | 值 | 含义 |
+| descriptor 字段 | 值 | 解释 |
 |---|---:|---|
-| issuer | wave1 | WG 内唯一 B TDM specialist |
 | `global_addr(q)` | `B_b + N0*P + q*0x800` | 当前 N256、K256 的 preshuffle 起点 |
-| `tensor_dim0` | `16*P = 8*K` | 一个 N16 super-row 的完整 packed-K byte extent |
+| `tensor_dim0` | `16*P = 8*K B` | 一个 N16 super-row 的完整 packed-K byte extent |
 | `tensor_dim1` | `(N-N0)/16` | 剩余 N16 block 数 |
-| `tensor_dim0_stride` | `16*P` | 相邻 N16 block 的物理间距 |
-| `tile_dim0` | `0x800 = 2048` | 一个 N16×K256 chunk |
+| `tensor_dim0_stride` | `16*P B` | 相邻 N16 block 的物理间距 |
+| `tile_dim0` | `0x800 = 2048 B` | 一个 N16×K256 chunk |
 | `tile_dim1` | 16 | N256 含 16 个 N16 block |
+| `iterate_count` | 编码 0 | 不使用 descriptor iteration（见 §3.2） |
+| `global_addr_increment` | 不适用 | 迭代关闭；K 推进在软件：每 K256 加 `+0x800` |
 | `workgroup_mask` | `1 << wg_x` | 只包含当前 N WG |
-| software address step | `+0x800` | 下一个 K256 |
-| descriptor payload | `0x800*16 = 0x8000` | 32768 B |
+
+**单位.** 所有 `tensor_dim*`/`tile_dim*`/`tensor_dim0_stride` 均以
+`data_size` 为单位；本 kernel `data_size=0`（1 B，见 §3.2/§10.1），
+所以这些数值同时是**元素数**和**字节数**。ISA 来源：s36 清零后置
+flags（§3.2 的 `s_bitset0/1_b32 s36,20/21` 位操作），descriptor dword
+实例见 §10.1 dump；"dim 以 `data_size` 为单位"的规则见 CDNA5 ISA
+§10.11.2/§10.11.4。
+
+descriptor payload 固定 `0x800*16 = 0x8000 = 32768 B`（见 5.2 表）。
 
 ### 5.2 Global pattern
 
@@ -435,38 +464,51 @@ shape = [16 N16][8 K32][16 rows][16 packed bytes]
 size  = 16 * 0x800 = 0x8000
 ```
 
-ISA L114-L126 令 wave `w` 的 B lane base 多出 `w*0x2000`。因此：
+ISA L114-L126 令 wave `w` 的 B lane base 多出 `w*0x2000`，所以 B 在
+WG 内按 wave 分片，四个 wave 的 LDS 地址互斥：
 
-```text
-wave w reads:
-  [B_slot + w*0x2000, B_slot + (w+1)*0x2000)
-
-logical N:
-  [N0 + 64*w, N0 + 64*(w+1))
-```
+| LDS 消费者 | 读取 LDS 范围 | 逻辑 N 行 | 字节数 |
+|---|---:|---:|---:|
+| wave0 | `[B_slot+0x0000,B_slot+0x2000)` | `[N0+0,N0+64)` | 8192 B |
+| wave1 | `[B_slot+0x2000,B_slot+0x4000)` | `[N0+64,N0+128)` | 8192 B |
+| wave2 | `[B_slot+0x4000,B_slot+0x6000)` | `[N0+128,N0+192)` | 8192 B |
+| wave3 | `[B_slot+0x6000,B_slot+0x8000)` | `[N0+192,N0+256)` | 8192 B |
+| **合计** | `[B_slot,B_slot+0x8000)` | `[N0,N0+256)` | **32768 B** |
 
 每个 wave 仍执行 16 条 `ds_load_b128`，wave aggregate 为 8192 B；
 四个 wave 的 B LDS 地址不重叠，合起来恰好覆盖 descriptor 的 32768 B。
+
+发行分工：只有 wave1 发 B descriptor；cluster 内 mask 是 `1<<wg_x`
+one-hot，4 个 WG 各载各的 N256，互不重叠（见 5.2）。
 
 ## 6. ScaleA 与 ScaleB
 
 ### 6.1 ScaleA descriptor
 
 目标 ScaleA 初始化位于 ISA L945-L1016，首次四槽 issue 位于
-L1153/L1168/L1183/L1244。
+L1153/L1168/L1183/L1244。wave2 是 WG 内唯一 ScaleA TDM
+specialist，ScaleA data 全部由它发出。
 
-| 字段 | 值 |
-|---|---:|
-| issuer | wave2 |
-| `global_addr(q)` | `SA_b + M0*S + q*0x100` |
-| `tensor_dim0` | `32*S = K` bytes |
-| `tensor_dim1` | `(M-M0)/32` |
-| `tensor_dim0_stride` | `32*S = K` bytes |
-| `tile_dim0` | `0x100 = 256` |
-| `tile_dim1` | 2 |
-| `workgroup_mask` | `0x000f` |
-| software address step | `+0x100` |
-| payload | `0x200 = 512 B` |
+| descriptor 字段 | 值 | 解释 |
+|---|---:|---|
+| `global_addr(q)` | `SA_b + M0*S + q*0x100` | 当前 M64、K256 scale 的 preshuffle 起点 |
+| `tensor_dim0` | `32*S = K B` | 一个 M32 super-row 的完整 packed-S byte extent |
+| `tensor_dim1` | `(M-M0)/32` | 剩余 M32 block 数 |
+| `tensor_dim0_stride` | `32*S = K B` | 相邻 M32 block 的物理间距 |
+| `tile_dim0` | `0x100 = 256 B` | 2 个连续 32×4 packed-byte tile |
+| `tile_dim1` | 2 | M64 含 2 个 M32 block |
+| `iterate_count` | 编码 0 | 不使用 descriptor iteration（见 §3.2） |
+| `global_addr_increment` | 不适用 | 迭代关闭；K 推进在软件：每 K256 加 `+0x100` |
+| `workgroup_mask` | `0x000f` | cluster 内四个 N WG 请求相同 ScaleA |
+
+**单位.** 所有 `tensor_dim*`/`tile_dim*`/`tensor_dim0_stride` 均以
+`data_size` 为单位；本 kernel `data_size=0`（1 B，见 §3.2/§10.1），
+所以这些数值同时是**元素数**和**字节数**。ISA 来源：s36 清零后置
+flags（§3.2 的 `s_bitset0/1_b32 s36,20/21` 位操作），descriptor dword
+实例见 §10.1 dump；"dim 以 `data_size` 为单位"的规则见 CDNA5 ISA
+§10.11.2/§10.11.4。
+
+descriptor payload 为 `0x200 = 512 B`（下文 LDS slot shape 也有）。
 
 连续维分解：
 
@@ -498,23 +540,40 @@ size  = 0x200
 四个 wave 都从同一个 ScaleA slot 读 4 条 `ds_load_b32`，每条 wave
 aggregate 128 B，完整覆盖同一份 512-B SA tile。
 
+ScaleA 和 A 一样是“单发行者 + 全共享”模式：
+
+| 层面 | 分工 |
+|---|---|
+| 发行 | 仅 wave2，每 WG 每 K256 一条 512-B descriptor |
+| cluster 接收 | mask `0x000f`（见 6.1 表），每份 payload multicast 到 4 个 WG，每 WG 收 1 份 |
+| WG 内 LDS 消费 | 1 份 `0x200` slot；4 个 wave 共享，各用 4 条 `ds_load_b32` 覆盖整 slot |
+
 ### 6.2 ScaleB descriptor
 
 目标 ScaleB 初始化位于 ISA L1257-L1329，首次四槽 issue 位于
-L1466/L1481/L1496/L1557。
+L1466/L1481/L1496/L1557。wave3 是 WG 内唯一 ScaleB TDM
+specialist，ScaleB data 全部由它发出。
 
-| 字段 | 值 |
-|---|---:|
-| issuer | wave3 |
-| `global_addr(q)` | `SB_b + N0*S + q*0x100` |
-| `tensor_dim0` | `32*S = K` bytes |
-| `tensor_dim1` | `(N-N0)/32` |
-| `tensor_dim0_stride` | `32*S = K` bytes |
-| `tile_dim0` | `0x100 = 256` |
-| `tile_dim1` | 8 |
-| `workgroup_mask` | `1 << wg_x` |
-| software address step | `+0x100` |
-| payload | `0x800 = 2048 B` |
+| descriptor 字段 | 值 | 解释 |
+|---|---:|---|
+| `global_addr(q)` | `SB_b + N0*S + q*0x100` | 当前 N256、K256 scale 的 preshuffle 起点 |
+| `tensor_dim0` | `32*S = K B` | 一个 N32 super-row 的完整 packed-S byte extent |
+| `tensor_dim1` | `(N-N0)/32` | 剩余 N32 block 数 |
+| `tensor_dim0_stride` | `32*S = K B` | 相邻 N32 block 的物理间距 |
+| `tile_dim0` | `0x100 = 256 B` | 2 个连续 32×4 packed-byte tile |
+| `tile_dim1` | 8 | N256 含 8 个 N32 block |
+| `iterate_count` | 编码 0 | 不使用 descriptor iteration（见 §3.2） |
+| `global_addr_increment` | 不适用 | 迭代关闭；K 推进在软件：每 K256 加 `+0x100` |
+| `workgroup_mask` | `1 << wg_x` | 只包含当前 N WG |
+
+**单位.** 所有 `tensor_dim*`/`tile_dim*`/`tensor_dim0_stride` 均以
+`data_size` 为单位；本 kernel `data_size=0`（1 B，见 §3.2/§10.1），
+所以这些数值同时是**元素数**和**字节数**。ISA 来源：s36 清零后置
+flags（§3.2 的 `s_bitset0/1_b32 s36,20/21` 位操作），descriptor dword
+实例见 §10.1 dump；"dim 以 `data_size` 为单位"的规则见 CDNA5 ISA
+§10.11.2/§10.11.4。
+
+descriptor payload 为 `0x800 = 2048 B`（下文 LDS slot shape 也有）。
 
 Global 坐标：
 
@@ -537,17 +596,21 @@ shape = [8 N32][2 K128][32 rows][4 scales]
 size  = 0x800
 ```
 
-ISA L130-L136 给 wave `w` 增加 `w*0x200`，所以：
+ISA L130-L136 给 wave `w` 增加 `w*0x200`，所以 ScaleB 在 WG 内按
+wave 分片，与 B 的 N64 quarter 对齐：
 
-```text
-wave w reads:
-  [SB_slot + w*0x200, SB_slot + (w+1)*0x200)
-
-logical N:
-  [N0 + 64*w, N0 + 64*(w+1))
-```
+| LDS 消费者 | 读取 LDS 范围 | 逻辑 N 行 | 字节数 |
+|---|---:|---:|---:|
+| wave0 | `[SB_slot+0x000,SB_slot+0x200)` | `[N0+0,N0+64)` | 512 B |
+| wave1 | `[SB_slot+0x200,SB_slot+0x400)` | `[N0+64,N0+128)` | 512 B |
+| wave2 | `[SB_slot+0x400,SB_slot+0x600)` | `[N0+128,N0+192)` | 512 B |
+| wave3 | `[SB_slot+0x600,SB_slot+0x800)` | `[N0+192,N0+256)` | 512 B |
+| **合计** | `[SB_slot,SB_slot+0x800)` | `[N0,N0+256)` | **2048 B** |
 
 每个 wave 用 4 条 `ds_load_b32` 读取 512 B，四份无重叠地覆盖 2048 B。
+
+发行分工：只有 wave3 发 ScaleB descriptor；cluster 内 mask 是
+`1<<wg_x` one-hot，与 B 一样各 WG 各载各的 N256 scale。
 
 ## 7. 四槽 LDS ring 的完整地址图
 

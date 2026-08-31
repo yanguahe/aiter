@@ -59,7 +59,8 @@ K = [0, 16384)
 
 ## 2. TDM descriptor 的公共设置
 
-A 和 B 都使用常量 `0x07590000 | workgroup_mask`。根据 MI400 Shader
+A 和 B 都使用常量 `0x07590000 | workgroup_mask`（反汇编 L211/L243：
+`s_or_b32 s72, s64/s65, 0x7590000`）。根据 MI400 Shader
 Programming Guide §4.10.4 的 Group-1 descriptor 定义，字段解码如下：
 
 | 字段 | 编码值 | 含义 |
@@ -92,14 +93,26 @@ A descriptor 位于反汇编约 197–227 行：
 | descriptor 字段 | 值 | 解释 |
 |---|---:|---|
 | `global_addr` | 当前 A 的 K-block 起点 | 指向 `A[:, k]` |
-| `tensor_dim0` | 16384 | K |
-| `tensor_dim1` | 16 | M |
-| `tensor_dim0_stride` | 16384 | 相邻 M 行相隔一个完整 K |
-| `tile_dim0` | 128 | 一次读取 K128 |
-| `tile_dim1` | 8 | 每次 iteration 读取 8 个 M 行 |
+| `tensor_dim0` | 16384 元素（= 32768 B） | K |
+| `tensor_dim1` | 16 元素 | M |
+| `tensor_dim0_stride` | 16384 元素（= 32768 B） | 相邻 M 行相隔一个完整 K |
+| `tile_dim0` | 128 元素（= 256 B） | 一次读取 K128 |
+| `tile_dim1` | 8 元素 | 每次 iteration 读取 8 个 M 行 |
 | `iterate_count` | 编码 1 | 实际执行 2 次 |
 | `global_addr_increment` | `8×16384` 个元素 | 第二次 iteration 跳到后 8 个 M 行 |
 | `workgroup_mask` | `0x000f` | multicast 到 cluster 内 4 个 WG |
+
+**单位说明.** 该 kernel 的 `data_size=1`，即每元素 2 B；所以
+`tensor_dim0`、`tensor_dim0_stride`（以及 `tile_dim*`、
+`global_addr_increment`）的单位都是**元素**，字节量 = 数值 × 2。例如
+`tensor_dim0 = 16384` 元素 = `32768 B`，`tensor_dim0_stride = 16384`
+元素 = `32768 B`，即相邻 M 行的间距正好一个完整 K。
+
+**ISA 来源.** `data_size=1` 解码自反汇编 L211 的
+`s_or_b32 s72, s64, 0x7590000`（常量 `0x07590000` 的 `[18:16]=0b001`，
+每元素 2 B；B 在 L243 用 `s65` 作 mask 基底）。"`tensor_dim*`/
+`tile_dim*` 以 `data_size` 为单位"的规则见 CDNA5 ISA §10.11.2/
+§10.11.4 与 MI400 Shader Programming Guide §4.10.4。
 
 ### 3.2 一个 K128 中的二维访问
 
@@ -118,15 +131,18 @@ k0 = q * 128
 | 1 | `[8,16)` | `[k0,k0+128)` | 8 | 256 B | 2048 B |
 | **合计** | `[0,16)` | `[k0,k0+128)` | **16** | **256 B** | **4096 B** |
 
-从 `s67` 的 wave 分支和不同的 `s69` LDS 起点可以看出，wave0、wave1
-各发出一条 A descriptor。两条 descriptor 的 Global 地址范围相同，但写入
-不同的 LDS 区域：
+从 `s67` 的 wave 分支和不同的 `s69` LDS 起点可以看出，A 的搬运由
+wave0、wave1 两个 wave 分工。分工不是按 M 或 K 分区，而是“每份 LDS
+副本由一个 wave 负责”：两个 wave 各发一条完整的 A descriptor，覆盖
+同一个 Global tile（读两遍），但写入不同的 LDS 区域：
 
-| 发出 wave | Global A tile | 原始数据字节 | LDS 作用 |
-|---:|---|---:|---|
-| wave0 | `A[0:16,k0:k0+128]` | 4096 B | 第一份 A 布局 |
-| wave1 | `A[0:16,k0:k0+128]` | 4096 B | 第二份 A 布局 |
-| **descriptor payload 合计** | 同一组 A 地址读取两遍 | **8192 B** | 两份 LDS 副本 |
+| descriptor 发出者 | LDS 副本 | iteration | M 行 | K 列 | 字节数 |
+|---|---|---|---:|---:|---:|
+| wave0 | 副本 0 | 0 | `[0,8)` | `[k0,k0+128)` | 2048 B |
+| wave0 | 副本 0 | 1 | `[8,16)` | `[k0,k0+128)` | 2048 B |
+| wave1 | 副本 1 | 0 | `[0,8)` | `[k0,k0+128)` | 2048 B |
+| wave1 | 副本 1 | 1 | `[8,16)` | `[k0,k0+128)` | 2048 B |
+| **合计** | 两份副本 | — | `[0,16)` 读两遍 | `[k0,k0+128)` | **8192 B** |
 
 因此要区分：
 
@@ -181,14 +197,20 @@ B descriptor 位于反汇编约 230–269 行：
 | descriptor 字段 | 值 | 解释 |
 |---|---:|---|
 | WG 的 B 起点 | `s31×256` 行 | 每个 WG 负责不同的 N256 |
-| `tensor_dim0` | 16384 | K |
-| `tensor_dim1` | 65536 | N |
-| `tensor_dim0_stride` | 16384 | 相邻 N 行相隔一个完整 K |
-| `tile_dim0` | 128 | 一次读取 K128 |
-| `tile_dim1` | 64 | 每次 iteration 读取 64 个 N 行 |
+| `tensor_dim0` | 16384 元素（= 32768 B） | K |
+| `tensor_dim1` | 65536 元素 | N |
+| `tensor_dim0_stride` | 16384 元素（= 32768 B） | 相邻 N 行相隔一个完整 K |
+| `tile_dim0` | 128 元素（= 256 B） | 一次读取 K128 |
+| `tile_dim1` | 64 元素 | 每次 iteration 读取 64 个 N 行 |
 | `iterate_count` | 编码 1 | 实际执行 2 次 |
 | `global_addr_increment` | `64×16384` 个元素 | 第二次 iteration 跳到后 64 个 N 行 |
 | `workgroup_mask` | `1 << local_wg_y` | one-hot，只投递到当前 WG |
+
+**单位说明.** 与 A 相同（见 §3.1）：`data_size=1`（每元素 2 B），
+`tensor_dim0`、`tensor_dim0_stride`（以及 `tile_dim*`、
+`global_addr_increment`）的单位都是**元素**，字节量 = 数值 × 2。ISA
+来源同 §3.1：L243 的常量 `0x07590000` 解码出 `data_size=1`；单位规则
+见 CDNA5 ISA §10.11.2/§10.11.4。
 
 ### 4.2 wave2/wave3 对 B 的二维分工
 
