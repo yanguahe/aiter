@@ -238,13 +238,14 @@ SUMMARY_COLUMNS = (
     "ref hash128",
     "gemm_a4w4 us",
     "gemm_a4w4 TFLOPS",
+    "gemm_a4w4 bytes",
     "gemm_a4w4 TB/s",
     "gemm_a4w4 err",
     "gemm_a4w4 out hash128",
     "gemm_a4w4 max_err_info",
     "gemm_a4w4 rel_l2",
 )
-assert len(SUMMARY_COLUMNS) == 22
+assert len(SUMMARY_COLUMNS) == 23
 
 EVENT_TIMING_COLUMNS = (
     "name",
@@ -324,6 +325,14 @@ class LaunchGeometry:
     logical_wg_tasks: int
     logical_cluster_tasks: int
     persistent_stride: int
+    # How many independent launch planes --batch stands for.  For the f4gemm
+    # and MAB kernels each batch entry is its own GEMM plane with its own set
+    # of workgroups, so the reported grids gain `batch` as a third dimension
+    # and the totals scale by it.  A kernel that already folds the batch into
+    # its tile count -- the grouped MoE kernel folds all 96 experts into
+    # contiguous_m, hence into m_tiles -- launches exactly once and must set
+    # this to 1, or the grids and totals double-count the batch.
+    planes: int | None = None
 
     @property
     def logical_wg_grid(self) -> tuple[int, int, int]:
@@ -377,10 +386,11 @@ def print_contract(report: ContractReport) -> None:
     geometry = report.geometry
     resources = report.resources
     batch = report.batch
+    planes = batch if geometry.planes is None else geometry.planes
     prefix = f"[{report.runner}]"
-    logical_wg_grid = (*geometry.tiles, batch)
-    logical_cluster_grid = (*geometry.logical_cluster_grid, batch)
-    physical_cluster_grid = (*geometry.cluster_grid, batch)
+    logical_wg_grid = (*geometry.tiles, planes)
+    logical_cluster_grid = (*geometry.logical_cluster_grid, planes)
+    physical_cluster_grid = (*geometry.cluster_grid, planes)
     clusters_per_plane = geometry.cluster_grid[0] * geometry.cluster_grid[1]
     physical_wgs_per_plane = geometry.grid[0] * geometry.grid[1]
     static_lds = (
@@ -403,18 +413,18 @@ def print_contract(report: ContractReport) -> None:
     )
     print(
         f"{prefix} logical WG grid={logical_wg_grid}; WG tasks total="
-        f"{geometry.logical_wg_tasks * batch}; logical cluster grid="
+        f"{geometry.logical_wg_tasks * planes}; logical cluster grid="
         f"{logical_cluster_grid}; cluster tasks/plane="
         f"{geometry.logical_cluster_tasks}; cluster tasks total="
-        f"{geometry.logical_cluster_tasks * batch}"
+        f"{geometry.logical_cluster_tasks * planes}"
     )
     print(
         f"{prefix} physical launch={geometry.grid}; block={geometry.block}; "
         f"cluster={geometry.cluster}; physical cluster grid="
         f"{physical_cluster_grid}; clusters/plane={clusters_per_plane}; "
-        f"clusters total={clusters_per_plane * batch}; physical WGs/plane="
+        f"clusters total={clusters_per_plane * planes}; physical WGs/plane="
         f"{physical_wgs_per_plane}; physical WGs total="
-        f"{physical_wgs_per_plane * batch}; encoded recurrence stride/plane="
+        f"{physical_wgs_per_plane * planes}; encoded recurrence stride/plane="
         f"{geometry.persistent_stride}; log2 X/Y grid={geometry.log2_grid}"
     )
     print(
@@ -1926,6 +1936,116 @@ def _run_batched_cuda_event_timing(
         launch()
     torch_module.cuda.synchronize()
 
+    # AITER_ISA_RUNNER_PROFILER=1 additionally wraps the same loop in the torch
+    # profiler and reports its per-kernel device time.  aiter's run_perftest
+    # returns exactly that number (get_trace_perf -> self_device_time_total /
+    # iters), while the event pair below measures the wall time of the whole
+    # queued batch, so it also carries the gaps between dispatches.  The launch
+    # here goes straight to hipDrvLaunchKernelEx via ctypes, bypassing the
+    # PyTorch dispatcher; roctracer hooks the HIP runtime rather than the
+    # dispatcher, so the kernel is expected to appear -- but that is checked
+    # below rather than assumed, and an empty table is reported as such.
+    want_profiler = os.environ.get("AITER_ISA_RUNNER_PROFILER", "0") not in (
+        "0",
+        "",
+    )
+    profiler_rows: list[tuple[str, float, int]] = []
+    if want_profiler:
+        from torch.profiler import ProfilerActivity, profile as _torch_profile
+
+        # AITER_ISA_RUNNER_GAP_US inserts a GPU-side delay between launches.
+        # aiter's bench path reports this kernel ~11% faster than its own
+        # kernel-bench loop; the only difference is that in the pipeline ~100 us
+        # of other kernels separate consecutive gemm1 runs, whereas a tight loop
+        # runs a bandwidth-saturating kernel back to back.  If that spacing is
+        # what matters, adding it here should move the number the same way.
+        gap_us = float(os.environ.get("AITER_ISA_RUNNER_GAP_US", "0") or 0.0)
+        gap_cycles = int(gap_us * 1000.0)  # _sleep takes ~1 cycle per ns
+        with _torch_profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
+        ) as prof:
+            for _ in range(num_iters):
+                launch()
+                if gap_cycles > 0:
+                    torch_module.cuda._sleep(gap_cycles)
+            torch_module.cuda.synchronize()
+        for evt in prof.key_averages():
+            device_us = float(getattr(evt, "self_device_time_total", 0.0) or 0.0)
+            if device_us > 0.0:
+                profiler_rows.append((evt.key, device_us, int(evt.count)))
+        profiler_rows.sort(key=lambda r: -r[1])
+        if profiler_rows:
+            print(
+                "[gemm_isa_runner] torch-profiler device time "
+                f"(same {num_iters} launches, aiter run_perftest convention):"
+            )
+            for key, device_us, count in profiler_rows[:4]:
+                print(
+                    f"    {key[:60]:60} cnt={count:<5} "
+                    f"device_total={device_us:12.1f} us  "
+                    f"avg={device_us / num_iters:9.3f} us/iter"
+                )
+        else:
+            print(
+                "[gemm_isa_runner] torch profiler captured no device activity "
+                "for these launches; hipDrvLaunchKernelEx via ctypes is not "
+                "visible to it, so only the CUDA-event number is available"
+            )
+        for _ in range(num_warmup):
+            launch()
+        torch_module.cuda.synchronize()
+
+    # AITER_ISA_RUNNER_GRAPH=1 captures the same launches into a CUDA graph and
+    # profiles one replay.  aiter's bench path reports the kernel's device time
+    # from inside a graph, which came out ~11% below the eager-loop device time
+    # for the identical kernel; capturing here isolates graph-vs-eager from
+    # everything else in the end-to-end pipeline.  hipDrvLaunchKernelEx is issued
+    # on the same stream torch captures, so it lands in the graph.
+    if os.environ.get("AITER_ISA_RUNNER_GRAPH", "0") not in ("0", ""):
+        from torch.profiler import ProfilerActivity, profile as _torch_profile
+
+        try:
+            graph = torch_module.cuda.CUDAGraph()
+            with torch_module.cuda.graph(graph):
+                for _ in range(num_iters):
+                    launch()
+            torch_module.cuda.synchronize()
+            graph.replay()
+            torch_module.cuda.synchronize()
+            with _torch_profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
+            ) as gprof:
+                graph.replay()
+                torch_module.cuda.synchronize()
+            rows = [
+                (e.key, float(getattr(e, "self_device_time_total", 0.0) or 0.0),
+                 int(e.count))
+                for e in gprof.key_averages()
+                if float(getattr(e, "self_device_time_total", 0.0) or 0.0) > 0.0
+            ]
+            rows.sort(key=lambda r: -r[1])
+            if rows:
+                print(
+                    "[gemm_isa_runner] CUDA-graph replay, torch-profiler device "
+                    f"time ({num_iters} launches captured):"
+                )
+                for key, device_us, count in rows[:4]:
+                    print(
+                        f"    {key[:60]:60} cnt={count:<5} "
+                        f"device_total={device_us:12.1f} us  "
+                        f"avg={device_us / num_iters:9.3f} us/iter"
+                    )
+            else:
+                print(
+                    "[gemm_isa_runner] CUDA-graph replay produced no device "
+                    "activity in the profiler"
+                )
+        except Exception as exc:  # diagnostic only
+            print(f"[gemm_isa_runner] CUDA-graph capture unavailable: {exc}")
+        for _ in range(num_warmup):
+            launch()
+        torch_module.cuda.synchronize()
+
     start = torch_module.cuda.Event(enable_timing=True)
     end = torch_module.cuda.Event(enable_timing=True)
     start.record(stream)
@@ -2226,6 +2346,7 @@ def _run_gemm(
         "ref hash128": reference_hash,
         "gemm_a4w4 us": round(us, 2),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
+        "gemm_a4w4 bytes": int(logical_bytes),
         "gemm_a4w4 TB/s": round(
             bytes_per_microsecond_to_tbps(logical_bytes, us), 2
         ),
