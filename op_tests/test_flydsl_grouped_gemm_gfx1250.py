@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 import sys
@@ -340,6 +341,10 @@ def _extract_profiled_gemm_timings(
         if not latency_us > 0:
             continue
         parsed["latency_us"] = latency_us
+        try:
+            parsed["count"] = int(rec.get("cnt"))
+        except (TypeError, ValueError):
+            parsed["count"] = None
         candidates.append(parsed)
 
     stage_matches = {
@@ -1066,14 +1071,53 @@ def _run_grouped_via_fused_moe(
 
     Correctness is always checked against the reference. ``bench`` selects the
     path that is validated and timed: when set, the output comes from
-    ``run_perftest`` in CUDA-graph mode (production path) and ``us`` is the graph
-    timing; otherwise the output is a single eager (graph-off) call and ``us`` is
+    ``run_perftest(..., testGraph=False)`` and ``us`` is the profiler-derived
+    eager timing; otherwise the output is a single eager call and ``us`` is
     None. ``kernel_bench`` instead times the gemm1/gemm2 kernels in isolation
     (looping each launch alone) and returns their per-kernel us in ``kernel_us``.
     Returns ``(out, ref, us_or_None, kernel_us_or_None, trace_df, route_counts)``.
     """
     if data_format not in ("a4w4", "a8w4"):
         raise ValueError(f"data_format must be a4w4 or a8w4, got {data_format!r}")
+
+    pipeline_injection = nullcontext(None)
+    pipeline_backend_raw = os.environ.get(
+        "AITER_MOE_GEMM1_LAUNCH_BACKEND",
+        "",
+    )
+    if pipeline_backend_raw:
+        from my_code.isa_runner import moe_cpp_backend
+
+        pipeline_backend = moe_cpp_backend.selected_pipeline_launch_backend()
+        if pipeline_backend == moe_cpp_backend.PIPELINE_LAUNCH_BACKEND_CPP:
+            activation_name = {
+                ActivationType.Silu: "silu",
+                ActivationType.Swiglu: "swiglu",
+                ActivationType.Situv2: "situv2",
+            }[activation]
+            moe_cpp_backend.validate_pipeline_gemm1_case(
+                experts=experts,
+                tokens=tokens,
+                topk=topk,
+                model_dim=model_dim,
+                inter_dim=inter_dim,
+                data_format=data_format,
+                activation=activation_name,
+                use_bias=use_bias,
+                expert_balance=AITER_MOE_EXPERT_BALANCE,
+                num_expert_activated=AITER_MOE_NUM_EXPERT_ACTIVATED,
+                tile_m_override=os.environ.get("AITER_TDM_TILE_M"),
+                swiglu_limit=swiglu_limit,
+                situ_beta=situ_beta,
+                situ_linear_beta=situ_linear_beta,
+            )
+            # Build/import happens here, before _call exists and before any
+            # run_perftest warmup or profiler iteration.
+            pipeline_injection = (
+                moe_cpp_backend.prepare_pipeline_gemm1_injection(
+                    torch_module=torch,
+                )
+            )
 
     K = model_dim
     inter = inter_dim
@@ -1165,48 +1209,52 @@ def _run_grouped_via_fused_moe(
             linear_beta=situ_linear_beta,
         )
 
-    torch.cuda.synchronize()
     kernel_us = None
     trace_df = None
-    if kernel_bench:
-        # Kernel-bench: time gemm1 and gemm2 in isolation. One eager call
-        # populates the per-stage launch callables (and yields a correct ``out`` to
-        # verify); then loop each kernel alone. ``us`` (end-to-end) stays None.
-        from aiter.ops.flydsl import grouped_moe_gfx1250 as _grouped
-        from aiter.test_common import run_perftest
+    cpp_adapter = None
+    with pipeline_injection as cpp_adapter:
+        torch.cuda.synchronize()
+        if kernel_bench:
+            # Kernel-bench: time gemm1 and gemm2 in isolation. One eager call
+            # populates the per-stage launch callables (and yields a correct ``out`` to
+            # verify); then loop each kernel alone. ``us`` (end-to-end) stays None.
+            from aiter.ops.flydsl import grouped_moe_gfx1250 as _grouped
+            from aiter.test_common import run_perftest
 
-        kernel_bench_callable: list = []
-        _grouped.kernel_bench_callable = kernel_bench_callable
-        try:
-            out = _call()
-        finally:
-            _grouped.kernel_bench_callable = None
-        us = None
-        kernel_us = {}
-        for _name, callable in kernel_bench_callable:
-            _, _us = run_perftest(
-                callable,
+            kernel_bench_callable: list = []
+            _grouped.kernel_bench_callable = kernel_bench_callable
+            try:
+                out = _call()
+            finally:
+                _grouped.kernel_bench_callable = None
+            us = None
+            kernel_us = {}
+            for _name, callable in kernel_bench_callable:
+                _, _us = run_perftest(
+                    callable,
+                    num_warmup=warmup,
+                    num_iters=iters,
+                    testGraph=False,
+                )
+                kernel_us[_name] = _us
+        elif bench:
+            # Bench: validate + time the eager production path. The returned
+            # data is the last profiled output.
+            from aiter.test_common import run_perftest
+
+            out, us, trace_df = run_perftest(
+                _call,
                 num_warmup=warmup,
                 num_iters=iters,
                 testGraph=False,
+                return_trace_df=True,
             )
-            kernel_us[_name] = _us
-    elif bench:
-        # Bench: validate + time the CUDA-graph (production) path. The returned
-        # data is the graph-captured output.
-        from aiter.test_common import run_perftest
-
-        out, us, trace_df = run_perftest(
-            _call,
-            num_warmup=warmup,
-            num_iters=iters,
-            testGraph=False,
-            return_trace_df=True,
-        )
-    else:
-        # Verify: validate the eager (graph-off) path; no timing.
-        out = _call()
-        us = None
+        else:
+            # Verify: validate the eager (graph-off) path; no timing.
+            out = _call()
+            us = None
+    if cpp_adapter is not None:
+        cpp_adapter.assert_complete()
 
     # Reference always uses GGUU logical inputs (layouts are numerically
     # equivalent; only physical packing differs).
@@ -1254,6 +1302,18 @@ def _logits_diff(actual: torch.Tensor, expected: torch.Tensor) -> float:
     return float(((x - y) ** 2).sum() / denom)
 
 
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    raw = (
+        tensor.detach()
+        .contiguous()
+        .view(torch.uint8)
+        .cpu()
+        .numpy()
+        .tobytes()
+    )
+    return hashlib.sha256(raw).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Pytest correctness suite
 # ---------------------------------------------------------------------------
@@ -1280,8 +1340,8 @@ def run_moe(
     check_aot_cache: bool = True,
 ) -> dict:
     """Compare grouped FlyDSL MoE vs a PyTorch fp32 ref. ``bench`` selects the
-    validated path: bench checks (and times) the CUDA-graph production path;
-    verify checks the eager path.
+    validated path: bench checks and profiles the eager production path with
+    ``testGraph=False``; verify checks one eager call.
 
     Correctness gate: production-consistent logits_diff < LOGITS_DIFF_TOL
     (op_tests/test_moe_2stage.py).  rel_l2 (~= sqrt(2*logits_diff)) is printed
@@ -1295,7 +1355,7 @@ def run_moe(
     }[activation]
     tag = f"{data_format} {act}"
 
-    # --- grouped FlyDSL vs PyTorch fp32 ref (graph path if bench, else eager) ---
+    # --- grouped FlyDSL vs PyTorch fp32 ref (profiled eager if bench) ---
     run_only = run_only_env() if check_aot_cache else nullcontext()
     with run_only:
         out, ref, us, kernel_us, trace_df, route_counts = _run_grouped_via_fused_moe(
@@ -1316,14 +1376,16 @@ def run_moe(
             iters=iters,
             const_init=const_init,
         )
-    mode = "kernel" if kernel_bench else ("graph" if bench else "eager")
+    mode = "kernel" if kernel_bench else ("eager-profile" if bench else "eager")
     ld = _logits_diff(out, ref)
     rel = _rel_l2(out, ref)
+    output_sha256 = _tensor_sha256(out)
     print(
         f"[sanity {tag}] {mode}: logits_diff={ld:.4e} rel_l2={rel:.4e} "
         f"(gate<{LOGITS_DIFF_TOL}, ref_norm={float(ref.float().norm()):.4e})",
         flush=True,
     )
+    print(f"[sanity {tag}] output_sha256={output_sha256}", flush=True)
     passed = ld < LOGITS_DIFF_TOL
     if raise_on_fail:
         assert (
@@ -1335,13 +1397,14 @@ def run_moe(
         "passed": passed,
         "grouped_norm": float(out.float().norm()),
         "ref_norm": float(ref.float().norm()),
+        "output_sha256": output_sha256,
     }
     metrics.update(_empty_gemm_summary())
 
     # --- perf (bench only): timed end-to-end inside _run_grouped_via_fused_moe ---
     if bench:
         print(
-            f"[bench {tag}] fused_moe end-to-end us = {us:.2f} (graph=True)",
+            f"[bench {tag}] fused_moe end-to-end us = {us:.2f} (testGraph=False)",
             flush=True,
         )
         metrics["us"] = us
@@ -1356,6 +1419,17 @@ def run_moe(
             )
         )
         metrics.update(profiled_kernel_us)
+        for stage in ("gemm1", "gemm2"):
+            profiled = profiled_kernels.get(stage)
+            count = None if profiled is None else profiled.get("count")
+            metrics[f"{stage}_count"] = count
+            if profiled is not None:
+                print(
+                    f"[bench kernel timing] {stage}: "
+                    f"device_time_avg={profiled['latency_us']:.3f} us "
+                    f"count={count} symbol={profiled['name']}",
+                    flush=True,
+                )
         if timing_debug:
             print(f"[bench kernel timing] {timing_debug}", flush=True)
         gemm_summary = _build_effective_summary(
@@ -1669,7 +1743,7 @@ def run_csv_scenario(args) -> None:
     tuned config is looked up from the same CSV by the kernel via the problem
     shape, so simply running each shape exercises its tuned setting.
 
-    Each row is benched (CUDA-graph end-to-end timing, production path) and its
+    Each row is benched with ``run_perftest(..., testGraph=False)`` and its
     correctness checked; one out-of-gate row is recorded rather than aborting
     the sweep.
     """
@@ -1819,7 +1893,7 @@ def main() -> None:
         "--scenario",
         choices=("bench", "verify", "kernel", "csv"),
         default="bench",
-        help="bench: time fused_moe end-to-end (CUDA graph). verify: eager "
+        help="bench: profile fused_moe end-to-end with testGraph=False. verify: eager "
         "correctness only. kernel: time the gemm1 and gemm2 kernels in "
         "isolation (loop each launch alone). csv: sweep every setting in "
         "--csv-path (one run_moe case per row).",

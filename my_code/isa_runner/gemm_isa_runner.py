@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import math
 import os
 import re
 import shlex
@@ -40,7 +41,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 ARCH = "gfx1250"
@@ -57,6 +58,17 @@ DEFAULT_CLANG_RUNTIME_LIBRARIES = (
     Path("/opt/rocm/lib"),
 )
 DEFAULT_SYMBOL: str | None = None
+TIMING_METHOD_PROFILER = "profiler"
+TIMING_METHOD_CUDA_EVENT = "cuda-event"
+TIMING_METHOD_CHOICES = (
+    TIMING_METHOD_PROFILER,
+    TIMING_METHOD_CUDA_EVENT,
+)
+RUN_PERFTEST_TIMING_SOURCE = "run_perftest testGraph=False torch-profiler"
+CUDA_EVENT_TIMING_SOURCE = "cuda.Event batched"
+MOE_PIPELINE_TIMING_SOURCE = (
+    "run_perftest testGraph=False torch-profiler full MoE pipeline"
+)
 KERNEL_SYMBOL_256 = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
 KERNEL_SYMBOL_128 = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
 KERNEL_SYMBOL_64X256 = "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps"
@@ -77,7 +89,7 @@ MAX_LDS_PER_WGP = 320 * 1024
 # User-facing TB/s applies the requested binary/decimal conversion:
 # 1.024**4 = 2**40 / 10**12.
 TBPS_DIVISOR = 1.024 ** 4
-STORE_MNEMONIC_PREFIXES = (
+GLOBAL_OUTPUT_STORE_MNEMONIC_PREFIXES = (
     "tensor_store",
     "global_store",
     "global_atomic",
@@ -85,7 +97,19 @@ STORE_MNEMONIC_PREFIXES = (
     "buffer_atomic",
     "flat_store",
     "flat_atomic",
+    "image_store",
+    "image_atomic",
+    "tbuffer_store",
+    "raw_buffer_store",
+    "raw_buffer_atomic",
+    "struct_buffer_store",
+    "struct_buffer_atomic",
+)
+NON_OUTPUT_STORE_MNEMONIC_PREFIXES = (
+    "ds_store",
+    "ds_atomic",
     "scratch_store",
+    "scratch_atomic",
 )
 KERNARG_SIZE = 80
 KERNARG_LAYOUT = (
@@ -309,6 +333,7 @@ class BuildResult:
     code_object: Path
     commands: tuple[tuple[str, ...], ...]
     patches: tuple[str, ...] = ()
+    object_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -438,16 +463,145 @@ def print_contract(report: ContractReport) -> None:
     )
 
 
-def isa_writes_output(source: str) -> bool:
-    """Return whether the assembly stores outside LDS."""
+@dataclass(frozen=True)
+class GlobalOutputStoreDetection:
+    mnemonics: tuple[str, ...]
 
+    @property
+    def writes_output(self) -> bool:
+        return bool(self.mnemonics)
+
+    @property
+    def summary(self) -> str:
+        return ",".join(self.mnemonics) if self.mnemonics else "none"
+
+
+@dataclass(frozen=True)
+class LogicalTraffic:
+    read_bytes: int
+    write_bytes: int
+    store_detection: GlobalOutputStoreDetection
+
+    @property
+    def total_bytes(self) -> int:
+        return self.read_bytes + self.write_bytes
+
+
+@dataclass(frozen=True)
+class MoeA4W4UsefulBytes:
+    a_payload_bytes: int
+    a_scale_bytes: int
+    b_payload_bytes: int
+    b_scale_bytes: int
+    output_payload_bytes: int
+
+    @property
+    def read_bytes(self) -> int:
+        return (
+            self.a_payload_bytes
+            + self.a_scale_bytes
+            + self.b_payload_bytes
+            + self.b_scale_bytes
+        )
+
+
+def calculate_moe_a4w4_bf16_useful_bytes(
+    *,
+    valid_rows: int,
+    active_experts: int,
+    n: int,
+    k: int,
+    output_n: int,
+) -> MoeA4W4UsefulBytes:
+    """Match grouped-MoE effective stage metrics' useful-byte definition."""
+
+    values = (valid_rows, active_experts, n, k, output_n)
+    if any(value < 0 for value in values):
+        raise GemmIsaRunnerError("MoE useful-byte dimensions must be non-negative")
+    if k % 2 or k % MXFP4_SCALE_BLOCK:
+        raise GemmIsaRunnerError(
+            f"MoE A4W4 K must be divisible by {MXFP4_SCALE_BLOCK}, got {k}"
+        )
+    return MoeA4W4UsefulBytes(
+        a_payload_bytes=valid_rows * (k // 2),
+        a_scale_bytes=valid_rows * (k // MXFP4_SCALE_BLOCK),
+        b_payload_bytes=active_experts * n * (k // 2),
+        b_scale_bytes=active_experts * n * (k // MXFP4_SCALE_BLOCK),
+        output_payload_bytes=valid_rows * output_n * 2,
+    )
+
+
+def detect_global_output_stores(source: str) -> GlobalOutputStoreDetection:
+    """Detect executable global-memory stores after removing comments."""
+
+    detected: set[str] = set()
+    ambiguous: set[str] = set()
     for line in source.splitlines():
         clean = _strip_asm_comment(line)
-        if not clean or clean.startswith(".") or clean.endswith(":"):
+        while clean:
+            label = re.match(
+                r"^(?:[A-Za-z_$]|\.[A-Z])[\w.$]*:\s*(.*)$",
+                clean,
+            )
+            if label is None:
+                break
+            clean = label.group(1).strip()
+        if not clean or clean.startswith("."):
             continue
-        if clean.split(maxsplit=1)[0].startswith(STORE_MNEMONIC_PREFIXES):
-            return True
-    return False
+        mnemonic = clean.split(maxsplit=1)[0].lower()
+        if mnemonic.startswith(GLOBAL_OUTPUT_STORE_MNEMONIC_PREFIXES):
+            detected.add(mnemonic)
+        elif mnemonic.startswith(NON_OUTPUT_STORE_MNEMONIC_PREFIXES):
+            continue
+        elif "store" in mnemonic or "atomic" in mnemonic:
+            ambiguous.add(mnemonic)
+    if ambiguous:
+        raise GemmIsaRunnerError(
+            "unclassified store/atomic mnemonic(s) in ISA; refusing to "
+            f"guess output traffic: {sorted(ambiguous)}"
+        )
+    return GlobalOutputStoreDetection(tuple(sorted(detected)))
+
+
+def isa_writes_global_output(source: str) -> bool:
+    return detect_global_output_stores(source).writes_output
+
+
+def isa_writes_output(source: str) -> bool:
+    """Backward-compatible alias for global output-store detection."""
+
+    return isa_writes_global_output(source)
+
+
+def make_logical_traffic(
+    *,
+    read_bytes: int,
+    output_bytes_if_stored: int,
+    store_detection: GlobalOutputStoreDetection,
+) -> LogicalTraffic:
+    if read_bytes < 0 or output_bytes_if_stored < 0:
+        raise GemmIsaRunnerError("logical traffic byte counts must be non-negative")
+    if store_detection.writes_output and output_bytes_if_stored == 0:
+        raise GemmIsaRunnerError(
+            "ISA contains a global output store but output byte formula is zero"
+        )
+    return LogicalTraffic(
+        read_bytes=int(read_bytes),
+        write_bytes=(
+            int(output_bytes_if_stored) if store_detection.writes_output else 0
+        ),
+        store_detection=store_detection,
+    )
+
+
+def print_logical_traffic(prefix: str, traffic: LogicalTraffic) -> None:
+    print(
+        f"{prefix} logical_read_bytes={traffic.read_bytes}; "
+        f"logical_write_bytes={traffic.write_bytes} "
+        f"(stores output={traffic.store_detection.writes_output}; "
+        f"detected mnemonic={traffic.store_detection.summary}); "
+        f"logical_bytes=read+write={traffic.total_bytes}"
+    )
 
 
 def _run_torch_mxfp4_reference(
@@ -1268,13 +1422,13 @@ def patch_code_object_tcp_split(
     )
 
 
-def compile_isa(
+def make_compile_isa_commands(
     isa: Path,
     clang: Path,
     work_dir: Path,
     symbol: str | None = None,
-) -> BuildResult:
-    """Assemble and link a complete AMDGPU source without changing it."""
+) -> tuple[tuple[str, ...], tuple[str, ...], Path, Path]:
+    """Return the exact assemble/link commands and their output paths."""
 
     artifact_stem = (
         _validate_symbol_token(symbol, "compile symbol")
@@ -1309,6 +1463,23 @@ def compile_isa(
         "-o",
         str(code_object),
     )
+    return assemble, link, obj, code_object
+
+
+def compile_isa(
+    isa: Path,
+    clang: Path,
+    work_dir: Path,
+    symbol: str | None = None,
+) -> BuildResult:
+    """Assemble and link a complete AMDGPU source without changing it."""
+
+    assemble, link, obj, code_object = make_compile_isa_commands(
+        isa,
+        clang,
+        work_dir,
+        symbol,
+    )
     _run_command(assemble)
     _run_command(link)
     if not code_object.is_file() or code_object.stat().st_size == 0:
@@ -1336,6 +1507,7 @@ def compile_isa(
         code_object=code_object,
         commands=(assemble, link),
         patches=patches,
+        object_file=obj,
     )
 
 
@@ -1936,116 +2108,6 @@ def _run_batched_cuda_event_timing(
         launch()
     torch_module.cuda.synchronize()
 
-    # AITER_ISA_RUNNER_PROFILER=1 additionally wraps the same loop in the torch
-    # profiler and reports its per-kernel device time.  aiter's run_perftest
-    # returns exactly that number (get_trace_perf -> self_device_time_total /
-    # iters), while the event pair below measures the wall time of the whole
-    # queued batch, so it also carries the gaps between dispatches.  The launch
-    # here goes straight to hipDrvLaunchKernelEx via ctypes, bypassing the
-    # PyTorch dispatcher; roctracer hooks the HIP runtime rather than the
-    # dispatcher, so the kernel is expected to appear -- but that is checked
-    # below rather than assumed, and an empty table is reported as such.
-    want_profiler = os.environ.get("AITER_ISA_RUNNER_PROFILER", "0") not in (
-        "0",
-        "",
-    )
-    profiler_rows: list[tuple[str, float, int]] = []
-    if want_profiler:
-        from torch.profiler import ProfilerActivity, profile as _torch_profile
-
-        # AITER_ISA_RUNNER_GAP_US inserts a GPU-side delay between launches.
-        # aiter's bench path reports this kernel ~11% faster than its own
-        # kernel-bench loop; the only difference is that in the pipeline ~100 us
-        # of other kernels separate consecutive gemm1 runs, whereas a tight loop
-        # runs a bandwidth-saturating kernel back to back.  If that spacing is
-        # what matters, adding it here should move the number the same way.
-        gap_us = float(os.environ.get("AITER_ISA_RUNNER_GAP_US", "0") or 0.0)
-        gap_cycles = int(gap_us * 1000.0)  # _sleep takes ~1 cycle per ns
-        with _torch_profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
-        ) as prof:
-            for _ in range(num_iters):
-                launch()
-                if gap_cycles > 0:
-                    torch_module.cuda._sleep(gap_cycles)
-            torch_module.cuda.synchronize()
-        for evt in prof.key_averages():
-            device_us = float(getattr(evt, "self_device_time_total", 0.0) or 0.0)
-            if device_us > 0.0:
-                profiler_rows.append((evt.key, device_us, int(evt.count)))
-        profiler_rows.sort(key=lambda r: -r[1])
-        if profiler_rows:
-            print(
-                "[gemm_isa_runner] torch-profiler device time "
-                f"(same {num_iters} launches, aiter run_perftest convention):"
-            )
-            for key, device_us, count in profiler_rows[:4]:
-                print(
-                    f"    {key[:60]:60} cnt={count:<5} "
-                    f"device_total={device_us:12.1f} us  "
-                    f"avg={device_us / num_iters:9.3f} us/iter"
-                )
-        else:
-            print(
-                "[gemm_isa_runner] torch profiler captured no device activity "
-                "for these launches; hipDrvLaunchKernelEx via ctypes is not "
-                "visible to it, so only the CUDA-event number is available"
-            )
-        for _ in range(num_warmup):
-            launch()
-        torch_module.cuda.synchronize()
-
-    # AITER_ISA_RUNNER_GRAPH=1 captures the same launches into a CUDA graph and
-    # profiles one replay.  aiter's bench path reports the kernel's device time
-    # from inside a graph, which came out ~11% below the eager-loop device time
-    # for the identical kernel; capturing here isolates graph-vs-eager from
-    # everything else in the end-to-end pipeline.  hipDrvLaunchKernelEx is issued
-    # on the same stream torch captures, so it lands in the graph.
-    if os.environ.get("AITER_ISA_RUNNER_GRAPH", "0") not in ("0", ""):
-        from torch.profiler import ProfilerActivity, profile as _torch_profile
-
-        try:
-            graph = torch_module.cuda.CUDAGraph()
-            with torch_module.cuda.graph(graph):
-                for _ in range(num_iters):
-                    launch()
-            torch_module.cuda.synchronize()
-            graph.replay()
-            torch_module.cuda.synchronize()
-            with _torch_profile(
-                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
-            ) as gprof:
-                graph.replay()
-                torch_module.cuda.synchronize()
-            rows = [
-                (e.key, float(getattr(e, "self_device_time_total", 0.0) or 0.0),
-                 int(e.count))
-                for e in gprof.key_averages()
-                if float(getattr(e, "self_device_time_total", 0.0) or 0.0) > 0.0
-            ]
-            rows.sort(key=lambda r: -r[1])
-            if rows:
-                print(
-                    "[gemm_isa_runner] CUDA-graph replay, torch-profiler device "
-                    f"time ({num_iters} launches captured):"
-                )
-                for key, device_us, count in rows[:4]:
-                    print(
-                        f"    {key[:60]:60} cnt={count:<5} "
-                        f"device_total={device_us:12.1f} us  "
-                        f"avg={device_us / num_iters:9.3f} us/iter"
-                    )
-            else:
-                print(
-                    "[gemm_isa_runner] CUDA-graph replay produced no device "
-                    "activity in the profiler"
-                )
-        except Exception as exc:  # diagnostic only
-            print(f"[gemm_isa_runner] CUDA-graph capture unavailable: {exc}")
-        for _ in range(num_warmup):
-            launch()
-        torch_module.cuda.synchronize()
-
     start = torch_module.cuda.Event(enable_timing=True)
     end = torch_module.cuda.Event(enable_timing=True)
     start.record(stream)
@@ -2088,8 +2150,240 @@ def make_cuda_event_timing_row(
         "device_time_avg": avg_us,
         "device_type": "CUDA/HIP",
         "device_index": int(device),
-        "source": "cuda.Event batched",
+        "source": CUDA_EVENT_TIMING_SOURCE,
     }
+
+
+def _profiler_name_matches_symbol(name: str, symbol: str) -> bool:
+    return re.search(
+        rf"(?<![0-9A-Za-z_]){re.escape(symbol)}(?![0-9A-Za-z_])",
+        name,
+    ) is not None
+
+
+def _trace_records(trace_df: Any) -> list[dict[str, Any]]:
+    if trace_df is None:
+        raise GemmIsaRunnerError(
+            "run_perftest returned no trace_df; return_trace_df=True is required"
+        )
+    try:
+        records = trace_df.to_dict("records")
+    except Exception as exc:
+        raise GemmIsaRunnerError(
+            f"run_perftest trace_df cannot be converted to records: {exc}"
+        ) from exc
+    if not isinstance(records, list):
+        raise GemmIsaRunnerError(
+            "run_perftest trace_df.to_dict('records') did not return a list"
+        )
+    return [dict(record) for record in records]
+
+
+def _normalized_device_type(value: Any) -> str:
+    return str(value).rsplit(".", 1)[-1]
+
+
+def _profiler_candidate_summary(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": str(record.get("name")),
+            "device_type": _normalized_device_type(record.get("device_type")),
+            "device_index": record.get("device_index"),
+            "cnt": record.get("cnt"),
+            "device_time_sum": record.get("device_time_sum"),
+            "device_time_avg": record.get("device_time_avg"),
+        }
+        for record in records
+        if _normalized_device_type(record.get("device_type")) == "CUDA"
+    ]
+
+
+def _select_target_profiler_timing(
+    trace_df: Any,
+    *,
+    symbol: str,
+    warmup: int,
+    requested_device: int,
+) -> dict[str, Any]:
+    if requested_device < 0:
+        raise GemmIsaRunnerError(
+            f"requested torch device ordinal must be non-negative, got "
+            f"{requested_device}"
+        )
+    records = _trace_records(trace_df)
+    matches = [
+        record
+        for record in records
+        if _normalized_device_type(record.get("device_type")) == "CUDA"
+        and _profiler_name_matches_symbol(str(record.get("name")), symbol)
+    ]
+    if len(matches) != 1:
+        raise GemmIsaRunnerError(
+            f"target kernel {symbol!r} expected exactly one CUDA profiler row, "
+            f"found {len(matches)}; CUDA candidates="
+            f"{_profiler_candidate_summary(records)}"
+        )
+    match = matches[0]
+    try:
+        count_float = float(match.get("cnt"))
+        count = int(count_float)
+        device_float = float(match.get("device_index"))
+        device_index = int(device_float)
+        device_time_sum = float(match.get("device_time_sum"))
+        device_time_avg = float(match.get("device_time_avg"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise GemmIsaRunnerError(
+            f"target kernel profiler row has invalid numeric fields: {match}"
+        ) from exc
+    if not math.isfinite(count_float) or count_float != count or count <= 0:
+        raise GemmIsaRunnerError(
+            f"target kernel profiler count must be a positive integer, got "
+            f"{match.get('cnt')!r}"
+        )
+    if (
+        not math.isfinite(device_float)
+        or device_float != device_index
+        or device_index < 0
+    ):
+        raise GemmIsaRunnerError(
+            "target kernel profiler device_index must be a non-negative "
+            f"integer, got {match.get('device_index')!r}"
+        )
+    if (
+        not math.isfinite(device_time_sum)
+        or not math.isfinite(device_time_avg)
+        or device_time_sum <= 0.0
+        or device_time_avg <= 0.0
+    ):
+        raise GemmIsaRunnerError(
+            "target kernel profiler device time must be positive, got "
+            f"sum={device_time_sum!r}, avg={device_time_avg!r}"
+        )
+    return {
+        "name": str(match.get("name")),
+        "cnt": count,
+        "warmup": int(warmup),
+        "device_time_sum": device_time_sum,
+        "device_time_avg": device_time_avg,
+        "device_type": "CUDA",
+        "device_index": device_index,
+        "source": RUN_PERFTEST_TIMING_SOURCE,
+    }
+
+
+def _make_profiler_visible_driver_launch(
+    torch_module: Any,
+    raw_launch: Callable[[], Any],
+    *,
+    anchor: Any,
+    output: Any,
+) -> Callable[[], Any]:
+    """Add dispatcher correlation around one unchanged HIP-driver launch."""
+
+    namespace = f"gemm_isa_runner_{os.getpid()}"
+    op_name = f"launch_{id(raw_launch):x}"
+    library = torch_module.library.Library(namespace, "FRAGMENT")
+    library.define(f"{op_name}(Tensor(a!) anchor) -> ()")
+
+    def implementation(_anchor: Any) -> None:
+        raw_launch()
+
+    library.impl(op_name, implementation, "CUDA")
+    operation = getattr(getattr(torch_module.ops, namespace), op_name)
+
+    def callable_() -> Any:
+        _ = library
+        operation(anchor)
+        return output
+
+    return callable_
+
+
+def _run_target_kernel_perftest(
+    callable_: Callable[[], Any],
+    *,
+    symbol: str,
+    warmup: int,
+    iters: int,
+    device: int,
+    synchronize: Callable[[], Any],
+    mark_stream_synchronized: Callable[[], Any] | None = None,
+    reported_warmup: int | None = None,
+    timing_source: str = RUN_PERFTEST_TIMING_SOURCE,
+    run_perftest_impl: Callable[..., tuple[Any, float, Any]] | None = None,
+) -> tuple[Any, float, dict[str, Any], Any]:
+    if iters <= 1:
+        raise GemmIsaRunnerError(
+            "run_perftest profiler timing requires --iters greater than 1"
+        )
+    if warmup < 0:
+        raise GemmIsaRunnerError(
+            "run_perftest timing requires non-negative --warmup"
+        )
+    if run_perftest_impl is None:
+        from aiter.test_common import run_perftest
+    else:
+        run_perftest = run_perftest_impl
+
+    saved_log_more = os.environ.get("AITER_LOG_MORE")
+    suppress_internal_event_pass = saved_log_more not in (None, "", "0")
+    if suppress_internal_event_pass:
+        print(
+            "[gemm_isa_runner] AITER_LOG_MORE trace remains explicit; "
+            "temporarily setting it to 0 inside run_perftest to avoid its "
+            "additional CUDA-event iteration pass"
+        )
+        os.environ["AITER_LOG_MORE"] = "0"
+    try:
+        output, full_us, trace_df = run_perftest(
+            callable_,
+            num_warmup=warmup,
+            num_iters=iters,
+            testGraph=False,
+            return_trace_df=True,
+            num_rotate_args=1,
+        )
+    finally:
+        if suppress_internal_event_pass:
+            if saved_log_more is None:
+                os.environ.pop("AITER_LOG_MORE", None)
+            else:
+                os.environ["AITER_LOG_MORE"] = saved_log_more
+    synchronize()
+    if mark_stream_synchronized is not None:
+        mark_stream_synchronized()
+    full_us_value = float(full_us)
+    if not math.isfinite(full_us_value) or full_us_value <= 0.0:
+        raise GemmIsaRunnerError(
+            f"run_perftest returned invalid _us={full_us!r}"
+        )
+    timing = _select_target_profiler_timing(
+        trace_df,
+        symbol=symbol,
+        warmup=warmup if reported_warmup is None else reported_warmup,
+        requested_device=device,
+    )
+    timing["source"] = timing_source
+    try:
+        trace_text = trace_df.to_string(index=True)
+    except Exception:
+        trace_text = repr(_trace_records(trace_df))
+    print(f"\n[gemm_isa_runner run_perftest trace_df]\n{trace_text}")
+    print(f"[gemm_isa_runner] captured kernel name={timing['name']}")
+    print(
+        f"[gemm_isa_runner] profiler count={timing['cnt']}; "
+        f"device_time_sum={timing['device_time_sum']:.4f} us; "
+        f"device_time_avg={timing['device_time_avg']:.4f} us; "
+        f"profiler device_index={timing['device_index']}; "
+        f"requested torch device ordinal={device}"
+    )
+    print(
+        f"[gemm_isa_runner] timing source={timing_source}; "
+        f"run_perftest _us={full_us_value:.4f}"
+    )
+    return output, full_us_value, timing, trace_df
 
 
 MaxErrorInfo = tuple[float, float, float]
@@ -2206,7 +2500,19 @@ def _print_cuda_event_timing(row: Mapping[str, Any]) -> None:
     display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
     print(
         "CUDA-event batched kernel timing "
-        "(microseconds; source=cuda.Event batched, not torch profiler):"
+        "(microseconds; source=cuda.Event batched; name is the configured "
+        "symbol and cnt is the launch-loop count, neither is profiler-captured):"
+    )
+    print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
+
+
+def _print_profiler_timing(row: Mapping[str, Any]) -> None:
+    display = dict(row)
+    display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
+    display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
+    print(
+        "run_perftest kernel timing "
+        f"(microseconds; source={row['source']}; exact captured target row):"
     )
     print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
 
@@ -2234,6 +2540,7 @@ def _run_gemm(
     symbol: str,
     profile: KernelProfile,
     geometry: LaunchGeometry,
+    store_detection: GlobalOutputStoreDetection,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     m, n, k = args.shape
     dependencies = _load_dependencies(args.device)
@@ -2289,45 +2596,115 @@ def _run_gemm(
             module.launch()
             return output
 
-        timed_output, microseconds = _run_batched_cuda_event_timing(
-            torch,
-            launch,
-            stream,
-            num_warmup=args.warmup,
-            num_iters=args.iters,
-        )
-        # end.synchronize() completed every launch on this exact stream.
-        module.mark_stream_synchronized()
-        event_timing = make_cuda_event_timing_row(
-            symbol,
-            args.iters,
-            args.warmup,
-            microseconds,
-            args.device,
-        )
-        us = float(event_timing["device_time_avg"])
+        if args.inmoe:
+            profiled_launch = _make_profiler_visible_driver_launch(
+                torch,
+                launch,
+                anchor=output,
+                output=output,
+            )
+            from my_code.isa_runner import moe_pipeline_timing_context
 
-    error = dependencies.check_allclose(
-        reference,
-        timed_output,
-        rtol=1e-1,
-        atol=1.0,
-        msg="mxfp4 gemm_a4w4 ISA runner",
-    )
-    output_hash = tensor_blake2b128(timed_output)
-    max_err_info, rel_l2 = float32_error_metrics(
-        reference,
-        timed_output,
-    )
+            timing = moe_pipeline_timing_context.run_inmoe_context(
+                torch_module=torch,
+                device=args.device,
+                symbol=symbol,
+                target_shape=(m, n, k),
+                target_tensors={
+                    "A": inputs["A"],
+                    "B": inputs["B"],
+                    "sA": inputs["sA"],
+                    "sB": inputs["sB"],
+                    "out": output,
+                },
+                raw_target_launch=launch,
+                profiler_target_launch=profiled_launch,
+                target_warmup=args.warmup,
+                iters=args.iters,
+                backend_label="python",
+                synchronize=torch.cuda.synchronize,
+                mark_stream_synchronized=module.mark_stream_synchronized,
+                run_target_perftest=_run_target_kernel_perftest,
+                select_target_profiler_timing=_select_target_profiler_timing,
+                timing_source=MOE_PIPELINE_TIMING_SOURCE,
+                error_type=GemmIsaRunnerError,
+            )
+            timed_output = output
+        elif args.timing_method == TIMING_METHOD_PROFILER:
+            profiled_launch = _make_profiler_visible_driver_launch(
+                torch,
+                launch,
+                anchor=output,
+                output=output,
+            )
+            timed_output, _, timing, _ = _run_target_kernel_perftest(
+                profiled_launch,
+                symbol=symbol,
+                warmup=args.warmup,
+                iters=args.iters,
+                device=args.device,
+                synchronize=torch.cuda.synchronize,
+                mark_stream_synchronized=module.mark_stream_synchronized,
+            )
+        else:
+            timed_output, microseconds = _run_batched_cuda_event_timing(
+                torch,
+                launch,
+                stream,
+                num_warmup=args.warmup,
+                num_iters=args.iters,
+            )
+            # end.synchronize() completed every launch on this exact stream.
+            module.mark_stream_synchronized()
+            timing = make_cuda_event_timing_row(
+                symbol,
+                args.iters,
+                args.warmup,
+                microseconds,
+                args.device,
+            )
+        us = float(timing["device_time_avg"])
 
     flops = 2 * m * n * k
-    logical_bytes = (
+    logical_read_bytes = int(
         inputs["A"].nbytes
         + inputs["B"].nbytes
         + inputs["sA"].nbytes
         + inputs["sB"].nbytes
-        + m * n * dtype.itemsize
     )
+    traffic = make_logical_traffic(
+        read_bytes=logical_read_bytes,
+        output_bytes_if_stored=m * n * dtype.itemsize,
+        store_detection=store_detection,
+    )
+    print_logical_traffic("[gemm_isa_runner]", traffic)
+    print(
+        "[gemm_isa_runner] tensor allocation footprint: "
+        f"A={inputs['A'].nbytes}; B={inputs['B'].nbytes}; "
+        f"sA={inputs['sA'].nbytes}; sB={inputs['sB'].nbytes}; "
+        f"D={output.nbytes}"
+    )
+
+    if store_detection.writes_output:
+        error = dependencies.check_allclose(
+            reference,
+            timed_output,
+            rtol=1e-1,
+            atol=1.0,
+            msg="mxfp4 gemm_a4w4 ISA runner",
+        )
+        output_hash = tensor_blake2b128(timed_output)
+        max_err_info, rel_l2 = float32_error_metrics(
+            reference,
+            timed_output,
+        )
+        flops_cell: Any = round(flops / us / 1e6, 1)
+        passed = bool(error == 0)
+    else:
+        not_validated = "n/a (no global output store)"
+        error = output_hash = max_err_info = rel_l2 = not_validated
+        flops_cell = "n/a (no store)"
+        passed = True
     row = {
         "intype": args.intype,
         "batch": 1,
@@ -2345,17 +2722,17 @@ def _run_gemm(
         "encoded recurrence stride/plane": geometry.persistent_stride,
         "ref hash128": reference_hash,
         "gemm_a4w4 us": round(us, 2),
-        "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 1),
-        "gemm_a4w4 bytes": int(logical_bytes),
+        "gemm_a4w4 TFLOPS": flops_cell,
+        "gemm_a4w4 bytes": traffic.total_bytes,
         "gemm_a4w4 TB/s": round(
-            bytes_per_microsecond_to_tbps(logical_bytes, us), 2
+            bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 2
         ),
         "gemm_a4w4 err": error,
         "gemm_a4w4 out hash128": output_hash,
         "gemm_a4w4 max_err_info": max_err_info,
         "gemm_a4w4 rel_l2": rel_l2,
     }
-    return row, event_timing, bool(error == 0)
+    return row, timing, passed
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -2438,7 +2815,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--iters",
         type=int,
         default=100,
-        help="continuously enqueued batched event iterations (default: 100)",
+        help="formal timing iterations (default: 100)",
+    )
+    parser.add_argument(
+        "--timing-method",
+        choices=TIMING_METHOD_CHOICES,
+        default=TIMING_METHOD_PROFILER,
+        help=(
+            "formal timing source: 'profiler' uses run_perftest with exact "
+            "target-row device_time_avg; 'cuda-event' uses one start/end "
+            "event pair around the continuously queued launch loop "
+            f"(default: {TIMING_METHOD_PROFILER})"
+        ),
+    )
+    parser.add_argument(
+        "--inmoe",
+        action="store_true",
+        help=(
+            "place this runner's allocation-disjoint target launch inside the "
+            "fixed MoE pipeline execution context; target and pipeline tensors "
+            "have no data dependency, the context shape is independent of "
+            "the target shape, and this requires --timing-method profiler"
+        ),
     )
     parser.add_argument(
         "--device",
@@ -2458,6 +2856,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_timing_method_context(timing_method: str, inmoe: bool) -> None:
+    if timing_method == TIMING_METHOD_CUDA_EVENT and inmoe:
+        raise GemmIsaRunnerError(
+            "--timing-method cuda-event is incompatible with --inmoe: "
+            "one event pair would measure the entire interleaved pipeline "
+            "and cannot isolate the target; use --timing-method profiler"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -2465,6 +2872,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--warmup must be non-negative")
     if args.iters < 1:
         parser.error("--iters must be at least 1")
+    if args.timing_method == TIMING_METHOD_PROFILER and args.iters <= 1:
+        parser.error("--timing-method profiler requires --iters greater than 1")
+    try:
+        validate_timing_method_context(args.timing_method, args.inmoe)
+    except GemmIsaRunnerError as exc:
+        parser.error(str(exc))
     if args.device < 0:
         parser.error("--device must be non-negative")
 
@@ -2473,6 +2886,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = _read_isa_source(isa)
         symbol = resolve_kernel_symbol_from_text(source, args.symbol)
         profile = _validate_mode(args.intype, args.apre, args.dtype, symbol)
+        store_detection = detect_global_output_stores(source)
         resources = parse_assembly_resources(source, symbol)
         geometry = make_launch_geometry(*args.shape, profile=profile)
         print_contract(
@@ -2485,7 +2899,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 geometry=geometry,
                 resources=resources,
                 dynamic_lds_bytes=0,
-                stores_to_d=isa_writes_output(source),
+                stores_to_d=store_detection.writes_output,
             )
         )
         clang = _resolve_clang(args.clang)
@@ -2518,14 +2932,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 shutil.copy2(result.code_object, destination)
                 print(f"[gemm_isa_runner] kept code object: {destination}")
 
-            row, event_timing, passed = _run_gemm(
+            row, timing, passed = _run_gemm(
                 args,
                 result.code_object,
                 symbol,
                 profile,
                 geometry,
+                store_detection,
             )
-            _print_cuda_event_timing(event_timing)
+            if args.timing_method == TIMING_METHOD_PROFILER:
+                _print_profiler_timing(timing)
+            else:
+                _print_cuda_event_timing(timing)
             print_summary(row, symbol=symbol, profile=profile)
             return 0 if passed else 3
     except CompileError as exc:

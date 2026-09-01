@@ -32,7 +32,9 @@ contiguous stride1 values and one grid-Z plane per batch item.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -215,6 +217,20 @@ MOE_GEMM1_SYMBOLS = (
     MOE_GEMM1_WPT4_KERNEL_SYMBOL,
     MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
 )
+LAUNCH_BACKEND_PYTHON = "python"
+LAUNCH_BACKEND_CPP = "cpp"
+TIMING_CONTEXT_STANDALONE = "standalone"
+TIMING_CONTEXT_MOE_PIPELINE = "moe-pipeline"
+MOE_CPP_ISA_BASENAME = "moe_gemm1_a4w4_v0.s"
+TIMING_METHOD_PROFILER = single.TIMING_METHOD_PROFILER
+TIMING_METHOD_CUDA_EVENT = single.TIMING_METHOD_CUDA_EVENT
+TIMING_METHOD_CHOICES = single.TIMING_METHOD_CHOICES
+RUN_PERFTEST_TIMING_SOURCE = single.RUN_PERFTEST_TIMING_SOURCE
+CUDA_EVENT_TIMING_SOURCE = single.CUDA_EVENT_TIMING_SOURCE
+MOE_PIPELINE_TIMING_SOURCE = (
+    "run_perftest testGraph=False torch-profiler; moe-pipeline context; "
+    "target-only warmup"
+)
 
 MOE_KERNARG_SIZE = 184
 MOE_KERNARG_LAYOUT: tuple[tuple[str, int, str], ...] = (
@@ -258,6 +274,7 @@ MOE_N_EXPERTS = 96
 MOE_BAKED_K = 7168
 MOE_STAGE1_ACT = 1  # silu
 MOE_BLOCK = (MOE_M_WARP * MOE_N_WARP * 32, 1, 1)  # (128,1,1)
+MOE_PIPELINE_SHAPE = (MOE_TILE_M, 6144, MOE_BAKED_K)
 
 # The epilogue clamps gate to <= limit and up to [-limit, limit] before
 # silu(gate)*up.  With random fp4 operands accumulated over K=7168 the raw
@@ -513,7 +530,7 @@ def build_moe_inputs(
     # nothing reads or writes them.  routed_m is where the data actually lives.
     contiguous_m = moe_contiguous_m(experts, MOE_TILE_M)
     routed_m = experts * m_per_expert
-    m_tiles = experts            # tiles that carry data, for byte accounting
+    m_tiles = experts            # scheduled non-tail tiles; not useful A rows
     rep_a = (MOE_TILE_M // MOE_M_WARP) // 16   # 64//16 = 4
     k_scale = k // 32
     inter = n // 2
@@ -656,6 +673,8 @@ def build_moe_inputs(
         "contiguous_m": contiguous_m,
         "routed_m": routed_m,
         "m_tiles": m_tiles,
+        "valid_routed_rows": experts * MOE_VALID_ROWS_PER_EXPERT,
+        "active_experts": experts,
         "reference": reference,
     }
 
@@ -1283,6 +1302,36 @@ def select_kernel_mode(
     )
 
 
+def moe_cpp_target_isa() -> Path:
+    return Path(__file__).resolve().parent.parent / MOE_CPP_ISA_BASENAME
+
+
+def validate_cpp_backend_target(
+    isa: Path,
+    symbol: str,
+    mode: str,
+) -> None:
+    """Restrict the C++ binding to its one audited source/symbol contract."""
+
+    expected_isa = moe_cpp_target_isa().resolve()
+    actual_isa = isa.resolve()
+    same_path = os.path.normcase(str(actual_isa)) == os.path.normcase(
+        str(expected_isa)
+    )
+    if (
+        not same_path
+        or actual_isa.name != MOE_CPP_ISA_BASENAME
+        or symbol != MOE_GEMM1_WPT4_KERNEL_SYMBOL
+        or mode != "moe-gemm1"
+    ):
+        raise single.GemmIsaRunnerError(
+            "--cpp is restricted to the exact source "
+            f"{expected_isa} and exact kernel symbol "
+            f"{MOE_GEMM1_WPT4_KERNEL_SYMBOL!r}; got source={actual_isa}, "
+            f"symbol={symbol!r}, mode={mode!r}"
+        )
+
+
 def _validate_mab_mode(args: argparse.Namespace, symbol: str) -> None:
     if args.intype != "fp16":
         raise single.GemmIsaRunnerError(
@@ -1525,6 +1574,7 @@ def _run_mab_gemm(
     geometry: single.LaunchGeometry,
     symbol: str,
     metadata_lds_bytes: int,
+    store_detection: single.GlobalOutputStoreDetection,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1593,36 +1643,48 @@ def _run_mab_gemm(
             def launch_loadonly() -> None:
                 module.launch()
 
-            _, microseconds = single._run_batched_cuda_event_timing(
+            profiled_launch = (
+                _make_profiler_visible_driver_launch(
+                    torch,
+                    launch_loadonly,
+                    anchor=a,
+                    output=None,
+                )
+                if args.timing_method == TIMING_METHOD_PROFILER
+                else None
+            )
+            _, timing = _run_selected_target_timing(
+                args,
                 torch,
                 launch_loadonly,
-                stream,
-                num_warmup=args.warmup,
-                num_iters=args.iters,
+                profiler_launch=profiled_launch,
+                target_output=a,
+                target_tensors={"a": a, "b": b},
+                target_shape=(m, n, k),
+                stream=stream,
+                symbol=symbol,
+                mark_stream_synchronized=module.mark_stream_synchronized,
             )
-            module.mark_stream_synchronized()
-            event_timing = single.make_cuda_event_timing_row(
-                symbol,
-                args.iters,
-                args.warmup,
-                microseconds,
-                args.device,
-            )
-        us = float(event_timing["device_time_avg"])
-        logical_bytes = int(a.nbytes + b.nbytes)
+        us = float(timing["device_time_avg"])
+        traffic = single.make_logical_traffic(
+            read_bytes=int(a.nbytes + b.nbytes),
+            output_bytes_if_stored=batch * m * n * 2,
+            store_detection=store_detection,
+        )
+        single.print_logical_traffic("[gemm_batch_isa_runner]", traffic)
         not_validated = "n/a (not validated)"
         if symbol == MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL:
             lds_note = _mab_wv23_lds_note(metadata_lds_bytes)
             print(
                 f"[gemm_batch_isa_runner] MAB TDM load-only nominal logical "
-                f"A+B bytes={logical_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
+                f"A+B bytes={traffic.read_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
                 f"{lds_note}; actual HBM bytes also depend on multicast/cache "
                 "behavior, and descriptor payload is not claimed as HBM bytes"
             )
         else:
             print(
                 f"[gemm_batch_isa_runner] MAB TDM load-only logical unique "
-                f"A+B bytes={logical_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
+                f"A+B bytes={traffic.read_bytes} = A ({a.nbytes}) + B ({b.nbytes}); "
                 "descriptor payload=n/a (not claimed as HBM bytes)"
             )
         row = {
@@ -1645,9 +1707,9 @@ def _run_mab_gemm(
             "ref hash128": not_validated,
             "gemm_a4w4 us": round(us, 3),
             "gemm_a4w4 TFLOPS": "n/a (no store)",
-            "gemm_a4w4 bytes": int(logical_bytes),
+            "gemm_a4w4 bytes": traffic.total_bytes,
             "gemm_a4w4 TB/s": round(
-                single.bytes_per_microsecond_to_tbps(logical_bytes, us), 3
+                single.bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 3
             ),
             "gemm_a4w4 err": not_validated,
             "gemm_a4w4 out hash128": not_validated,
@@ -1658,7 +1720,7 @@ def _run_mab_gemm(
         def validate_loadonly() -> tuple[None, bool]:
             return None, True
 
-        return row, event_timing, validate_loadonly
+        return row, timing, validate_loadonly
 
     assert c_storage is not None
     output_storage = torch.full(
@@ -1731,28 +1793,43 @@ def _run_mab_gemm(
             module.launch()
             return output_storage
 
-        timed_output_storage, microseconds = (
-            single._run_batched_cuda_event_timing(
+        profiled_launch = (
+            _make_profiler_visible_driver_launch(
                 torch,
                 launch,
-                stream,
-                num_warmup=args.warmup,
-                num_iters=args.iters,
+                anchor=output_storage,
+                output=output_storage,
             )
+            if args.timing_method == TIMING_METHOD_PROFILER
+            else None
         )
-        module.mark_stream_synchronized()
-        event_timing = single.make_cuda_event_timing_row(
-            symbol,
-            args.iters,
-            args.warmup,
-            microseconds,
-            args.device,
+        timed_output_storage, timing = _run_selected_target_timing(
+            args,
+            torch,
+            launch,
+            profiler_launch=profiled_launch,
+            target_output=output_storage,
+            target_tensors={
+                "a": a,
+                "b": b,
+                "c": c_storage,
+                "out": output_storage,
+            },
+            target_shape=(m, n, k),
+            stream=stream,
+            symbol=symbol,
+            mark_stream_synchronized=module.mark_stream_synchronized,
         )
-    us = float(event_timing["device_time_avg"])
-    logical_bytes = int(a.nbytes + b.nbytes + output_storage.nbytes)
+    us = float(timing["device_time_avg"])
+    traffic = single.make_logical_traffic(
+        read_bytes=int(a.nbytes + b.nbytes),
+        output_bytes_if_stored=int(output_storage.nbytes),
+        store_detection=store_detection,
+    )
+    single.print_logical_traffic("[gemm_batch_isa_runner]", traffic)
     flops = 2 * batch * m * n * k
     print(
-        f"[gemm_batch_isa_runner] MAB logical_bytes={logical_bytes} = "
+        f"[gemm_batch_isa_runner] MAB logical_bytes={traffic.total_bytes} = "
         f"A ({a.nbytes}) + B ({b.nbytes}) + D ({output_storage.nbytes}); "
         f"C ({c_storage.nbytes}) is allocated but beta=0 and is not read"
     )
@@ -1774,9 +1851,9 @@ def _run_mab_gemm(
         "ref hash128": dense_reference_hash,
         "gemm_a4w4 us": round(us, 3),
         "gemm_a4w4 TFLOPS": round(flops / us / 1e6, 3),
-        "gemm_a4w4 bytes": int(logical_bytes),
+        "gemm_a4w4 bytes": traffic.total_bytes,
         "gemm_a4w4 TB/s": round(
-            single.bytes_per_microsecond_to_tbps(logical_bytes, us), 3
+            single.bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 3
         ),
     }
 
@@ -1835,7 +1912,7 @@ def _run_mab_gemm(
         row["gemm_a4w4 rel_l2"] = rel_l2
         return validation, validation.passed or symbol == MAB_KERNEL_SYMBOL
 
-    return row, event_timing, validate
+    return row, timing, validate
 
 
 
@@ -1845,8 +1922,10 @@ def _run_moe_gemm(
     symbol: str,
     profile,
     geometry,
-    code_object: bytes,
+    code_object: Path,
     gfx: str,
+    store_detection: single.GlobalOutputStoreDetection,
+    cpp_extension: Any | None = None,
 ):
     """Launch the MoE stage-1 a8w4 TDM kernel and time it.
 
@@ -1897,48 +1976,123 @@ def _run_moe_gemm(
         i32_n=n,
     )
 
-    with single._LoadedClusterKernel(code_object, symbol, args.device) as module:
-        module.configure(
-            payload, geometry, int(stream.cuda_stream), MOE_KERNARG_SIZE
-        )
-
-        def launch() -> None:
-            module.launch()
-
-        _, microseconds = single._run_batched_cuda_event_timing(
+    def measure_target(
+        raw_target_launch: Callable[[], Any],
+        *,
+        profiler_target_launch: Callable[[], Any] | None = None,
+        mark_stream_synchronized: Callable[[], Any] | None = None,
+    ) -> dict[str, Any]:
+        _, timing = _run_selected_target_timing(
+            args,
             torch,
-            launch,
-            stream,
-            num_warmup=args.warmup,
-            num_iters=args.iters,
+            raw_target_launch,
+            profiler_launch=profiler_target_launch,
+            target_output=t["out"],
+            target_tensors={
+                name: t[name]
+                for name in (
+                    "a",
+                    "scale_a",
+                    "b",
+                    "scale_b",
+                    "m_tile_map",
+                    "out",
+                    "bias",
+                    "quant_scale",
+                )
+            },
+            target_shape=(m, n, k),
+            stream=stream,
+            symbol=symbol,
+            mark_stream_synchronized=mark_stream_synchronized,
         )
-        module.mark_stream_synchronized()
-        event_timing = single.make_cuda_event_timing_row(
-            symbol, args.iters, args.warmup, microseconds, args.device
-        )
-    us = float(event_timing["device_time_avg"])
+        if not args.inmoe:
+            timing["timing_context"] = TIMING_CONTEXT_STANDALONE
+        return timing
+
+    if args.cpp:
+        if cpp_extension is None:
+            raise single.GemmIsaRunnerError(
+                "the C++ launch backend was selected without a loaded extension"
+            )
+
+        def launch_cpp() -> Any:
+            return cpp_extension.launch(
+                t["out"],
+                t["a"],
+                t["b"],
+                t["scale_a"],
+                t["scale_b"],
+                t["m_tile_map"],
+                t["bias"],
+                t["quant_scale"],
+                payload,
+                list(geometry.grid),
+                list(geometry.block),
+                list(geometry.cluster),
+                m,
+                n,
+                k,
+                experts,
+                str(code_object),
+            )
+
+        timing = measure_target(launch_cpp)
+    else:
+        with single._LoadedClusterKernel(
+            code_object, symbol, args.device
+        ) as module:
+            module.configure(
+                payload, geometry, int(stream.cuda_stream), MOE_KERNARG_SIZE
+            )
+
+            def launch() -> None:
+                module.launch()
+
+            profiled_launch = (
+                _make_profiler_visible_driver_launch(
+                    torch,
+                    launch,
+                    anchor=t["out"],
+                    output=t["out"],
+                )
+                if args.timing_method == TIMING_METHOD_PROFILER
+                else None
+            )
+            timing = measure_target(
+                launch,
+                profiler_target_launch=profiled_launch,
+                mark_stream_synchronized=module.mark_stream_synchronized,
+            )
+    us = float(timing["device_time_avg"])
 
     a_bytes = int(t["a"].nbytes)
     b_bytes = int(t["b"].nbytes)
     sa_bytes = int(t["scale_a"].nbytes)
     sb_bytes = int(t["scale_b"].nbytes)
 
-    # HBM traffic, not per-WG issue count.  The n_tiles WGs that share an
-    # m_tile each *issue* their own load of that A tile, but they read the same
-    # bytes; A and its scale are therefore counted once per m_tile.  B and its
-    # scale have no such reuse -- every (m_tile, n_tile) pair reads a distinct
-    # expert x N-slice -- so those stay per WG.  Counting A per WG inflates the
-    # result past the 23.3 TB/s hardware peak, which is how the error shows up.
+    # Match _calculate_effective_stage_metrics in the grouped-MoE benchmark:
+    # unique valid A rows once and each active expert's complete B surface
+    # once. Scheduled padding, tail capacity, descriptor replication, and
+    # control metadata are excluded from this useful logical byte metric.
     m_tiles = t["m_tiles"]
     n_tiles = n // MOE_TILE_N
-    per_tile_a = MOE_TILE_M * (k // 2)   # a4: half byte per element
-    per_tile_b = MOE_TILE_N * (k // 2)   # w4: half byte per element
-    per_tile_sa = MOE_TILE_M * (k // 32)
-    per_tile_sb = MOE_TILE_N * (k // 32)
-    a_side = m_tiles * (per_tile_a + per_tile_sa)
-    b_side = (m_tiles * n_tiles) * (per_tile_b + per_tile_sb)
-    logical_bytes = a_side + b_side
-    out_bytes = 0 if loadonly else int(t["out"].nbytes)
+    useful = single.calculate_moe_a4w4_bf16_useful_bytes(
+        valid_rows=int(t["valid_routed_rows"]),
+        active_experts=int(t["active_experts"]),
+        n=n,
+        k=k,
+        output_n=n // 2,
+    )
+    traffic = single.make_logical_traffic(
+        read_bytes=useful.read_bytes,
+        output_bytes_if_stored=useful.output_payload_bytes,
+        store_detection=store_detection,
+    )
+    single.print_logical_traffic(
+        "[gemm_batch_isa_runner] useful logical",
+        traffic,
+    )
 
     print(
         f"[gemm_batch_isa_runner] MoE stage-1 a4w4: experts={experts} "
@@ -1949,11 +2103,27 @@ def _run_moe_gemm(
         f"({geometry.grid[0] - m_tiles * n_tiles} exit at entry)"
     )
     print(
-        f"[gemm_batch_isa_runner] logical_bytes={logical_bytes} = "
-        f"A-side {a_side} (m_tiles={m_tiles} x [A {per_tile_a} + sA "
-        f"{per_tile_sa}], deduped across the {n_tiles} n_tiles that reuse it) + "
-        f"B-side {b_side} (m_tiles*n_tiles={m_tiles * n_tiles} x [B "
-        f"{per_tile_b} + sB {per_tile_sb}]); tensor footprints A={a_bytes} "
+        "[gemm_batch_isa_runner] useful logical read components: "
+        f"A MXFP4={useful.a_payload_bytes}; "
+        f"ScaleA E8M0={useful.a_scale_bytes}; "
+        f"B MXFP4={useful.b_payload_bytes}; "
+        f"ScaleB E8M0={useful.b_scale_bytes}; "
+        f"read total={useful.read_bytes}"
+    )
+    print(
+        "[gemm_batch_isa_runner] useful logical output formula: "
+        f"{t['valid_routed_rows']} valid routed rows x {n // 2} BF16 "
+        f"columns x 2 bytes = {useful.output_payload_bytes}; "
+        f"output allocation footprint="
+        f"{t['out'].nbytes} ({contiguous_m} capacity rows); "
+        f"logical_write_bytes={traffic.write_bytes}"
+    )
+    print(
+        "[gemm_batch_isa_runner] scheduled/padding context (excluded from "
+        f"useful bytes): rows/expert={m}; valid/expert="
+        f"{MOE_VALID_ROWS_PER_EXPERT}; active m_tiles={m_tiles}; "
+        f"working WGs={m_tiles * n_tiles}; tail capacity rows="
+        f"{contiguous_m - t['routed_m']}; tensor footprints A={a_bytes} "
         f"B={b_bytes} sA={sa_bytes} sB={sb_bytes}"
     )
 
@@ -2008,6 +2178,14 @@ def _run_moe_gemm(
         "seed": args.seed,
         "dtype": "bf16",
         "gfx": gfx,
+        "launch backend": (
+            LAUNCH_BACKEND_CPP if args.cpp else LAUNCH_BACKEND_PYTHON
+        ),
+        "timing context": (
+            TIMING_CONTEXT_MOE_PIPELINE
+            if args.inmoe
+            else TIMING_CONTEXT_STANDALONE
+        ),
         "logical cluster tasks/plane": m_tiles * n_tiles,
         "physical clusters/plane": m_tiles * n_tiles,
         "physical WGs/plane": geometry.grid[0],
@@ -2015,26 +2193,201 @@ def _run_moe_gemm(
         "ref hash128": ref_hash,
         "gemm_a4w4 us": round(us, 3),
         "gemm_a4w4 TFLOPS": flops_cell,
-        "gemm_a4w4 bytes": int(logical_bytes),
+        "gemm_a4w4 bytes": traffic.total_bytes,
         "gemm_a4w4 TB/s": round(
-            single.bytes_per_microsecond_to_tbps(logical_bytes, us), 3
+            single.bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 3
         ),
         "gemm_a4w4 err": err_cell,
         "gemm_a4w4 out hash128": out_hash,
         "gemm_a4w4 max_err_info": max_err_cell,
         "gemm_a4w4 rel_l2": rel_l2_cell,
     }
+    if args.inmoe:
+        gemm2 = timing["pipeline_gemm2"]
+        row.update(
+            {
+                "pipeline us": round(float(timing["pipeline_us"]), 3),
+                "pipeline K3072 us": round(
+                    float(gemm2["device_time_avg"]),
+                    3,
+                ),
+                "pipeline K3072 count": int(gemm2["cnt"]),
+                "pipeline random_y1 unchanged": bool(
+                    timing["random_y1_unchanged"]
+                ),
+                "pipeline isolation pairs": int(
+                    timing["isolation_pairs_checked"]
+                ),
+            }
+        )
 
     def validate() -> tuple[None, bool]:
         return None, True
 
-    return row, event_timing, validate
+    return row, timing, validate
+
+
+_select_target_profiler_timing = single._select_target_profiler_timing
+
+
+def _make_profiler_visible_driver_launch(
+    torch_module: Any,
+    raw_launch: Callable[[], Any],
+    *,
+    anchor: Any,
+    output: Any,
+) -> Callable[[], Any]:
+    return single._make_profiler_visible_driver_launch(
+        torch_module,
+        raw_launch,
+        anchor=anchor,
+        output=output,
+    )
+
+
+def _run_target_kernel_perftest(
+    callable_: Callable[[], Any],
+    *,
+    symbol: str,
+    warmup: int,
+    iters: int,
+    device: int,
+    synchronize: Callable[[], Any],
+    mark_stream_synchronized: Callable[[], Any] | None = None,
+    reported_warmup: int | None = None,
+    timing_source: str = RUN_PERFTEST_TIMING_SOURCE,
+    run_perftest_impl: Callable[..., tuple[Any, float, Any]] | None = None,
+) -> tuple[Any, float, dict[str, Any], Any]:
+    return single._run_target_kernel_perftest(
+        callable_,
+        symbol=symbol,
+        warmup=warmup,
+        iters=iters,
+        device=device,
+        synchronize=synchronize,
+        mark_stream_synchronized=mark_stream_synchronized,
+        reported_warmup=reported_warmup,
+        timing_source=timing_source,
+        run_perftest_impl=run_perftest_impl,
+    )
+
+
+def _run_selected_target_timing(
+    args: argparse.Namespace,
+    torch_module: Any,
+    raw_launch: Callable[[], Any],
+    *,
+    profiler_launch: Callable[[], Any] | None,
+    target_output: Any,
+    target_tensors: Mapping[str, Any],
+    target_shape: tuple[int, int, int],
+    stream: Any,
+    symbol: str,
+    mark_stream_synchronized: Callable[[], Any] | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    if args.inmoe:
+        if profiler_launch is None:
+            raise single.GemmIsaRunnerError(
+                "--inmoe requires profiler-visible target launch correlation"
+            )
+        from my_code.isa_runner import moe_pipeline_timing_context
+
+        timing = moe_pipeline_timing_context.run_inmoe_context(
+            torch_module=torch_module,
+            device=args.device,
+            symbol=symbol,
+            target_shape=target_shape,
+            target_tensors=target_tensors,
+            raw_target_launch=raw_launch,
+            profiler_target_launch=profiler_launch,
+            target_warmup=args.warmup,
+            iters=args.iters,
+            backend_label=(
+                LAUNCH_BACKEND_CPP if args.cpp else LAUNCH_BACKEND_PYTHON
+            ),
+            synchronize=torch_module.cuda.synchronize,
+            mark_stream_synchronized=mark_stream_synchronized,
+            run_target_perftest=_run_target_kernel_perftest,
+            select_target_profiler_timing=_select_target_profiler_timing,
+            timing_source=MOE_PIPELINE_TIMING_SOURCE,
+            error_type=single.GemmIsaRunnerError,
+        )
+        return target_output, timing
+
+    if args.timing_method == TIMING_METHOD_PROFILER:
+        output, _, timing, _ = _run_target_kernel_perftest(
+            raw_launch if profiler_launch is None else profiler_launch,
+            symbol=symbol,
+            warmup=args.warmup,
+            iters=args.iters,
+            device=args.device,
+            synchronize=torch_module.cuda.synchronize,
+            mark_stream_synchronized=mark_stream_synchronized,
+        )
+        return output, timing
+
+    output, avg_us = single._run_batched_cuda_event_timing(
+        torch_module,
+        raw_launch,
+        stream,
+        num_warmup=args.warmup,
+        num_iters=args.iters,
+    )
+    if mark_stream_synchronized is not None:
+        mark_stream_synchronized()
+    timing = single.make_cuda_event_timing_row(
+        symbol,
+        args.iters,
+        args.warmup,
+        avg_us,
+        args.device,
+    )
+    print(
+        "[gemm_batch_isa_runner] timing source=cuda.Event batched; "
+        f"configured symbol={symbol}; launch-loop count={args.iters}; "
+        "no profiler kernel name/count is claimed"
+    )
+    return output, timing
+
+
+def _run_moe_cpp_perftest(
+    run_perftest: Callable[..., tuple[Any, float, Any]],
+    launch: Callable[[], Any],
+    *,
+    symbol: str,
+    warmup: int,
+    iters: int,
+    device: int,
+    synchronize: Callable[[], Any] = lambda: None,
+) -> tuple[Any, dict[str, Any]]:
+    output, _, timing, _ = _run_target_kernel_perftest(
+        launch,
+        symbol=symbol,
+        warmup=warmup,
+        iters=iters,
+        device=device,
+        synchronize=synchronize,
+        run_perftest_impl=run_perftest,
+    )
+    return output, timing
+
+
+def _print_run_perftest_timing(row: Mapping[str, Any]) -> None:
+    display = dict(row)
+    display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
+    display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
+    print(
+        "run_perftest kernel timing "
+        f"(microseconds; source={row['source']}; "
+        "summary uses the captured target-row device_time_avg):"
+    )
+    print(single._plain_markdown(display, single.EVENT_TIMING_COLUMNS))
 
 def _run_batch_gemm(
     args: argparse.Namespace,
     code_object: Path,
     geometry: single.LaunchGeometry,
-    writes_output: bool,
+    store_detection: single.GlobalOutputStoreDetection,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -2045,6 +2398,7 @@ def _run_batch_gemm(
     dependencies = single._load_dependencies(args.device)
     torch = dependencies.torch
     gfx = dependencies.get_gfx()
+    writes_output = store_detection.writes_output
     if gfx != single.ARCH:
         raise single.GemmIsaRunnerError(
             f"the supplied kernel targets {single.ARCH}, but the active "
@@ -2110,22 +2464,35 @@ def _run_batch_gemm(
             module.launch()
             return output
 
-        timed_output, microseconds = single._run_batched_cuda_event_timing(
+        profiled_launch = (
+            _make_profiler_visible_driver_launch(
+                torch,
+                launch,
+                anchor=output,
+                output=output,
+            )
+            if args.timing_method == TIMING_METHOD_PROFILER
+            else None
+        )
+        timed_output, timing = _run_selected_target_timing(
+            args,
             torch,
             launch,
-            stream,
-            num_warmup=args.warmup,
-            num_iters=args.iters,
+            profiler_launch=profiled_launch,
+            target_output=output,
+            target_tensors={
+                "A": inputs["A"],
+                "B": inputs["B"],
+                "sA": inputs["sA"],
+                "sB": inputs["sB"],
+                "out": output,
+            },
+            target_shape=(m, n, k),
+            stream=stream,
+            symbol=BATCH_KERNEL_SYMBOL,
+            mark_stream_synchronized=module.mark_stream_synchronized,
         )
-        module.mark_stream_synchronized()
-        event_timing = single.make_cuda_event_timing_row(
-            BATCH_KERNEL_SYMBOL,
-            args.iters,
-            args.warmup,
-            microseconds,
-            args.device,
-        )
-        us = float(event_timing["device_time_avg"])
+        us = float(timing["device_time_avg"])
 
     flops = 2 * batch * m * n * k
     # Distinct bytes each matrix contributes once; A/B/sA/sB are always read,
@@ -2136,17 +2503,22 @@ def _run_batch_gemm(
         + inputs["sA"].nbytes
         + inputs["sB"].nbytes
     )
-    logical_bytes = input_bytes + (output.nbytes if writes_output else 0)
+    traffic = single.make_logical_traffic(
+        read_bytes=int(input_bytes),
+        output_bytes_if_stored=int(output.nbytes),
+        store_detection=store_detection,
+    )
+    single.print_logical_traffic("[gemm_batch_isa_runner]", traffic)
     if writes_output:
         print(
-            f"[gemm_batch_isa_runner] logical_bytes={logical_bytes} = "
+            f"[gemm_batch_isa_runner] logical_bytes={traffic.total_bytes} = "
             f"A+B+sA+sB ({input_bytes}) + D ({output.nbytes})"
         )
     else:
         print(
-            f"[gemm_batch_isa_runner] logical_bytes={logical_bytes} = "
+            f"[gemm_batch_isa_runner] logical_bytes={traffic.total_bytes} = "
             f"A+B+sA+sB ({input_bytes}); excludes D ({output.nbytes}) "
-            f"(no store found in ISA); TFLOPS is not reported"
+            "(no Global output store found in ISA); TFLOPS is not reported"
         )
     row = {
         "intype": args.intype,
@@ -2164,11 +2536,34 @@ def _run_batch_gemm(
         "gemm_a4w4 TFLOPS": (
             round(flops / us / 1e6, 1) if writes_output else "n/a (no store)"
         ),
-        "gemm_a4w4 bytes": int(logical_bytes),
+        "gemm_a4w4 bytes": traffic.total_bytes,
         "gemm_a4w4 TB/s": round(
-            single.bytes_per_microsecond_to_tbps(logical_bytes, us), 2
+            single.bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 2
         ),
     }
+
+    if not writes_output:
+        not_validated = "n/a (no global output store)"
+        row.update(
+            {
+                "gemm_a4w4 err": not_validated,
+                "gemm_a4w4 out hash128": not_validated,
+                "gemm_a4w4 max_err_info": not_validated,
+                "gemm_a4w4 rel_l2": not_validated,
+            }
+        )
+
+        def validate_loadonly() -> tuple[BatchValidation, bool]:
+            return BatchValidation(
+                reference_hash=reference_hash,
+                output_hash=not_validated,
+                error=0.0,
+                max_abs=0.0,
+                max_err_info=(0.0, 0.0, 0.0),
+                rel_l2=0.0,
+            ), True
+
+        return row, timing, validate_loadonly
 
     # Deferred so the timing rows are printed before the single whole-batch
     # comparison, which is allowed to fail without hiding them.
@@ -2200,7 +2595,7 @@ def _run_batch_gemm(
         row["gemm_a4w4 rel_l2"] = validation.rel_l2
         return validation, validation.error == 0.0
 
-    return row, event_timing, validate
+    return row, timing, validate
 
 
 def _print_mab_validation(item: MabValidation) -> None:
@@ -2245,15 +2640,312 @@ def _keep_code_object_if_requested(
     print(f"[gemm_batch_isa_runner] kept code object: {destination}")
 
 
+def _self_test() -> None:
+    """Run CPU-only profiler row-selection and call-contract checks."""
+
+    class FakeTraceFrame:
+        def __init__(self, records: Sequence[Mapping[str, Any]]) -> None:
+            self.records = [dict(record) for record in records]
+
+        def to_dict(self, orient: str) -> list[dict[str, Any]]:
+            assert orient == "records"
+            return [dict(record) for record in self.records]
+
+        def to_string(self, index: bool = True) -> str:
+            assert index is True
+            return repr(self.records)
+
+    symbol = "target_kernel_v17"
+
+    def cuda_row(
+        name: str,
+        *,
+        count: int = 7,
+        total: float = 28.0,
+        avg: float = 4.0,
+        device: int = 0,
+    ) -> dict[str, Any]:
+        return {
+            "name": name,
+            "cnt": count,
+            "host_time_sum": 0.0,
+            "device_time_sum": total,
+            "device_time_avg": avg,
+            "device_type": "CUDA",
+            "device_index": str(device),
+        }
+
+    selected = _select_target_profiler_timing(
+        FakeTraceFrame(
+            [
+                {
+                    "name": symbol,
+                    "cnt": 1,
+                    "device_time_sum": 1.0,
+                    "device_time_avg": 1.0,
+                    "device_type": "CPU",
+                    "device_index": "0",
+                },
+                cuda_row(f"void {symbol}(unsigned char*)", device=2),
+            ]
+        ),
+        symbol=symbol,
+        warmup=3,
+        requested_device=0,
+    )
+    assert selected["name"] == f"void {symbol}(unsigned char*)"
+    assert selected["cnt"] == 7
+    assert selected["device_time_avg"] == 4.0
+    assert selected["device_index"] == 2
+    assert selected["source"] == RUN_PERFTEST_TIMING_SOURCE
+
+    def expect_selection_error(
+        records: Sequence[Mapping[str, Any]],
+        message: str,
+    ) -> None:
+        try:
+            _select_target_profiler_timing(
+                FakeTraceFrame(records),
+                symbol=symbol,
+                warmup=0,
+                requested_device=0,
+            )
+        except single.GemmIsaRunnerError as exc:
+            assert message in str(exc), str(exc)
+        else:
+            raise AssertionError(f"expected profiler selection failure: {message}")
+
+    expect_selection_error(
+        [cuda_row(f"{symbol}_different")],
+        "found 0",
+    )
+    expect_selection_error(
+        [cuda_row(symbol), cuda_row(f"wrapper({symbol})")],
+        "found 2",
+    )
+
+    call: dict[str, Any] = {}
+    output = object()
+    sync_calls: list[str] = []
+
+    def launch() -> Any:
+        call["launched"] = int(call.get("launched", 0)) + 1
+        return output
+
+    trace_df = FakeTraceFrame([cuda_row(symbol)])
+
+    def fake_run_perftest(
+        callable_: Callable[[], Any],
+        **kwargs: Any,
+    ) -> tuple[Any, float, Any]:
+        call["callable"] = callable_
+        call["kwargs"] = dict(kwargs)
+        return callable_(), 999.0, trace_df
+
+    actual_output, full_us, timing, actual_trace = _run_target_kernel_perftest(
+        launch,
+        symbol=symbol,
+        warmup=3,
+        iters=10,
+        device=0,
+        synchronize=lambda: sync_calls.append("sync"),
+        mark_stream_synchronized=lambda: sync_calls.append("mark"),
+        run_perftest_impl=fake_run_perftest,
+    )
+    assert actual_output is output
+    assert actual_trace is trace_df
+    assert full_us == 999.0
+    assert call["callable"] is launch
+    assert call["kwargs"] == {
+        "num_warmup": 3,
+        "num_iters": 10,
+        "testGraph": False,
+        "return_trace_df": True,
+        "num_rotate_args": 1,
+    }
+    assert call["launched"] == 1
+    assert sync_calls == ["sync", "mark"]
+    assert timing["cnt"] == 7
+    assert timing["device_time_sum"] == 28.0
+    assert timing["device_time_avg"] == 4.0
+    assert timing["source"] == RUN_PERFTEST_TIMING_SOURCE
+
+    cuda_event_log: list[str] = []
+
+    class FakeEvent:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def record(self, actual_stream: Any) -> None:
+            assert actual_stream == "stream"
+            cuda_event_log.append(f"{self.label}.record")
+
+        def synchronize(self) -> None:
+            cuda_event_log.append(f"{self.label}.synchronize")
+
+        def elapsed_time(self, other: Any) -> float:
+            assert other.label == "end"
+            cuda_event_log.append("start.elapsed_time")
+            return 0.75
+
+    class FakeCuda:
+        def __init__(self) -> None:
+            self.created = 0
+
+        def Event(self, *, enable_timing: bool) -> FakeEvent:
+            assert enable_timing is True
+            label = ("start", "end")[self.created]
+            self.created += 1
+            cuda_event_log.append(f"{label}.create")
+            return FakeEvent(label)
+
+        def synchronize(self) -> None:
+            cuda_event_log.append("cuda.synchronize")
+
+    class FakeTorch:
+        def __init__(self) -> None:
+            self.cuda = FakeCuda()
+
+    event_launches = 0
+
+    def event_launch() -> str:
+        nonlocal event_launches
+        event_launches += 1
+        cuda_event_log.append("launch")
+        return "event-output"
+
+    event_output, event_avg_us = single._run_batched_cuda_event_timing(
+        FakeTorch(),
+        event_launch,
+        "stream",
+        num_warmup=2,
+        num_iters=3,
+    )
+    assert event_output == "event-output"
+    assert event_avg_us == 250.0
+    assert event_launches == 5
+    assert cuda_event_log == [
+        "launch",
+        "launch",
+        "cuda.synchronize",
+        "start.create",
+        "end.create",
+        "start.record",
+        "launch",
+        "launch",
+        "launch",
+        "end.record",
+        "end.synchronize",
+        "start.elapsed_time",
+    ]
+    parser = _build_parser()
+    timing_action = next(
+        action for action in parser._actions if action.dest == "timing_method"
+    )
+    assert timing_action.default == TIMING_METHOD_PROFILER
+    assert tuple(timing_action.choices) == TIMING_METHOD_CHOICES
+    default_args = parser.parse_args(["--self-test"])
+    assert default_args.inmoe is False
+    assert default_args.cpp is False
+    assert (
+        parser.parse_args(["--self-test"]).timing_method
+        == TIMING_METHOD_PROFILER
+    )
+    assert (
+        parser.parse_args(
+            ["--self-test", "--timing-method", TIMING_METHOD_CUDA_EVENT]
+        ).timing_method
+        == TIMING_METHOD_CUDA_EVENT
+    )
+    try:
+        parser.parse_args(["--self-test", "--timing-method", "invalid"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("invalid --timing-method must be rejected")
+    selected_flags = parser.parse_args(["--self-test", "--inmoe", "--cpp"])
+    assert selected_flags.inmoe is True
+    assert selected_flags.cpp is True
+    for removed_args in (
+        ["--self-test", "--timing-context", TIMING_CONTEXT_MOE_PIPELINE],
+        ["--self-test", "--launch-backend", LAUNCH_BACKEND_CPP],
+    ):
+        try:
+            parser.parse_args(removed_args)
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"removed CLI must be rejected: {removed_args}")
+    single.validate_timing_method_context(
+        TIMING_METHOD_PROFILER,
+        True,
+    )
+    try:
+        single.validate_timing_method_context(
+            TIMING_METHOD_CUDA_EVENT,
+            True,
+        )
+    except single.GemmIsaRunnerError:
+        pass
+    else:
+        raise AssertionError("pipeline+cuda-event must be rejected")
+    full_detection = single.detect_global_output_stores(
+        "; buffer_store_b128 in comment\n"
+        "ds_store_b128 v0, v[0:3]\n"
+        "tensor_store_from_lds s[0:3], s[4:11]\n"
+    )
+    loadonly_detection = single.detect_global_output_stores(
+        "; tensor_store_from_lds is removed\n"
+        "ds_store_b128 v0, v[0:3]\n"
+    )
+    useful = single.calculate_moe_a4w4_bf16_useful_bytes(
+        valid_rows=3072,
+        active_experts=96,
+        n=6144,
+        k=7168,
+        output_n=3072,
+    )
+    assert useful.a_payload_bytes == 11_010_048
+    assert useful.a_scale_bytes == 688_128
+    assert useful.b_payload_bytes == 2_113_929_216
+    assert useful.b_scale_bytes == 132_120_576
+    assert useful.read_bytes == 2_257_747_968
+    assert useful.output_payload_bytes == 18_874_368
+    full_traffic = single.make_logical_traffic(
+        read_bytes=useful.read_bytes,
+        output_bytes_if_stored=useful.output_payload_bytes,
+        store_detection=full_detection,
+    )
+    loadonly_traffic = single.make_logical_traffic(
+        read_bytes=useful.read_bytes,
+        output_bytes_if_stored=useful.output_payload_bytes,
+        store_detection=loadonly_detection,
+    )
+    assert full_traffic.total_bytes == 2_276_622_336
+    assert loadonly_traffic.total_bytes == 2_257_747_968
+    assert (
+        full_traffic.total_bytes - loadonly_traffic.total_bytes
+        == 18_874_368
+    )
+    print(
+        "[gemm_batch_isa_runner] SELF_TEST_OK: profiler row selection, "
+        "run_perftest arguments, pure batched CUDA-event ordering, timing "
+        "method CLI choices/default, pipeline combination rejection, and "
+        "global-store-aware logical traffic accounting"
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = single._build_parser()
     parser.description = __doc__
     for action in parser._actions:
         if action.dest == "isa":
+            action.required = False
             action.help = (
                 "complete gfx1250 AMDGPU assembly source: the original MAB "
                 "symbols require --batch 1; mab_tdm_gemm_full_batch and "
-                "64x256_1x4_batch_ps support batched dispatch"
+                "64x256_1x4_batch_ps support batched dispatch; omitted only "
+                "with --self-test"
             )
         elif action.dest == "shape":
             action.help = (
@@ -2284,6 +2976,17 @@ def _build_parser() -> argparse.ArgumentParser:
                 "AMDGPU clang executable (explicit --clang path/name; "
                 f"otherwise fixed {single.DEFAULT_CLANG}; no ROCm/PATH fallback)"
             )
+        elif action.dest == "warmup":
+            action.help = (
+                "untimed launches: run_perftest handles profiler mode; "
+                "cuda-event mode queues them then synchronizes once "
+                "(default: 101)"
+            )
+        elif action.dest == "iters":
+            action.help = (
+                "formal launches; profiler mode requires greater than 1, "
+                "cuda-event mode requires at least 1 (default: 100)"
+            )
     parser.add_argument(
         "--batch",
         type=int,
@@ -2306,12 +3009,31 @@ def _build_parser() -> argparse.ArgumentParser:
             f"{DEFAULT_GRID_LAYOUT})"
         ),
     )
+    parser.add_argument(
+        "--cpp",
+        action="store_true",
+        help=(
+            "use the C++ hipModuleLaunchKernel backend; restricted to exact "
+            f"{MOE_CPP_ISA_BASENAME}. Without this flag, use Python ctypes "
+            "hipDrvLaunchKernelEx"
+        ),
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run CPU-only profiler timing helper tests and exit",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.self_test:
+        _self_test()
+        return 0
+    if args.isa is None:
+        parser.error("--isa is required unless --self-test is used")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
     if args.iters < 1:
@@ -2322,19 +3044,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--batch must be at least 1")
     if args.batch > MAX_BATCH:
         parser.error(f"--batch must not exceed {MAX_BATCH}")
+    try:
+        single.validate_timing_method_context(
+            args.timing_method,
+            args.inmoe,
+        )
+    except single.GemmIsaRunnerError as exc:
+        parser.error(str(exc))
 
     try:
         isa = single._resolve_isa(args.isa)
         source = single._read_isa_source(isa)
         symbol = single.resolve_kernel_symbol_from_text(source, args.symbol)
         mode, profile = select_kernel_mode(symbol, args.batch)
-        writes_output = single.isa_writes_output(source)
+        if (
+            args.timing_method == TIMING_METHOD_PROFILER
+            and mode != "legacy"
+            and args.iters <= 1
+        ):
+            raise single.GemmIsaRunnerError(
+                "run_perftest profiler timing requires --iters greater than 1"
+            )
+        if args.cpp:
+            validate_cpp_backend_target(isa, symbol, mode)
+        store_detection = single.detect_global_output_stores(source)
+        writes_output = store_detection.writes_output
 
         if mode in ("moe-gemm1", "moe-gemm1-loadonly"):
             resources = single.parse_assembly_resources(source, symbol)
             if mode == "moe-gemm1-loadonly" and writes_output:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} load-only contract requires stores to D=False"
+                )
+            if mode == "moe-gemm1" and not writes_output:
+                raise single.GemmIsaRunnerError(
+                    f"{symbol} full-kernel contract requires Global D stores"
                 )
             geometry = make_moe_launch_geometry(
                 *args.shape,
@@ -2415,40 +3159,80 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         clang = single._resolve_clang(args.clang)
+        if (
+            args.cpp
+            and args.clang is None
+        ):
+            # _resolve_clang canonicalizes the symlink to clang-23.  Keep the
+            # configured DEFAULT_CLANG spelling in this backend's manifest and
+            # build command so the requested toolchain path is auditable.
+            clang = single.DEFAULT_CLANG.absolute()
         if single._clang_uses_default_runtime_libraries(clang):
             single._prepend_default_clang_runtime_libraries()
         print(f"[gemm_batch_isa_runner] selected clang: {clang}")
-        with tempfile.TemporaryDirectory(
-            prefix="gemm_batch_isa_runner_"
-        ) as temp:
-            result = single.compile_isa(
-                isa,
-                clang,
-                Path(temp),
-                symbol,
-            )
-            for command in result.commands:
-                print(
-                    f"[gemm_batch_isa_runner] "
-                    f"{single._format_command(command)}"
+        cpp_extension = None
+        build_context = (
+            contextlib.nullcontext(None)
+            if args.cpp
+            else tempfile.TemporaryDirectory(prefix="gemm_batch_isa_runner_")
+        )
+        with build_context as temp:
+            if args.cpp:
+                try:
+                    from . import moe_cpp_backend
+                except ImportError:
+                    import moe_cpp_backend
+
+                dependencies = single._load_dependencies(args.device)
+                artifacts = moe_cpp_backend.prepare_moe_cpp_backend(
+                    isa=isa,
+                    clang=clang,
+                    symbol=symbol,
+                    single_module=single,
+                    torch_module=dependencies.torch,
                 )
-            for patch in result.patches:
-                print(f"[gemm_batch_isa_runner] {patch}")
+                code_object = artifacts.code.code_object
+                cpp_extension = artifacts.extension.module
+                print(
+                    "[gemm_batch_isa_runner] C++ backend ready: "
+                    f"co_key={artifacts.code.key}; "
+                    f"extension_key={artifacts.extension.key}; "
+                    f"co_cache_hit={artifacts.code.cache_hit}; "
+                    f"extension_cache_hit={artifacts.extension.cache_hit}"
+                )
+            else:
+                assert temp is not None
+                result = single.compile_isa(
+                    isa,
+                    clang,
+                    Path(temp),
+                    symbol,
+                )
+                for command in result.commands:
+                    print(
+                        f"[gemm_batch_isa_runner] "
+                        f"{single._format_command(command)}"
+                    )
+                for patch in result.patches:
+                    print(f"[gemm_batch_isa_runner] {patch}")
+                code_object = result.code_object
             _keep_code_object_if_requested(
                 args,
                 isa,
                 symbol,
-                result.code_object,
+                code_object,
             )
 
             if mode in ("moe-gemm1", "moe-gemm1-loadonly"):
-                row, event_timing, validate = _run_moe_gemm(
+                row, timing, validate = _run_moe_gemm(
                     args,
                     symbol=symbol,
                     profile=profile,
                     geometry=geometry,
-                    code_object=result.code_object,
+                    code_object=code_object,
                     gfx=single._load_dependencies(args.device).get_gfx(),
+                    store_detection=store_detection,
+                    cpp_extension=cpp_extension,
                 )
             elif mode in (
                 "mab",
@@ -2457,20 +3241,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "mab-full-batch-loadonly",
                 "mab-full-batch-loadonly-wv23-256k",
             ):
-                row, event_timing, validate = _run_mab_gemm(
+                row, timing, validate = _run_mab_gemm(
                     args,
-                    result.code_object,
+                    code_object,
                     geometry,
                     symbol,
                     resources.metadata_lds,
+                    store_detection,
                 )
             elif mode == "legacy":
-                legacy_row, event_timing, legacy_passed = single._run_gemm(
+                legacy_row, timing, legacy_passed = single._run_gemm(
                     args,
-                    result.code_object,
+                    code_object,
                     symbol,
                     profile,
                     geometry,
+                    store_detection,
                 )
                 row = dict(legacy_row)
                 row["batch"] = 1
@@ -2488,11 +3274,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return legacy_validation, legacy_passed
 
             else:
-                row, event_timing, validate = _run_batch_gemm(
+                row, timing, validate = _run_batch_gemm(
                     args,
-                    result.code_object,
+                    code_object,
                     geometry,
-                    writes_output,
+                    store_detection,
                 )
 
             row["logical cluster tasks/plane"] = geometry.logical_cluster_tasks
@@ -2501,7 +3287,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             row["physical WGs/plane"] = geometry.grid[0] * geometry.grid[1]
             row["encoded recurrence stride/plane"] = geometry.persistent_stride
-            single._print_cuda_event_timing(event_timing)
+            if str(timing["source"]).startswith("run_perftest "):
+                _print_run_perftest_timing(timing)
+            else:
+                single._print_cuda_event_timing(timing)
             validation, passed = validate()
             if mode in ("mab", "mab-full", "mab-full-batch"):
                 _print_mab_validation(validation)
