@@ -39,6 +39,7 @@ def run_inmoe_context(
     mark_stream_synchronized: Callable[[], Any] | None,
     run_target_perftest: Callable[..., tuple[Any, float, dict[str, Any], Any]],
     select_target_profiler_timing: Callable[..., dict[str, Any]],
+    test_graph: bool,
     timing_source: str,
     error_type: type[Exception] = RuntimeError,
     target_validation_hook: Callable[[], Any] | None = None,
@@ -105,7 +106,7 @@ def run_inmoe_context(
 
         print(
             "[inmoe] starting formal full-pipeline run_perftest: "
-            f"num_warmup=0 num_iters={iters} testGraph=False "
+            f"num_warmup=0 num_iters={iters} testGraph={test_graph} "
             "return_trace_df=True"
         )
         pipeline_output, pipeline_us, timing, trace_df = run_target_perftest(
@@ -117,6 +118,7 @@ def run_inmoe_context(
             device=device,
             synchronize=synchronize,
             mark_stream_synchronized=mark_stream_synchronized,
+            test_graph=test_graph,
             timing_source=timing_source,
         )
 

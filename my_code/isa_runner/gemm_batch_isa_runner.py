@@ -227,10 +227,13 @@ TIMING_METHOD_CUDA_EVENT = single.TIMING_METHOD_CUDA_EVENT
 TIMING_METHOD_CHOICES = single.TIMING_METHOD_CHOICES
 RUN_PERFTEST_TIMING_SOURCE = single.RUN_PERFTEST_TIMING_SOURCE
 CUDA_EVENT_TIMING_SOURCE = single.CUDA_EVENT_TIMING_SOURCE
-MOE_PIPELINE_TIMING_SOURCE = (
-    "run_perftest testGraph=False torch-profiler; moe-pipeline context; "
-    "target-only warmup"
-)
+
+
+def moe_pipeline_timing_source(test_graph: bool) -> str:
+    return (
+        f"{single.run_perftest_timing_source(test_graph)}; "
+        "moe-pipeline context; target-only warmup"
+    )
 
 MOE_KERNARG_SIZE = 184
 MOE_KERNARG_LAYOUT: tuple[tuple[str, int, str], ...] = (
@@ -2037,7 +2040,13 @@ def _run_moe_gemm(
                 str(code_object),
             )
 
-        timing = measure_target(launch_cpp)
+        # The compiled torch custom op already supplies profiler correlation
+        # and is graph-capturable, so it serves as both the raw and
+        # profiler-visible launch in the generic --inmoe adapter.
+        timing = measure_target(
+            launch_cpp,
+            profiler_target_launch=launch_cpp,
+        )
     else:
         with single._LoadedClusterKernel(
             code_object, symbol, args.device
@@ -2255,7 +2264,8 @@ def _run_target_kernel_perftest(
     synchronize: Callable[[], Any],
     mark_stream_synchronized: Callable[[], Any] | None = None,
     reported_warmup: int | None = None,
-    timing_source: str = RUN_PERFTEST_TIMING_SOURCE,
+    test_graph: bool = False,
+    timing_source: str | None = None,
     run_perftest_impl: Callable[..., tuple[Any, float, Any]] | None = None,
 ) -> tuple[Any, float, dict[str, Any], Any]:
     return single._run_target_kernel_perftest(
@@ -2267,6 +2277,7 @@ def _run_target_kernel_perftest(
         synchronize=synchronize,
         mark_stream_synchronized=mark_stream_synchronized,
         reported_warmup=reported_warmup,
+        test_graph=test_graph,
         timing_source=timing_source,
         run_perftest_impl=run_perftest_impl,
     )
@@ -2309,7 +2320,8 @@ def _run_selected_target_timing(
             mark_stream_synchronized=mark_stream_synchronized,
             run_target_perftest=_run_target_kernel_perftest,
             select_target_profiler_timing=_select_target_profiler_timing,
-            timing_source=MOE_PIPELINE_TIMING_SOURCE,
+            test_graph=args.cudagh,
+            timing_source=moe_pipeline_timing_source(args.cudagh),
             error_type=single.GemmIsaRunnerError,
         )
         return target_output, timing
@@ -2323,6 +2335,7 @@ def _run_selected_target_timing(
             device=args.device,
             synchronize=torch_module.cuda.synchronize,
             mark_stream_synchronized=mark_stream_synchronized,
+            test_graph=args.cudagh,
         )
         return output, timing
 
@@ -2359,6 +2372,7 @@ def _run_moe_cpp_perftest(
     iters: int,
     device: int,
     synchronize: Callable[[], Any] = lambda: None,
+    test_graph: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     output, _, timing, _ = _run_target_kernel_perftest(
         launch,
@@ -2367,6 +2381,7 @@ def _run_moe_cpp_perftest(
         iters=iters,
         device=device,
         synchronize=synchronize,
+        test_graph=test_graph,
         run_perftest_impl=run_perftest,
     )
     return output, timing
@@ -2847,6 +2862,9 @@ def _self_test() -> None:
     default_args = parser.parse_args(["--self-test"])
     assert default_args.inmoe is False
     assert default_args.cpp is False
+    assert default_args.cudagh is False
+    assert parser.parse_args(["--self-test", "--cudagh"]).cudagh is True
+    assert sum(action.dest == "cudagh" for action in parser._actions) == 1
     assert (
         parser.parse_args(["--self-test"]).timing_method
         == TIMING_METHOD_PROFILER
@@ -2889,6 +2907,24 @@ def _self_test() -> None:
         pass
     else:
         raise AssertionError("pipeline+cuda-event must be rejected")
+    try:
+        single.validate_timing_method_context(
+            TIMING_METHOD_CUDA_EVENT,
+            False,
+            True,
+        )
+    except single.GemmIsaRunnerError:
+        pass
+    else:
+        raise AssertionError("cuda-event+--cudagh must be rejected")
+    validate_cudagh_backend(False, False)
+    validate_cudagh_backend(True, True)
+    try:
+        validate_cudagh_backend(True, False)
+    except single.GemmIsaRunnerError:
+        pass
+    else:
+        raise AssertionError("Python hipdrv+--cudagh must be rejected")
     full_detection = single.detect_global_output_stores(
         "; buffer_store_b128 in comment\n"
         "ds_store_b128 v0, v[0:3]\n"
@@ -3026,6 +3062,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_cudagh_backend(cudagh: bool, cpp: bool) -> None:
+    if cudagh and not cpp:
+        raise single.GemmIsaRunnerError(
+            "--cudagh requires --cpp in gemm_batch_isa_runner.py: the Python "
+            "hipDrvLaunchKernelEx launcher produced an empty CUDA Graph in "
+            "runtime validation"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -3048,7 +3093,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         single.validate_timing_method_context(
             args.timing_method,
             args.inmoe,
+            args.cudagh,
         )
+    except single.GemmIsaRunnerError as exc:
+        parser.error(str(exc))
+    try:
+        validate_cudagh_backend(args.cudagh, args.cpp)
     except single.GemmIsaRunnerError as exc:
         parser.error(str(exc))
 

@@ -152,6 +152,10 @@ class MoeCppBackendCliTest(unittest.TestCase):
         self.assertEqual(event_args.timing_method, "cuda-event")
         self.assertFalse(default_args.inmoe)
         self.assertTrue(inmoe_args.inmoe)
+        self.assertFalse(default_args.cudagh)
+        self.assertTrue(
+            parser.parse_args(["--isa", "kernel.s", "--cudagh"]).cudagh
+        )
         self.assertFalse(hasattr(default_args, "cpp"))
         with self.assertRaises(SystemExit):
             parser.parse_args(
@@ -166,6 +170,21 @@ class MoeCppBackendCliTest(unittest.TestCase):
             "incompatible with --inmoe",
         ):
             single.validate_timing_method_context("cuda-event", True)
+        with self.assertRaisesRegex(
+            single.GemmIsaRunnerError,
+            "only valid with --timing-method profiler",
+        ):
+            single.validate_timing_method_context(
+                "cuda-event",
+                False,
+                True,
+            )
+        single.validate_single_cudagh_backend(False)
+        with self.assertRaisesRegex(
+            single.GemmIsaRunnerError,
+            "empty CUDA Graph",
+        ):
+            single.validate_single_cudagh_backend(True)
 
     def test_cpp_flag_default_and_opt_in(self):
         parser = batch._build_parser()
@@ -174,6 +193,13 @@ class MoeCppBackendCliTest(unittest.TestCase):
 
         self.assertFalse(default_args.cpp)
         self.assertTrue(cpp_args.cpp)
+        batch.validate_cudagh_backend(False, False)
+        batch.validate_cudagh_backend(True, True)
+        with self.assertRaisesRegex(
+            single.GemmIsaRunnerError,
+            "--cudagh requires --cpp",
+        ):
+            batch.validate_cudagh_backend(True, False)
 
     def test_removed_launch_backend_cli_is_rejected(self):
         parser = batch._build_parser()
@@ -201,6 +227,10 @@ class MoeCppBackendCliTest(unittest.TestCase):
         )
         self.assertEqual(
             sum(action.dest == "inmoe" for action in parser._actions),
+            1,
+        )
+        self.assertEqual(
+            sum(action.dest == "cudagh" for action in parser._actions),
             1,
         )
 
@@ -324,6 +354,7 @@ class GenericInmoeContextTest(unittest.TestCase):
                 mark_stream_synchronized=lambda: None,
                 run_target_perftest=run_perftest,
                 select_target_profiler_timing=select_timing,
+                test_graph=False,
                 timing_source="pipeline profiler",
             )
 
@@ -482,6 +513,44 @@ class MoeCppBackendKeyAndCacheTest(unittest.TestCase):
 
 
 class MoeCppBackendTimingTest(unittest.TestCase):
+    def test_cudagh_is_forwarded_and_source_is_graph_specific(self):
+        class TraceFrame:
+            def to_dict(self, orient):
+                self.records = [
+                    {
+                        "name": batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
+                        "cnt": 100,
+                        "device_time_sum": 3200.0,
+                        "device_time_avg": 32.0,
+                        "device_type": "CUDA",
+                        "device_index": "0",
+                    }
+                ]
+                return self.records
+
+            def to_string(self, index=True):
+                return repr(self.to_dict("records"))
+
+        output = object()
+        run_perftest = Mock(return_value=(output, 32.0, TraceFrame()))
+        actual_output, row = batch._run_moe_cpp_perftest(
+            run_perftest,
+            Mock(),
+            symbol=batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
+            warmup=7,
+            iters=100,
+            device=0,
+            test_graph=True,
+        )
+
+        self.assertIs(actual_output, output)
+        self.assertTrue(run_perftest.call_args.kwargs["testGraph"])
+        self.assertEqual(
+            row["source"],
+            single.RUN_PERFTEST_GRAPH_TIMING_SOURCE,
+        )
+        self.assertTrue(row["test_graph"])
+
     def test_run_perftest_is_formal_summary_source(self):
         class TraceFrame:
             def to_dict(self, orient):

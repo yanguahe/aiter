@@ -65,10 +65,22 @@ TIMING_METHOD_CHOICES = (
     TIMING_METHOD_CUDA_EVENT,
 )
 RUN_PERFTEST_TIMING_SOURCE = "run_perftest testGraph=False torch-profiler"
-CUDA_EVENT_TIMING_SOURCE = "cuda.Event batched"
-MOE_PIPELINE_TIMING_SOURCE = (
-    "run_perftest testGraph=False torch-profiler full MoE pipeline"
+RUN_PERFTEST_GRAPH_TIMING_SOURCE = (
+    "run_perftest testGraph=True CUDA-graph torch-profiler"
 )
+CUDA_EVENT_TIMING_SOURCE = "cuda.Event batched"
+
+
+def run_perftest_timing_source(test_graph: bool) -> str:
+    return (
+        RUN_PERFTEST_GRAPH_TIMING_SOURCE
+        if test_graph
+        else RUN_PERFTEST_TIMING_SOURCE
+    )
+
+
+def moe_pipeline_timing_source(test_graph: bool) -> str:
+    return f"{run_perftest_timing_source(test_graph)} full MoE pipeline"
 KERNEL_SYMBOL_256 = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
 KERNEL_SYMBOL_128 = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
 KERNEL_SYMBOL_64X256 = "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps"
@@ -2311,7 +2323,8 @@ def _run_target_kernel_perftest(
     synchronize: Callable[[], Any],
     mark_stream_synchronized: Callable[[], Any] | None = None,
     reported_warmup: int | None = None,
-    timing_source: str = RUN_PERFTEST_TIMING_SOURCE,
+    test_graph: bool = False,
+    timing_source: str | None = None,
     run_perftest_impl: Callable[..., tuple[Any, float, Any]] | None = None,
 ) -> tuple[Any, float, dict[str, Any], Any]:
     if iters <= 1:
@@ -2326,6 +2339,11 @@ def _run_target_kernel_perftest(
         from aiter.test_common import run_perftest
     else:
         run_perftest = run_perftest_impl
+    actual_timing_source = (
+        run_perftest_timing_source(test_graph)
+        if timing_source is None
+        else timing_source
+    )
 
     saved_log_more = os.environ.get("AITER_LOG_MORE")
     suppress_internal_event_pass = saved_log_more not in (None, "", "0")
@@ -2341,7 +2359,7 @@ def _run_target_kernel_perftest(
             callable_,
             num_warmup=warmup,
             num_iters=iters,
-            testGraph=False,
+            testGraph=test_graph,
             return_trace_df=True,
             num_rotate_args=1,
         )
@@ -2365,7 +2383,8 @@ def _run_target_kernel_perftest(
         warmup=warmup if reported_warmup is None else reported_warmup,
         requested_device=device,
     )
-    timing["source"] = timing_source
+    timing["source"] = actual_timing_source
+    timing["test_graph"] = bool(test_graph)
     try:
         trace_text = trace_df.to_string(index=True)
     except Exception:
@@ -2380,7 +2399,8 @@ def _run_target_kernel_perftest(
         f"requested torch device ordinal={device}"
     )
     print(
-        f"[gemm_isa_runner] timing source={timing_source}; "
+        f"[gemm_isa_runner] timing source={actual_timing_source}; "
+        f"testGraph={test_graph}; "
         f"run_perftest _us={full_us_value:.4f}"
     )
     return output, full_us_value, timing, trace_df
@@ -2626,7 +2646,8 @@ def _run_gemm(
                 mark_stream_synchronized=module.mark_stream_synchronized,
                 run_target_perftest=_run_target_kernel_perftest,
                 select_target_profiler_timing=_select_target_profiler_timing,
-                timing_source=MOE_PIPELINE_TIMING_SOURCE,
+                test_graph=args.cudagh,
+                timing_source=moe_pipeline_timing_source(args.cudagh),
                 error_type=GemmIsaRunnerError,
             )
             timed_output = output
@@ -2645,6 +2666,7 @@ def _run_gemm(
                 device=args.device,
                 synchronize=torch.cuda.synchronize,
                 mark_stream_synchronized=module.mark_stream_synchronized,
+                test_graph=args.cudagh,
             )
         else:
             timed_output, microseconds = _run_batched_cuda_event_timing(
@@ -2829,6 +2851,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--cudagh",
+        action="store_true",
+        help=(
+            "for profiler timing, pass testGraph=True to run_perftest: capture "
+            "one CUDA Graph containing --iters target/pipeline calls, profile "
+            "one replay, and normalize its returned trace by --iters. Without "
+            "this flag use testGraph=False; this is not batched CUDA Event"
+        ),
+    )
+    parser.add_argument(
         "--inmoe",
         action="store_true",
         help=(
@@ -2856,12 +2888,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_timing_method_context(timing_method: str, inmoe: bool) -> None:
+def validate_timing_method_context(
+    timing_method: str,
+    inmoe: bool,
+    cudagh: bool = False,
+) -> None:
+    if timing_method != TIMING_METHOD_PROFILER and cudagh:
+        raise GemmIsaRunnerError(
+            "--cudagh is only valid with --timing-method profiler; "
+            "CUDA Graph profiler timing is not batched CUDA Event timing"
+        )
     if timing_method == TIMING_METHOD_CUDA_EVENT and inmoe:
         raise GemmIsaRunnerError(
             "--timing-method cuda-event is incompatible with --inmoe: "
             "one event pair would measure the entire interleaved pipeline "
             "and cannot isolate the target; use --timing-method profiler"
+        )
+
+
+def validate_single_cudagh_backend(cudagh: bool) -> None:
+    if cudagh:
+        raise GemmIsaRunnerError(
+            "--cudagh is unavailable in gemm_isa_runner.py: its Python "
+            "hipDrvLaunchKernelEx launcher produced an empty CUDA Graph in "
+            "runtime validation. Use gemm_batch_isa_runner.py with the "
+            "supported MoE --cpp backend"
         )
 
 
@@ -2875,7 +2926,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.timing_method == TIMING_METHOD_PROFILER and args.iters <= 1:
         parser.error("--timing-method profiler requires --iters greater than 1")
     try:
-        validate_timing_method_context(args.timing_method, args.inmoe)
+        validate_timing_method_context(
+            args.timing_method,
+            args.inmoe,
+            args.cudagh,
+        )
+    except GemmIsaRunnerError as exc:
+        parser.error(str(exc))
+    try:
+        validate_single_cudagh_backend(args.cudagh)
     except GemmIsaRunnerError as exc:
         parser.error(str(exc))
     if args.device < 0:
