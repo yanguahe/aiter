@@ -27,6 +27,15 @@ launcher-observed 112-byte preload ABI for shapes where M is divisible by 16,
 N by 1024, and K by 512.  The symbol
 ``mab_tdm_gemm_full_batch`` uses the same ABI and instruction body with
 contiguous stride1 values and one grid-Z plane per batch item.
+
+The exact ``moe_gemm1_a4w4_v0`` full/load-only symbols, the v1 direct-scale
+full symbol, and the audited v21 load-only symbol use the production 184-byte
+grouped-MoE ABI.  Their preferred CLI is
+``--experts/--tokens/--topk/--model-dim/--inter-dim``; shape, balanced valid
+rows, contiguous-M capacity, logical 24x144 grid, and physical 3456-WG launch
+are derived and checked as one contract.  The former exact
+``--shape 64,6144,7168 --batch 96`` form remains as an explicit compatibility
+path, but mixing old and new forms is rejected.
 """
 
 from __future__ import annotations
@@ -205,6 +214,9 @@ MOE_GEMM1_KERNEL_SYMBOL = "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1"
 MOE_GEMM1_LOADONLY_KERNEL_SYMBOL = (
     "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4_loadonly"
 )
+MOE_V21_LOADONLY_KERNEL_SYMBOL = (
+    "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21"
+)
 # Same launcher, same kernarg ABI and tile geometry; only
 # waves_per_tensor_tdm differs (4 instead of the default 2), which is what the
 # `_wpt4` suffix encodes.  This is the variant the production config actually
@@ -212,16 +224,32 @@ MOE_GEMM1_LOADONLY_KERNEL_SYMBOL = (
 MOE_GEMM1_WPT4_KERNEL_SYMBOL = (
     "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4"
 )
+MOE_GEMM1_V1_KERNEL_SYMBOL = (
+    "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_"
+    "wpt4_directscale_v1"
+)
 MOE_GEMM1_SYMBOLS = (
     MOE_GEMM1_KERNEL_SYMBOL,
     MOE_GEMM1_WPT4_KERNEL_SYMBOL,
+    MOE_GEMM1_V1_KERNEL_SYMBOL,
     MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
+    MOE_V21_LOADONLY_KERNEL_SYMBOL,
+)
+MOE_LOADONLY_SYMBOLS = (
+    MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
+    MOE_V21_LOADONLY_KERNEL_SYMBOL,
+)
+MOE_MODES = (
+    "moe-gemm1",
+    "moe-gemm1-loadonly",
+    "moe-v21-loadonly",
 )
 LAUNCH_BACKEND_PYTHON = "python"
 LAUNCH_BACKEND_CPP = "cpp"
 TIMING_CONTEXT_STANDALONE = "standalone"
 TIMING_CONTEXT_MOE_PIPELINE = "moe-pipeline"
 MOE_CPP_ISA_BASENAME = "moe_gemm1_a4w4_v0.s"
+MOE_V21_CONTRACT_MARKER = "__aiter_moe_v21_contract"
 TIMING_METHOD_PROFILER = single.TIMING_METHOD_PROFILER
 TIMING_METHOD_CUDA_EVENT = single.TIMING_METHOD_CUDA_EVENT
 TIMING_METHOD_CHOICES = single.TIMING_METHOD_CHOICES
@@ -278,6 +306,18 @@ MOE_BAKED_K = 7168
 MOE_STAGE1_ACT = 1  # silu
 MOE_BLOCK = (MOE_M_WARP * MOE_N_WARP * 32, 1, 1)  # (128,1,1)
 MOE_PIPELINE_SHAPE = (MOE_TILE_M, 6144, MOE_BAKED_K)
+MOE_REFERENCE_TOKENS = 512
+MOE_REFERENCE_TOPK = 6
+MOE_REFERENCE_INTER_DIM = 3072
+MOE_REFERENCE_VALID_ROWS_PER_EXPERT = 32
+MOE_REFERENCE_GRID = (3456, 1, 1)
+MOE_CLI_FIELDS = (
+    "experts",
+    "tokens",
+    "topk",
+    "model_dim",
+    "inter_dim",
+)
 
 # The epilogue clamps gate to <= limit and up to [-limit, limit] before
 # silu(gate)*up.  With random fp4 operands accumulated over K=7168 the raw
@@ -291,39 +331,267 @@ MOE_VALIDATE_SWIGLU_LIMIT = float(
     os.environ.get("AITER_MOE_SWIGLU_LIMIT", "3.0e38")
 )
 
-# Valid (non-padding) rows per expert.  run_gemm_a4w4.sh routes 512 tokens x
-# topk 6 across 96 experts with AITER_MOE_EXPERT_BALANCE, giving 32 rows each,
-# which contiguous_psum pads up to the 64-row tile.  Mirroring that ratio keeps
-# the store-side masking -- and therefore the store traffic -- the same as the
-# production run instead of writing every row.
-MOE_VALID_ROWS_PER_EXPERT = MOE_TILE_M // 2
+@dataclass(frozen=True)
+class MoeWorkload:
+    """User inputs and the exact balanced stage-1 launch derived from them."""
 
-# run_gemm_a4w4.sh routes 512 tokens with topk 6.
-MOE_TOPK = 6
+    experts: int
+    tokens: int
+    topk: int
+    model_dim: int
+    inter_dim: int
+    valid_routes: int
+    valid_rows_per_expert: int
+    raw_n: int
+    contiguous_m: int
+    active_m_tiles: int
+    total_m_tiles: int
+    n_tiles: int
+    working_wgs: int
+    tail_wgs: int
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        return (MOE_TILE_M, self.raw_n, self.model_dim)
+
+    @property
+    def grid(self) -> tuple[int, int, int]:
+        return (self.total_m_tiles * self.n_tiles, 1, 1)
 
 
-def moe_contiguous_m(experts: int, tile_m: int) -> int:
-    """i32_m the production path passes to gemm1.
+def _align_up(value: int, alignment: int) -> int:
+    if alignment <= 0:
+        raise single.GemmIsaRunnerError(
+            f"alignment must be positive, got {alignment}"
+        )
+    return ((value + alignment - 1) // alignment) * alignment
 
-    Copied from _grouped_a8w4_tdm_moe (grouped_moe_gfx1250.py:475-477):
 
-        _align_m     = max(tile_m, tile_m2)
-        contiguous_m = max(_align_m,
-                           align_up(token_num*topk + E*_align_m - topk, _align_m))
+def derive_moe_workload(
+    *,
+    experts: int,
+    tokens: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+) -> MoeWorkload:
+    """Derive the production balanced-MoE contract from user-level sizes.
 
-    This is a *static upper bound* chosen to keep the launch CUDAGraph-safe, not
-    the tight tile-aligned row count.  It is much larger than the rows that
-    actually carry data: with 512x6 routes over 96 experts it is 9216 while the
-    routed rows only reach 6144, so m_tiles 96..143 map to no expert.  Those
-    workgroups still launch -- the kernel's own entry check
-    (moe_gemm1_a4w4_v0.s:225-227: bisect, then `s_cmp_gt_u32 s18, 0x5f` ->
-    s_endpgm) retires them immediately -- and leaving them out understates the
-    dispatch cost by a third.  gemm2 uses the same tile_m here, so
-    _align_m == tile_m.
+    The contiguous-M formula is the one owned by
+    ``_grouped_a8w4_tdm_moe`` in ``grouped_moe_gfx1250.py``.  This runner
+    accepts only the compile-time specialization represented by the audited
+    ISA symbols, and reports every derived value instead of silently coercing
+    an unsupported workload.
     """
-    routed_rows = experts * MOE_VALID_ROWS_PER_EXPERT  # == token_num * topk
-    ub = routed_rows + experts * tile_m - MOE_TOPK
-    return max(tile_m, ((ub + tile_m - 1) // tile_m) * tile_m)
+
+    values = {
+        "experts": experts,
+        "tokens": tokens,
+        "topk": topk,
+        "model-dim": model_dim,
+        "inter-dim": inter_dim,
+    }
+    for name, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise single.GemmIsaRunnerError(
+                f"--{name} must be a positive integer, got {value!r}"
+            )
+
+    valid_routes = tokens * topk
+    if valid_routes % experts:
+        raise single.GemmIsaRunnerError(
+            "the current balanced MoE contract requires "
+            "tokens*topk to be divisible by experts; got "
+            f"{tokens}*{topk}={valid_routes} over {experts} experts"
+        )
+    valid_rows_per_expert = valid_routes // experts
+    raw_n = 2 * inter_dim
+    contiguous_m = max(
+        MOE_TILE_M,
+        _align_up(
+            valid_routes + experts * MOE_TILE_M - topk,
+            MOE_TILE_M,
+        ),
+    )
+    active_m_tiles = experts
+    total_m_tiles = contiguous_m // MOE_TILE_M
+    n_tiles = raw_n // MOE_TILE_N if raw_n % MOE_TILE_N == 0 else 0
+    working_wgs = active_m_tiles * n_tiles
+    tail_wgs = (total_m_tiles - active_m_tiles) * n_tiles
+
+    required = {
+        "experts": (experts, MOE_N_EXPERTS),
+        "tokens": (tokens, MOE_REFERENCE_TOKENS),
+        "topk": (topk, MOE_REFERENCE_TOPK),
+        "model-dim": (model_dim, MOE_BAKED_K),
+        "inter-dim": (inter_dim, MOE_REFERENCE_INTER_DIM),
+        "valid rows/expert": (
+            valid_rows_per_expert,
+            MOE_REFERENCE_VALID_ROWS_PER_EXPERT,
+        ),
+    }
+    mismatches = [
+        f"{name}={actual} (required {expected})"
+        for name, (actual, expected) in required.items()
+        if actual != expected
+    ]
+    if mismatches:
+        raise single.GemmIsaRunnerError(
+            "this MoE ISA family is an exact balanced specialization: "
+            + "; ".join(mismatches)
+        )
+    if raw_n % MOE_TILE_N:
+        raise single.GemmIsaRunnerError(
+            f"raw GEMM N={raw_n} must be divisible by tile_n={MOE_TILE_N}"
+        )
+
+    workload = MoeWorkload(
+        experts=experts,
+        tokens=tokens,
+        topk=topk,
+        model_dim=model_dim,
+        inter_dim=inter_dim,
+        valid_routes=valid_routes,
+        valid_rows_per_expert=valid_rows_per_expert,
+        raw_n=raw_n,
+        contiguous_m=contiguous_m,
+        active_m_tiles=active_m_tiles,
+        total_m_tiles=total_m_tiles,
+        n_tiles=n_tiles,
+        working_wgs=working_wgs,
+        tail_wgs=tail_wgs,
+    )
+    if workload.grid != MOE_REFERENCE_GRID:
+        raise single.GemmIsaRunnerError(
+            f"derived grid {workload.grid} does not match audited "
+            f"{MOE_REFERENCE_GRID}"
+        )
+    return workload
+
+
+def reference_moe_workload() -> MoeWorkload:
+    return derive_moe_workload(
+        experts=MOE_N_EXPERTS,
+        tokens=MOE_REFERENCE_TOKENS,
+        topk=MOE_REFERENCE_TOPK,
+        model_dim=MOE_BAKED_K,
+        inter_dim=MOE_REFERENCE_INTER_DIM,
+    )
+
+
+def resolve_moe_cli_workload(
+    args: argparse.Namespace,
+    *,
+    shape_explicit: bool,
+    batch_explicit: bool,
+) -> MoeWorkload:
+    """Choose one unambiguous MoE CLI form and reject mixed contracts."""
+
+    supplied = {
+        name: getattr(args, name)
+        for name in MOE_CLI_FIELDS
+        if getattr(args, name) is not None
+    }
+    if supplied:
+        missing = [
+            f"--{name.replace('_', '-')}"
+            for name in MOE_CLI_FIELDS
+            if getattr(args, name) is None
+        ]
+        if missing:
+            raise single.GemmIsaRunnerError(
+                "MoE user-level parameters are an all-or-none group; missing "
+                + ", ".join(missing)
+            )
+        conflicts = []
+        if shape_explicit:
+            conflicts.append("--shape/-mnk")
+        if batch_explicit:
+            conflicts.append("--batch")
+        if conflicts:
+            raise single.GemmIsaRunnerError(
+                "do not mix MoE user-level parameters with legacy "
+                + ", ".join(conflicts)
+            )
+        return derive_moe_workload(
+            experts=args.experts,
+            tokens=args.tokens,
+            topk=args.topk,
+            model_dim=args.model_dim,
+            inter_dim=args.inter_dim,
+        )
+
+    if shape_explicit != batch_explicit:
+        raise single.GemmIsaRunnerError(
+            "legacy MoE compatibility requires both --shape and --batch; "
+            "prefer the complete --experts/--tokens/--topk/--model-dim/"
+            "--inter-dim group"
+        )
+    if shape_explicit and batch_explicit:
+        expected_shape = (
+            MOE_TILE_M,
+            2 * MOE_REFERENCE_INTER_DIM,
+            MOE_BAKED_K,
+        )
+        if tuple(args.shape) != expected_shape or args.batch != MOE_N_EXPERTS:
+            raise single.GemmIsaRunnerError(
+                "legacy MoE compatibility accepts only "
+                f"--shape {','.join(map(str, expected_shape))} "
+                f"--batch {MOE_N_EXPERTS}; got shape={args.shape}, "
+                f"batch={args.batch}"
+            )
+        print(
+            "[gemm_batch_isa_runner] legacy MoE --shape/--batch compatibility "
+            "selected; prefer user-level MoE parameters"
+        )
+        return reference_moe_workload()
+
+    raise single.GemmIsaRunnerError(
+        "MoE ISA requires either the complete user-level parameter group "
+        "--experts/--tokens/--topk/--model-dim/--inter-dim or the exact "
+        "legacy --shape/--batch pair"
+    )
+
+
+def print_moe_workload_contract(workload: MoeWorkload) -> None:
+    padded_rows = workload.experts * MOE_TILE_M
+    print(
+        "[gemm_batch_isa_runner] MoE user parameters: "
+        f"experts={workload.experts}; tokens={workload.tokens}; "
+        f"topk={workload.topk}; model_dim={workload.model_dim}; "
+        f"inter_dim={workload.inter_dim}"
+    )
+    print(
+        "[gemm_batch_isa_runner] MoE derived contract: "
+        f"valid_routes={workload.valid_routes}; "
+        f"valid_rows/expert={workload.valid_rows_per_expert}; "
+        f"raw GEMM shape={workload.shape}; contiguous_m="
+        f"{workload.contiguous_m}; logical WG grid="
+        f"({workload.n_tiles},{workload.total_m_tiles},1); physical grid="
+        f"{workload.grid}; working WGs={workload.working_wgs}; "
+        f"tail WGs={workload.tail_wgs}; expert tile padding rows="
+        f"{padded_rows - workload.valid_routes}; tail capacity rows="
+        f"{workload.contiguous_m - padded_rows}"
+    )
+
+
+def moe_contiguous_m(
+    experts: int,
+    tile_m: int,
+    *,
+    tokens: int = MOE_REFERENCE_TOKENS,
+    topk: int = MOE_REFERENCE_TOPK,
+) -> int:
+    """Compatibility wrapper for callers using the former helper signature."""
+
+    if tile_m != MOE_TILE_M:
+        raise single.GemmIsaRunnerError(
+            f"MoE tile_m must be {MOE_TILE_M}, got {tile_m}"
+        )
+    return max(
+        tile_m,
+        _align_up(tokens * topk + experts * tile_m - topk, tile_m),
+    )
 
 MOE_GEMM1_PROFILE = single.KernelProfile(
     name="a8w4-moe-gemm1-tdm-t64x256x256-w1x4-b2-e96-act1",
@@ -348,65 +616,73 @@ MOE_GEMM1_WPT4_PROFILE = replace(
     primary_symbol=MOE_GEMM1_WPT4_KERNEL_SYMBOL,
     symbols=(MOE_GEMM1_WPT4_KERNEL_SYMBOL,),
 )
+MOE_GEMM1_V1_PROFILE = replace(
+    MOE_GEMM1_PROFILE,
+    name="a4w4-moe-gemm1-ab-tdm-direct-scale-v1",
+    primary_symbol=MOE_GEMM1_V1_KERNEL_SYMBOL,
+    symbols=(MOE_GEMM1_V1_KERNEL_SYMBOL,),
+)
 MOE_GEMM1_LOADONLY_PROFILE = replace(
     MOE_GEMM1_PROFILE,
     name="a8w4-moe-gemm1-tdm-loadonly",
     primary_symbol=MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
     symbols=(MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,),
 )
+MOE_V21_LOADONLY_PROFILE = replace(
+    MOE_GEMM1_PROFILE,
+    name="a4w4-moe-v21-v18v2-load-pattern-loadonly",
+    primary_symbol=MOE_V21_LOADONLY_KERNEL_SYMBOL,
+    symbols=(MOE_V21_LOADONLY_KERNEL_SYMBOL,),
+)
 
 
 def make_moe_launch_geometry(
-    m: int,
-    n: int,
-    k: int,
-    batch: int,
+    m: int | MoeWorkload,
+    n: int | None = None,
+    k: int | None = None,
+    batch: int | None = None,
 ) -> single.LaunchGeometry:
     """Grid for the MoE stage-1 kernel.
 
-    ``m`` is the tile-aligned rows per expert and ``batch`` the expert count.
+    New code passes a :class:`MoeWorkload`.  The four-integer form remains for
+    internal compatibility and is accepted only for the exact historical
+    ``64,6144,7168``/96 specialization.
+
     launch_gemm_a8w4_tdm uses
         m_tiles = ceil(i32_m / tile_m);  n_tiles = ceil(N / tile_n)
         grid    = (m_tiles * n_tiles, 1, 1)
-    with ``i32_m = contiguous_m`` from :func:`moe_contiguous_m` -- see there for
-    why that is larger than ``m * batch``.
+    with ``i32_m = contiguous_m`` from :func:`derive_moe_workload`.
     """
-    if k != MOE_BAKED_K:
-        raise single.GemmIsaRunnerError(
-            f"this ISA is compiled for K={MOE_BAKED_K}; got K={k}"
-        )
-    if batch != MOE_N_EXPERTS:
-        raise single.GemmIsaRunnerError(
-            f"this ISA is compiled for {MOE_N_EXPERTS} experts; got --batch {batch}"
-        )
-    if m % MOE_TILE_M:
-        raise single.GemmIsaRunnerError(
-            f"rows per expert must be a multiple of tile_m={MOE_TILE_M}; got {m}"
-        )
-    if n % MOE_TILE_N:
-        raise single.GemmIsaRunnerError(
-            f"N must be a multiple of tile_n={MOE_TILE_N}; got {n}"
-        )
-    if m != MOE_TILE_M:
-        raise single.GemmIsaRunnerError(
-            f"rows per expert must be the tile-aligned block tile_m="
-            f"{MOE_TILE_M}; got {m}"
-        )
-    # i32_m is the production static upper bound, not experts*tile_m, so the
-    # grid carries the same empty trailing tiles the real launch does.
-    contiguous_m = moe_contiguous_m(batch, MOE_TILE_M)
-    m_tiles = contiguous_m // MOE_TILE_M
-    n_tiles = n // MOE_TILE_N
+    if isinstance(m, MoeWorkload):
+        if any(value is not None for value in (n, k, batch)):
+            raise single.GemmIsaRunnerError(
+                "MoeWorkload geometry form does not accept extra dimensions"
+            )
+        workload = m
+    else:
+        if n is None or k is None or batch is None:
+            raise single.GemmIsaRunnerError(
+                "legacy MoE geometry form requires M,N,K,batch"
+            )
+        expected = (MOE_TILE_M, 2 * MOE_REFERENCE_INTER_DIM, MOE_BAKED_K)
+        if (m, n, k) != expected or batch != MOE_N_EXPERTS:
+            raise single.GemmIsaRunnerError(
+                "legacy MoE geometry accepts only "
+                f"shape={expected}, batch={MOE_N_EXPERTS}; got "
+                f"shape={(m, n, k)}, batch={batch}"
+            )
+        workload = reference_moe_workload()
+
     return single.LaunchGeometry(
-        grid=(m_tiles * n_tiles, 1, 1),
+        grid=workload.grid,
         block=MOE_BLOCK,
         cluster=(1, 1, 1),
-        tiles=(n_tiles, m_tiles),
-        cluster_grid=(m_tiles * n_tiles, 1),
+        tiles=(workload.n_tiles, workload.total_m_tiles),
+        cluster_grid=(workload.grid[0], 1),
         log2_grid=(0, 0),
-        logical_cluster_grid=(m_tiles * n_tiles, 1),
-        logical_wg_tasks=m_tiles * n_tiles,
-        logical_cluster_tasks=m_tiles * n_tiles,
+        logical_cluster_grid=(workload.n_tiles, workload.total_m_tiles),
+        logical_wg_tasks=workload.grid[0],
+        logical_cluster_tasks=workload.grid[0],
         persistent_stride=0,
         # The 96 experts are already inside contiguous_m -> m_tiles, so this
         # kernel launches once; --batch must not be applied a second time.
@@ -484,10 +760,11 @@ def pack_moe_kernargs(
 def build_moe_inputs(
     torch,
     *,
-    m_per_expert: int,
-    n: int,
-    k: int,
-    experts: int,
+    workload: MoeWorkload | None = None,
+    m_per_expert: int | None = None,
+    n: int | None = None,
+    k: int | None = None,
+    experts: int | None = None,
     device,
     seed: int,
 ):
@@ -528,12 +805,36 @@ def build_moe_inputs(
     from aiter.ops.flydsl.moe_kernels import flydsl_moe_fused_quant_preshuffle
     from aiter.utility import dtypes, fp4_utils
 
+    if workload is None:
+        expected = (MOE_TILE_M, 2 * MOE_REFERENCE_INTER_DIM, MOE_BAKED_K)
+        if (
+            m_per_expert,
+            n,
+            k,
+            experts,
+        ) != (*expected, MOE_N_EXPERTS):
+            raise single.GemmIsaRunnerError(
+                "legacy build_moe_inputs form accepts only "
+                f"M,N,K,experts={(*expected, MOE_N_EXPERTS)}; got "
+                f"{(m_per_expert, n, k, experts)}"
+            )
+        workload = reference_moe_workload()
+    elif any(value is not None for value in (m_per_expert, n, k, experts)):
+        raise single.GemmIsaRunnerError(
+            "build_moe_inputs(workload=...) does not accept legacy dimensions"
+        )
+
+    m_per_expert = MOE_TILE_M
+    n = workload.raw_n
+    k = workload.model_dim
+    experts = workload.experts
+
     # contiguous_m is the production static upper bound (9216 for this config),
     # so the buffers cover the trailing tiles that map to no expert even though
     # nothing reads or writes them.  routed_m is where the data actually lives.
-    contiguous_m = moe_contiguous_m(experts, MOE_TILE_M)
+    contiguous_m = workload.contiguous_m
     routed_m = experts * m_per_expert
-    m_tiles = experts            # scheduled non-tail tiles; not useful A rows
+    m_tiles = workload.active_m_tiles
     rep_a = (MOE_TILE_M // MOE_M_WARP) // 16   # 64//16 = 4
     k_scale = k // 32
     inter = n // 2
@@ -611,7 +912,11 @@ def build_moe_inputs(
     # and so are unaffected, but the epilogue masks its stores at psum, leaving
     # the padding rows untouched -- so those rows must be excluded from the
     # comparison rather than treated as wrong answers.
-    masked_m = torch.full((experts,), MOE_VALID_ROWS_PER_EXPERT, dtype=torch.int64)
+    masked_m = torch.full(
+        (experts,),
+        workload.valid_rows_per_expert,
+        dtype=torch.int64,
+    )
     aligned = ((masked_m + MOE_TILE_M - 1) // MOE_TILE_M) * MOE_TILE_M
     inclusive = torch.cumsum(aligned, 0)
     starts = inclusive - aligned
@@ -627,7 +932,7 @@ def build_moe_inputs(
     row_ids = torch.arange(contiguous_m, device=device)
     block_start = (row_ids // MOE_TILE_M) * MOE_TILE_M
     valid_rows = (row_ids < routed_m) & (
-        (row_ids - block_start) < MOE_VALID_ROWS_PER_EXPERT
+        (row_ids - block_start) < workload.valid_rows_per_expert
     )
 
     # The C descriptor says N//2 columns, but allocate the full N width as
@@ -676,8 +981,9 @@ def build_moe_inputs(
         "contiguous_m": contiguous_m,
         "routed_m": routed_m,
         "m_tiles": m_tiles,
-        "valid_routed_rows": experts * MOE_VALID_ROWS_PER_EXPERT,
+        "valid_routed_rows": workload.valid_routes,
         "active_experts": experts,
+        "workload": workload,
         "reference": reference,
     }
 
@@ -1259,8 +1565,12 @@ def select_kernel_mode(
     """Select one exact, symbol-scoped ABI and execution path."""
 
     batch = _validate_batch(batch)
+    if symbol == MOE_V21_LOADONLY_KERNEL_SYMBOL:
+        return "moe-v21-loadonly", MOE_V21_LOADONLY_PROFILE
     if symbol == MOE_GEMM1_LOADONLY_KERNEL_SYMBOL:
         return "moe-gemm1-loadonly", MOE_GEMM1_LOADONLY_PROFILE
+    if symbol == MOE_GEMM1_V1_KERNEL_SYMBOL:
+        return "moe-gemm1", MOE_GEMM1_V1_PROFILE
     if symbol == MOE_GEMM1_WPT4_KERNEL_SYMBOL:
         return "moe-gemm1", MOE_GEMM1_WPT4_PROFILE
     if symbol == MOE_GEMM1_KERNEL_SYMBOL:
@@ -1301,7 +1611,8 @@ def select_kernel_mode(
         f"{MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL!r} and "
         f"{MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL!r} "
         "for supported batches; or "
-        f"{BATCH_KERNEL_SYMBOL!r} for any supported batch"
+        f"{BATCH_KERNEL_SYMBOL!r} for any supported batch; MoE symbols: "
+        + ", ".join(repr(item) for item in MOE_GEMM1_SYMBOLS)
     )
 
 
@@ -1332,6 +1643,22 @@ def validate_cpp_backend_target(
             f"{expected_isa} and exact kernel symbol "
             f"{MOE_GEMM1_WPT4_KERNEL_SYMBOL!r}; got source={actual_isa}, "
             f"symbol={symbol!r}, mode={mode!r}"
+        )
+
+
+def validate_moe_v21_source_contract(source: str, symbol: str) -> None:
+    if symbol != MOE_V21_LOADONLY_KERNEL_SYMBOL:
+        return
+    marker_lines = [
+        re.sub(r"\s+", " ", single._strip_asm_comment(line)).strip()
+        for line in source.splitlines()
+        if MOE_V21_CONTRACT_MARKER in single._strip_asm_comment(line)
+    ]
+    expected = f".set {MOE_V21_CONTRACT_MARKER}, 1"
+    if marker_lines != [expected]:
+        raise single.GemmIsaRunnerError(
+            f"{symbol} requires exactly one {expected!r} marker; "
+            f"found {marker_lines}"
         )
 
 
@@ -1925,6 +2252,7 @@ def _run_moe_gemm(
     symbol: str,
     profile,
     geometry,
+    workload: MoeWorkload,
     code_object: Path,
     gfx: str,
     store_detection: single.GlobalOutputStoreDetection,
@@ -1937,18 +2265,15 @@ def _run_moe_gemm(
     """
     import torch
 
-    loadonly = symbol == MOE_GEMM1_LOADONLY_KERNEL_SYMBOL
-    m, n, k = args.shape
-    experts = args.batch
+    loadonly = symbol in MOE_LOADONLY_SYMBOLS
+    m, n, k = workload.shape
+    experts = workload.experts
     device = torch.device(f"cuda:{args.device}")
     stream = torch.cuda.current_stream(device)
 
     t = build_moe_inputs(
         torch,
-        m_per_expert=m,
-        n=n,
-        k=k,
-        experts=experts,
+        workload=workload,
         device=device,
         seed=args.seed,
     )
@@ -2105,7 +2430,7 @@ def _run_moe_gemm(
 
     print(
         f"[gemm_batch_isa_runner] MoE stage-1 a4w4: experts={experts} "
-        f"rows/expert={m} ({MOE_VALID_ROWS_PER_EXPERT} valid) routed_m="
+        f"rows/expert={m} ({workload.valid_rows_per_expert} valid) routed_m="
         f"{t['routed_m']} contiguous_m={contiguous_m} N={n} K={k}; "
         f"m_tiles={m_tiles} carry data x n_tiles={n_tiles} = "
         f"{m_tiles * n_tiles} working WGs of grid={geometry.grid} "
@@ -2130,7 +2455,7 @@ def _run_moe_gemm(
     print(
         "[gemm_batch_isa_runner] scheduled/padding context (excluded from "
         f"useful bytes): rows/expert={m}; valid/expert="
-        f"{MOE_VALID_ROWS_PER_EXPERT}; active m_tiles={m_tiles}; "
+        f"{workload.valid_rows_per_expert}; active m_tiles={m_tiles}; "
         f"working WGs={m_tiles * n_tiles}; tail capacity rows="
         f"{contiguous_m - t['routed_m']}; tensor footprints A={a_bytes} "
         f"B={b_bytes} sA={sa_bytes} sB={sb_bytes}"
@@ -2154,7 +2479,7 @@ def _run_moe_gemm(
         print(
             f"[gemm_batch_isa_runner] MoE padding-row check: "
             f"{int(valid.sum())} of {contiguous_m} rows valid "
-            f"({MOE_VALID_ROWS_PER_EXPERT}/{MOE_TILE_M} per expert); padding "
+            f"({workload.valid_rows_per_expert}/{MOE_TILE_M} per expert); padding "
             f"rows have {int((padding != 0).sum())} nonzero of {padding.numel()} "
             f"(expect 0)"
         )
@@ -2177,7 +2502,7 @@ def _run_moe_gemm(
         max_err_cell, rel_l2_cell = single.float32_error_metrics(ref, got)
 
     row = {
-        "intype": "a8w4",
+        "intype": "a4w4",
         "batch": experts,
         "M": m,
         "N": n,
@@ -2863,6 +3188,97 @@ def _self_test() -> None:
     assert default_args.inmoe is False
     assert default_args.cpp is False
     assert default_args.cudagh is False
+    assert default_args.shape == (18432, 2048, 7168)
+    assert default_args.batch == 1
+    assert all(
+        getattr(default_args, name) is None for name in MOE_CLI_FIELDS
+    )
+    moe_args = parser.parse_args(
+        [
+            "--self-test",
+            "--experts",
+            "96",
+            "--tokens",
+            "512",
+            "--topk",
+            "6",
+            "--model-dim",
+            "7168",
+            "--inter-dim",
+            "3072",
+        ]
+    )
+    workload = resolve_moe_cli_workload(
+        moe_args,
+        shape_explicit=False,
+        batch_explicit=False,
+    )
+    assert workload.valid_routes == 3072
+    assert workload.valid_rows_per_expert == 32
+    assert workload.raw_n == 6144
+    assert workload.contiguous_m == 9216
+    assert workload.grid == (3456, 1, 1)
+    assert workload.working_wgs == 2304
+    assert workload.tail_wgs == 1152
+    geometry = make_moe_launch_geometry(workload)
+    assert geometry.tiles == (24, 144)
+    assert geometry.grid == (3456, 1, 1)
+    assert geometry.block == (128, 1, 1)
+    assert geometry.cluster == (1, 1, 1)
+    noncluster_keepalive, noncluster_config = single._make_hip_launch_config(
+        geometry,
+        None,
+    )
+    assert noncluster_keepalive is None
+    assert noncluster_config.numAttrs == 0
+    assert not bool(noncluster_config.attrs)
+    cluster_keepalive, cluster_config = single._make_hip_launch_config(
+        replace(geometry, cluster=(4, 1, 1)),
+        None,
+    )
+    assert cluster_keepalive is not None
+    assert cluster_config.numAttrs == 1
+    assert bool(cluster_config.attrs)
+    assert (
+        select_kernel_mode(MOE_V21_LOADONLY_KERNEL_SYMBOL, 1)
+        == ("moe-v21-loadonly", MOE_V21_LOADONLY_PROFILE)
+    )
+    validate_moe_v21_source_contract(
+        f".set {MOE_V21_CONTRACT_MARKER}, 1\n",
+        MOE_V21_LOADONLY_KERNEL_SYMBOL,
+    )
+    try:
+        validate_moe_v21_source_contract(
+            "",
+            MOE_V21_LOADONLY_KERNEL_SYMBOL,
+        )
+    except single.GemmIsaRunnerError:
+        pass
+    else:
+        raise AssertionError("v21 contract marker must be mandatory")
+    partial_moe_args = parser.parse_args(
+        ["--self-test", "--experts", "96"]
+    )
+    try:
+        resolve_moe_cli_workload(
+            partial_moe_args,
+            shape_explicit=False,
+            batch_explicit=False,
+        )
+    except single.GemmIsaRunnerError as exc:
+        assert "all-or-none" in str(exc)
+    else:
+        raise AssertionError("partial MoE user parameter group must be rejected")
+    try:
+        resolve_moe_cli_workload(
+            moe_args,
+            shape_explicit=True,
+            batch_explicit=False,
+        )
+    except single.GemmIsaRunnerError as exc:
+        assert "do not mix" in str(exc)
+    else:
+        raise AssertionError("mixed MoE/shape CLI forms must be rejected")
     assert parser.parse_args(["--self-test", "--cudagh"]).cudagh is True
     assert sum(action.dest == "cudagh" for action in parser._actions) == 1
     assert (
@@ -2966,7 +3382,8 @@ def _self_test() -> None:
     print(
         "[gemm_batch_isa_runner] SELF_TEST_OK: profiler row selection, "
         "run_perftest arguments, pure batched CUDA-event ordering, timing "
-        "method CLI choices/default, pipeline combination rejection, and "
+        "method CLI choices/default, MoE user-parameter derivation/conflict "
+        "rejection, v21 geometry, pipeline combination rejection, and "
         "global-store-aware logical traffic accounting"
     )
 
@@ -2986,7 +3403,8 @@ def _build_parser() -> argparse.ArgumentParser:
         elif action.dest == "shape":
             action.help = (
                 "per-matrix GEMM shape M,N,K; MAB modes require M%%16=0, "
-                "N%%1024=0, and K%%512=0 "
+                "N%%1024=0, and K%%512=0; omit for the preferred MoE "
+                "user-level parameter form "
                 "(default for other modes: 18432,2048,7168)"
             )
         elif action.dest == "intype":
@@ -3029,7 +3447,55 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1,
         help=(
             f"number of independent batch-major GEMMs in one dispatch "
-            f"(default: 1; maximum: {MAX_BATCH})"
+            f"(default: 1; maximum: {MAX_BATCH}); omit for the preferred "
+            "MoE user-level parameter form"
+        ),
+    )
+    moe_group = parser.add_argument_group(
+        "balanced MoE workload",
+        "For MoE ISA symbols, supply all five options together and omit "
+        "--shape/--batch. They do not alter dense-kernel defaults.",
+    )
+    moe_group.add_argument(
+        "--experts",
+        type=int,
+        default=None,
+        help=f"number of experts (audited specialization: {MOE_N_EXPERTS})",
+    )
+    moe_group.add_argument(
+        "--tokens",
+        type=int,
+        default=None,
+        help=(
+            "input token count "
+            f"(audited specialization: {MOE_REFERENCE_TOKENS})"
+        ),
+    )
+    moe_group.add_argument(
+        "--topk",
+        type=int,
+        default=None,
+        help=(
+            "routes per token "
+            f"(audited specialization: {MOE_REFERENCE_TOPK})"
+        ),
+    )
+    moe_group.add_argument(
+        "--model-dim",
+        type=int,
+        default=None,
+        help=(
+            "raw GEMM K / model dimension "
+            f"(audited specialization: {MOE_BAKED_K})"
+        ),
+    )
+    moe_group.add_argument(
+        "--inter-dim",
+        type=int,
+        default=None,
+        help=(
+            "stage-1 output dimension; raw GEMM N is twice this value "
+            f"(audited specialization: {MOE_REFERENCE_INTER_DIM})"
         ),
     )
     parser.add_argument(
@@ -3051,7 +3517,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "use the C++ hipModuleLaunchKernel backend; restricted to exact "
             f"{MOE_CPP_ISA_BASENAME}. Without this flag, use Python ctypes "
-            "hipDrvLaunchKernelEx"
+            "hipModuleLaunchKernel for ordinary 1x1x1 launches and "
+            "hipDrvLaunchKernelEx for true workgroup clusters"
         ),
     )
     parser.add_argument(
@@ -3071,9 +3538,18 @@ def validate_cudagh_backend(cudagh: bool, cpp: bool) -> None:
         )
 
 
+def _argv_has_option(argv: Sequence[str], *options: str) -> bool:
+    return any(
+        token == option or token.startswith(f"{option}=")
+        for token in argv
+        for option in options
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_argv)
     if args.self_test:
         _self_test()
         return 0
@@ -3106,7 +3582,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         isa = single._resolve_isa(args.isa)
         source = single._read_isa_source(isa)
         symbol = single.resolve_kernel_symbol_from_text(source, args.symbol)
+        validate_moe_v21_source_contract(source, symbol)
         mode, profile = select_kernel_mode(symbol, args.batch)
+        workload: MoeWorkload | None = None
+        moe_options_supplied = any(
+            getattr(args, name) is not None for name in MOE_CLI_FIELDS
+        )
+        if mode in MOE_MODES:
+            workload = resolve_moe_cli_workload(
+                args,
+                shape_explicit=_argv_has_option(
+                    raw_argv,
+                    "--shape",
+                    "-mnk",
+                ),
+                batch_explicit=_argv_has_option(raw_argv, "--batch"),
+            )
+            args.shape = workload.shape
+            args.batch = workload.experts
+            print_moe_workload_contract(workload)
+        elif moe_options_supplied:
+            raise single.GemmIsaRunnerError(
+                "--experts/--tokens/--topk/--model-dim/--inter-dim are "
+                "accepted only by exact MoE ISA symbols"
+            )
         if (
             args.timing_method == TIMING_METHOD_PROFILER
             and mode != "legacy"
@@ -3120,9 +3619,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         store_detection = single.detect_global_output_stores(source)
         writes_output = store_detection.writes_output
 
-        if mode in ("moe-gemm1", "moe-gemm1-loadonly"):
+        if mode in MOE_MODES:
             resources = single.parse_assembly_resources(source, symbol)
-            if mode == "moe-gemm1-loadonly" and writes_output:
+            if mode in ("moe-gemm1-loadonly", "moe-v21-loadonly") and writes_output:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} load-only contract requires stores to D=False"
                 )
@@ -3130,10 +3629,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} full-kernel contract requires Global D stores"
                 )
-            geometry = make_moe_launch_geometry(
-                *args.shape,
-                args.batch,
-            )
+            assert workload is not None
+            geometry = make_moe_launch_geometry(workload)
         elif mode in (
             "mab",
             "mab-full",
@@ -3273,12 +3770,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 code_object,
             )
 
-            if mode in ("moe-gemm1", "moe-gemm1-loadonly"):
+            if mode in MOE_MODES:
+                assert workload is not None
                 row, timing, validate = _run_moe_gemm(
                     args,
                     symbol=symbol,
                     profile=profile,
                     geometry=geometry,
+                    workload=workload,
                     code_object=code_object,
                     gfx=single._load_dependencies(args.device).get_gfx(),
                     store_detection=store_detection,

@@ -1784,11 +1784,27 @@ def _make_hip_launch_config(
     geometry: LaunchGeometry,
     stream: ctypes.c_void_p,
 ) -> tuple[Any, _HipLaunchConfig]:
-    """Build profile-derived HIP dimensions and the cluster attribute."""
+    """Build profile-derived HIP dimensions and any required cluster attribute.
 
-    attributes = (_HipLaunchAttribute * 1)()
-    attributes[0].id = _HIP_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
-    attributes[0].value.clusterDim = _Dim3(*geometry.cluster)
+    A 1x1x1 launch is an ordinary non-cluster dispatch.  Omitting the
+    attribute is significant on gfx1250: ClusterID remains zero, cluster
+    barriers are NOPs, and cluster loads follow their documented downgrade to
+    global loads.
+    """
+
+    if geometry.cluster == (1, 1, 1):
+        attributes = None
+        attribute_pointer = ctypes.POINTER(_HipLaunchAttribute)()
+        attribute_count = 0
+    else:
+        attributes = (_HipLaunchAttribute * 1)()
+        attributes[0].id = _HIP_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+        attributes[0].value.clusterDim = _Dim3(*geometry.cluster)
+        attribute_pointer = ctypes.cast(
+            attributes,
+            ctypes.POINTER(_HipLaunchAttribute),
+        )
+        attribute_count = 1
     config = _HipLaunchConfig(
         gridDimX=geometry.grid[0],
         gridDimY=geometry.grid[1],
@@ -1799,11 +1815,8 @@ def _make_hip_launch_config(
         # The assembly descriptor owns its static LDS segment; no dynamic LDS.
         sharedMemBytes=0,
         hStream=stream,
-        attrs=ctypes.cast(
-            attributes,
-            ctypes.POINTER(_HipLaunchAttribute),
-        ),
-        numAttrs=1,
+        attrs=attribute_pointer,
+        numAttrs=attribute_count,
     )
     return attributes, config
 
@@ -1846,6 +1859,23 @@ class _HipRuntime:
         self._bind(
             "hipModuleGetFunction",
             [ctypes.POINTER(void_p), void_p, ctypes.c_char_p],
+            ctypes.c_int,
+        )
+        self._bind(
+            "hipModuleLaunchKernel",
+            [
+                void_p,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                void_p,
+                ctypes.POINTER(void_p),
+                ctypes.POINTER(void_p),
+            ],
             ctypes.c_int,
         )
         self._bind(
@@ -1967,18 +1997,35 @@ class _LoadedClusterKernel:
         if not self._configured:
             raise GemmIsaRunnerError("kernel launch attempted before configure()")
         self._stream_synchronized = False
-        # hipExtModuleLaunchKernel uses this same five-entry extra-buffer
-        # protocol, but it has no cluster-attribute parameter.  The current
-        # Aiter cluster launcher therefore uses hipDrvLaunchKernelEx.
+        extra = ctypes.cast(
+            self._extra,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        if self._config.numAttrs == 0:
+            self._hip.check(
+                self._hip.lib.hipModuleLaunchKernel(
+                    self._function,
+                    self._config.gridDimX,
+                    self._config.gridDimY,
+                    self._config.gridDimZ,
+                    self._config.blockDimX,
+                    self._config.blockDimY,
+                    self._config.blockDimZ,
+                    self._config.sharedMemBytes,
+                    self._stream,
+                    None,
+                    extra,
+                ),
+                "hipModuleLaunchKernel",
+            )
+            return
+
         self._hip.check(
             self._hip.lib.hipDrvLaunchKernelEx(
                 ctypes.byref(self._config),
                 self._function,
                 None,
-                ctypes.cast(
-                    self._extra,
-                    ctypes.POINTER(ctypes.c_void_p),
-                ),
+                extra,
             ),
             "hipDrvLaunchKernelEx",
         )

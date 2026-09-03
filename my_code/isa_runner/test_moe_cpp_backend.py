@@ -62,6 +62,7 @@ class LogicalTrafficAccountingTest(unittest.TestCase):
         my_code = _HERE.parent
         cases = (
             ("moe_gemm1_a4w4_v0.s", True, "tensor_store_from_lds"),
+            ("moe_gemm1_a4w4_v1.s", True, "tensor_store_from_lds"),
             ("moe_gemm1_a4w4_v0_loadonly.s", False, "none"),
             (
                 "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.s",
@@ -140,6 +141,21 @@ class LogicalTrafficAccountingTest(unittest.TestCase):
 
 
 class MoeCppBackendCliTest(unittest.TestCase):
+    def test_v1_direct_scale_symbol_uses_full_moe_profile(self):
+        mode, profile = batch.select_kernel_mode(
+            batch.MOE_GEMM1_V1_KERNEL_SYMBOL,
+            batch.MOE_N_EXPERTS,
+        )
+        self.assertEqual(mode, "moe-gemm1")
+        self.assertEqual(
+            profile.primary_symbol,
+            batch.MOE_GEMM1_V1_KERNEL_SYMBOL,
+        )
+        self.assertNotIn(
+            batch.MOE_GEMM1_V1_KERNEL_SYMBOL,
+            batch.MOE_LOADONLY_SYMBOLS,
+        )
+
     def test_single_timing_method_and_inmoe_cli(self):
         parser = single._build_parser()
         default_args = parser.parse_args(["--isa", "kernel.s"])
