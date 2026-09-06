@@ -10,11 +10,12 @@ HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0}"
 
 usage() {
     echo "Collect inside container:" >&2
-    echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> <TEST_CMD> [--all-simd]" >&2
+    echo "  ${SCRIPT_NAME} <KERNEL_NAME> <output-dir-name> <TEST_CMD> [--all-simd] [--ana-att]" >&2
     echo "Commit on host:" >&2
     echo "  ${SCRIPT_NAME} <output-dir-name> --git [--am]" >&2
     echo "Example: bash my_code/${SCRIPT_NAME} moe_gemm1_a8w4 isa_runner_att 'python my_code/isa_runner/tdm_adapter.py replay --which gemm1 --iters 100 --isa ./my_code/moe_gemm1_a8w4.v0.s'" >&2
     echo "  --all-simd  run four ATT captures for SIMD0, SIMD1, SIMD2, and SIMD3" >&2
+    echo "  --ana-att  after a successful capture, analyze thread_trace/simdN with analyze_att_capture.py" >&2
     echo "  --git  only add/commit/push an existing trace directory; skip trace collection" >&2
     echo "  --am   amend the current commit; requires --git" >&2
 }
@@ -428,10 +429,15 @@ validate_output_dir_name "${output_dir_name}"
 shift 3
 
 all_simd=0
+ana_att=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --all-simd)
             all_simd=1
+            shift
+            ;;
+        --ana-att)
+            ana_att=1
             shift
             ;;
         -h|--help)
@@ -451,6 +457,27 @@ set +e
 collect_trace "${kernel_name}" "${output_dir_name}" "${all_simd}"
 run_status=$?
 set -e
+
+if [[ "${ana_att}" -eq 1 ]]; then
+    output_dir="${TRACE_ROOT}/${output_dir_name}"
+    if [[ "${run_status}" -ne 0 ]]; then
+        echo "Skipping --ana-att because trace collection failed." >&2
+    else
+        analysis_log="${output_dir}/logs/analyze_att_capture.log"
+        mkdir -p "${output_dir}/logs"
+        echo "Analyzing ATT capture with analyze_directory_capture: ${output_dir}"
+        set +e
+        python -u my_code/analyze_att_capture.py --dir "${output_dir}" --no-plot \
+            2>&1 | tee "${analysis_log}"
+        ana_status=${PIPESTATUS[0]}
+        set -e
+        chmod -R a+rwX "${analysis_log}"
+        if [[ "${ana_status}" -ne 0 ]]; then
+            echo "ATT analysis failed with status ${ana_status}" >&2
+            run_status="${ana_status}"
+        fi
+    fi
+fi
 
 echo "Trace collection complete; Git operations were not requested."
 echo "Run '${SCRIPT_RELATIVE_PATH} ${output_dir_name} --git' on the host to commit the trace directory."

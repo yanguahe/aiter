@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot interval-average GFX clock frequency from ATT realtime samples."""
+"""Analyze ATT realtime and occupancy captures and plot per-SE GFX clocks."""
 
 from __future__ import annotations
 
@@ -231,16 +231,16 @@ def default_input_path(script_dir: Path) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot per-SE Fgfx derived from ATT realtime clock pairs. With --dir, "
-            "discover the existing thread_trace/simdN captures and strictly pair "
-            "one kernel/rpf_v3/**/realtime.json with occupancy.json in its UI "
-            "directory."
+            "Analyze ATT realtime and occupancy captures, report wave/WGP behavior, "
+            "and plot per-SE GFX clocks. With --dir, discover the existing "
+            "thread_trace/simdN captures and strictly pair one "
+            "kernel/rpf_v3/**/realtime.json with occupancy.json in its UI directory."
         ),
         epilog=(
             "Directory-mode output defaults to the ATT directory's parent and is "
             "named <ATT_BASENAME>.simdN.png for every discovered capture. Examples:\n"
-            "  python plot_fgfx.py --dir ./capture.att\n"
-            "  python my_code/plot_fgfx.py --dir my_code/capture.att"
+            "  python analyze_att_capture.py --dir ./capture.att\n"
+            "  python my_code/analyze_att_capture.py --dir my_code/capture.att"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -288,6 +288,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Override metadata.frequency for every selected realtime.json; "
             "must be greater than zero"
+        ),
+    )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help=(
+            "Directory mode: print the analysis report without writing PNG "
+            "plots"
         ),
     )
     return parser
@@ -1555,13 +1563,13 @@ def _ui_dispatch_id(path: Path) -> Optional[int]:
 
 def format_directory_summary(
     summaries: Mapping[int, DirectoryCaptureSummary],
-    output_paths: Mapping[int, Path],
+    output_paths: Optional[Mapping[int, Path]] = None,
 ) -> str:
     """Format every directory-mode result from one consolidated entry point."""
     if not summaries:
         raise ValueError("No directory capture summaries to print")
     simd_ids = sorted(summaries)
-    if set(output_paths) != set(summaries):
+    if output_paths is not None and set(output_paths) != set(summaries):
         raise ValueError("Output paths do not match discovered SIMD captures")
 
     lines: list[str] = []
@@ -2031,15 +2039,16 @@ def format_directory_summary(
             "physical WGP summaries)"
         )
 
-    lines.extend(
-        [
-            "",
-            f"Saved {len(simd_ids)} SIMD-select capture plot(s) "
-            "(shared y-axis across every discovered capture):",
-        ]
-    )
-    for simd_id in simd_ids:
-        lines.append(f"  SIMD{simd_id}-select: {output_paths[simd_id]}")
+    if output_paths is not None:
+        lines.extend(
+            [
+                "",
+                f"Saved {len(simd_ids)} SIMD-select capture plot(s) "
+                "(shared y-axis across every discovered capture):",
+            ]
+        )
+        for simd_id in simd_ids:
+            lines.append(f"  SIMD{simd_id}-select: {output_paths[simd_id]}")
 
     lines.extend(["", "End-of-report summary:", wave_reuse_summary_line, ""])
     lines.extend(slot_maximum_summary_lines)
@@ -2085,14 +2094,18 @@ def format_directory_summary(
     return "\n".join(lines)
 
 
-def run_directory_mode(args: argparse.Namespace) -> list[Path]:
-    att_root = args.att_dir.expanduser().resolve()
-    selected_files = discover_capture_files(att_root)
+def analyze_directory_capture(
+    att_root: Path,
+    reference_hz_override: Optional[float] = None,
+) -> dict[int, DirectoryCaptureSummary]:
+    """Discover, load, and summarize ATT captures. Does not write plots."""
+    root = att_root.expanduser().resolve()
+    selected_files = discover_capture_files(root)
     summaries: dict[int, DirectoryCaptureSummary] = {}
     for simd_id, files in selected_files.items():
         realtime_capture = load_and_validate_realtime(
             files.realtime_path,
-            reference_hz_override=args.reference_hz,
+            reference_hz_override=reference_hz_override,
             required_se_names=EXPECTED_SE_NAMES,
         )
         occupancy_capture = load_and_validate_occupancy(
@@ -2112,6 +2125,18 @@ def run_directory_mode(args: argparse.Namespace) -> list[Path]:
             ),
             occupancy=summarize_occupancy(occupancy_capture),
         )
+    return summaries
+
+
+def run_directory_mode(args: argparse.Namespace) -> list[Path]:
+    att_root = args.att_dir.expanduser().resolve()
+    summaries = analyze_directory_capture(
+        att_root,
+        reference_hz_override=args.reference_hz,
+    )
+    if getattr(args, "no_plot", False):
+        print(format_directory_summary(summaries))
+        return []
 
     simd_ids = sorted(summaries)
     output_paths = build_directory_output_paths(
@@ -2121,7 +2146,7 @@ def run_directory_mode(args: argparse.Namespace) -> list[Path]:
     )
     source_paths = [
         path
-        for files in selected_files.values()
+        for files in (item.files for item in summaries.values())
         for path in (files.realtime_path, files.occupancy_path)
     ]
     validate_directory_output_paths(
@@ -2294,7 +2319,7 @@ def run_self_test() -> None:
     print("[PASS] bad timestamps are filtered and counted")
     checks += 1
 
-    with tempfile.TemporaryDirectory(prefix="plot_fgfx_self_test_") as temp:
+    with tempfile.TemporaryDirectory(prefix="att_capture_analysis_self_test_") as temp:
         temp_root = Path(temp)
 
         single_root = temp_root / "single_simd2.att"
@@ -2459,6 +2484,22 @@ def run_self_test() -> None:
         if tuple(discovered) != SIMD_IDS:
             raise AssertionError("four-SIMD directory discovery failed")
         print("[PASS] four-SIMD directory discovery")
+        checks += 1
+
+        analysis_summaries = analyze_directory_capture(four_root)
+        if tuple(analysis_summaries) != SIMD_IDS:
+            raise AssertionError(
+                "directory analysis did not summarize every SIMD"
+            )
+        leftover_plots = list(
+            four_root.parent.glob(f"{four_root.name}.simd*.png")
+        )
+        if leftover_plots:
+            raise AssertionError(
+                "analyze_directory_capture wrote plots: "
+                + ", ".join(str(path) for path in leftover_plots)
+            )
+        print("[PASS] directory analysis summarizes without writing plots")
         checks += 1
 
         missing_root = temp_root / "missing_occupancy.att"
@@ -2781,10 +2822,11 @@ def main() -> None:
                 args.output is not None
                 or args.output_dir is not None
                 or args.reference_hz is not None
+                or args.no_plot
             ):
                 parser.error(
-                    "--self-test cannot be combined with output or reference "
-                    "options"
+                    "--self-test cannot be combined with output, plot, or "
+                    "reference options"
                 )
             run_self_test()
             return
@@ -2792,9 +2834,13 @@ def main() -> None:
         if args.att_dir is not None:
             if args.output is not None:
                 parser.error("--output is only valid with legacy --input mode")
+            if args.no_plot and args.output_dir is not None:
+                parser.error("--output-dir cannot be combined with --no-plot")
             run_directory_mode(args)
             return
 
+        if args.no_plot:
+            parser.error("--no-plot requires --dir")
         if args.output_dir is not None:
             parser.error("--output-dir requires --dir")
         run_legacy_mode(args)
