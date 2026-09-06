@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 SIMD_IDS = (0, 1, 2, 3)
 EXPECTED_SE_NAMES = ("SE0", "SE1", "SE2", "SE3")
 DEFAULT_REFERENCE_HZ = 100_000_000.0
+UNWRAPPED_DEFAULT_SIMD_ID = 3
 COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red")
 LINE_STYLES = ("-", "--", "-.", ":")
 MARKERS = ("o", "s", "^", "D")
@@ -234,7 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Analyze ATT realtime and occupancy captures, report wave/WGP behavior, "
             "and plot per-SE GFX clocks. With --dir, discover the existing "
-            "thread_trace/simdN captures and strictly pair one "
+            "thread_trace/simdN captures, or a single thread_trace/kernel "
+            "capture, and strictly pair one "
             "kernel/rpf_v3/**/realtime.json with occupancy.json in its UI directory."
         ),
         epilog=(
@@ -257,8 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Directory mode: ATT root containing any non-empty subset of "
-            "thread_trace/simd0..simd3; writes one derived PNG per capture "
-            "outside the trace root"
+            "thread_trace/simd0..simd3, or a single unwrapped capture at "
+            "thread_trace/kernel/rpf_v3; incomplete simdN directories "
+            "without realtime.json are skipped; writes one derived PNG "
+            "per complete capture outside the trace root"
         ),
     )
     mode.add_argument(
@@ -1239,6 +1243,93 @@ def _candidate_list(att_root: Path, paths: Sequence[Path]) -> str:
     return "\n".join(f"  - {path.relative_to(att_root)}" for path in paths)
 
 
+def _infer_unwrapped_simd_id(att_root: Path) -> int:
+    """Read att_simd_select from packaged input_*.yaml; default is SIMD 3."""
+    pattern = re.compile(
+        r"^\s*att_simd_select:\s*[\"']?([0-3])[\"']?\s*$",
+        re.MULTILINE,
+    )
+    found: set[int] = set()
+    for path in sorted(att_root.glob("input_*.yaml")):
+        if not path.is_file():
+            continue
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
+            found.add(int(match.group(1)))
+    if len(found) == 1:
+        return next(iter(found))
+    if len(found) > 1:
+        raise ValueError(
+            "Unwrapped kernel capture has conflicting att_simd_select "
+            f"values: {sorted(found)}"
+        )
+    return UNWRAPPED_DEFAULT_SIMD_ID
+
+
+def _find_paired_capture_jsons(
+    root: Path,
+    search_root: Path,
+    scan_root: Path,
+    rule: str,
+    label: str,
+) -> Optional[tuple[Path, Path]]:
+    """Return realtime/occupancy paths, or None when this capture is absent."""
+    candidates = (
+        sorted(
+            path
+            for path in search_root.rglob("realtime.json")
+            if path.is_file()
+        )
+        if search_root.is_dir()
+        else []
+    )
+    alternate_candidates = (
+        sorted(
+            path
+            for path in scan_root.rglob("realtime.json")
+            if path.is_file() and path not in candidates
+        )
+        if scan_root.is_dir()
+        else []
+    )
+    if not candidates:
+        if alternate_candidates:
+            raise ValueError(
+                f"{label}: expected exactly one realtime.json under {rule}, "
+                "found none; files outside kernel/rpf_v3 are intentionally "
+                "ignored:\n"
+                + _candidate_list(root, alternate_candidates)
+            )
+        return None
+    if len(candidates) != 1:
+        raise ValueError(
+            f"{label}: multiple realtime.json candidates under {rule}; "
+            "refusing to choose silently:\n"
+            + _candidate_list(root, candidates)
+        )
+
+    realtime_path = candidates[0]
+    occupancy_path = realtime_path.parent / "occupancy.json"
+    if occupancy_path.is_file():
+        return realtime_path, occupancy_path
+
+    occupancy_candidates = (
+        sorted(
+            path
+            for path in search_root.rglob("occupancy.json")
+            if path.is_file()
+        )
+        if search_root.is_dir()
+        else []
+    )
+    raise ValueError(
+        f"{label}: selected realtime.json requires occupancy.json "
+        f"in the same UI directory, but this file is missing:\n"
+        f"  - {occupancy_path.relative_to(root)}\n"
+        "occupancy.json candidates under kernel/rpf_v3:\n"
+        + _candidate_list(root, occupancy_candidates)
+    )
+
+
 def discover_capture_files(
     att_root: Path,
 ) -> dict[int, SelectedCaptureFiles]:
@@ -1272,78 +1363,48 @@ def discover_capture_files(
             "(expected directories simd0..simd3):\n"
             + _candidate_list(root, sorted(invalid_simd_entries))
         )
-    if not simd_directories:
-        raise ValueError(
-            f"No SIMD capture directories found under {thread_trace}; "
-            "expected at least one of simd0..simd3"
-        )
 
     discovered: dict[int, SelectedCaptureFiles] = {}
     for simd_id, simd_dir in sorted(simd_directories.items()):
-
-        search_root = simd_dir / "kernel" / "rpf_v3"
-        candidates = (
-            sorted(
-                path
-                for path in search_root.rglob("realtime.json")
-                if path.is_file()
-            )
-            if search_root.is_dir()
-            else []
+        paired = _find_paired_capture_jsons(
+            root,
+            simd_dir / "kernel" / "rpf_v3",
+            simd_dir,
+            f"{simd_dir.relative_to(root)}/kernel/rpf_v3/**/realtime.json",
+            f"SIMD{simd_id}",
         )
-        alternate_candidates = sorted(
-            path
-            for path in simd_dir.rglob("realtime.json")
-            if path.is_file() and path not in candidates
-        )
-        rule = (
-            f"{simd_dir.relative_to(root)}/kernel/rpf_v3/**/realtime.json"
-        )
-        if len(candidates) != 1:
-            if not candidates:
-                message = (
-                    f"SIMD{simd_id}: expected exactly one realtime.json under "
-                    f"{rule}, found none; candidates:\n"
-                    + _candidate_list(root, candidates)
-                )
-                if alternate_candidates:
-                    message += (
-                        "\nFiles outside kernel/rpf_v3 are intentionally "
-                        "ignored:\n"
-                        + _candidate_list(root, alternate_candidates)
-                    )
-                raise ValueError(message)
-            raise ValueError(
-                f"SIMD{simd_id}: multiple realtime.json candidates under "
-                f"{rule}; refusing to choose silently:\n"
-                + _candidate_list(root, candidates)
-            )
-
-        realtime_path = candidates[0]
-        occupancy_path = realtime_path.parent / "occupancy.json"
-        if not occupancy_path.is_file():
-            occupancy_candidates = (
-                sorted(
-                    path
-                    for path in search_root.rglob("occupancy.json")
-                    if path.is_file()
-                )
-                if search_root.is_dir()
-                else []
-            )
-            message = (
-                f"SIMD{simd_id}: selected realtime.json requires occupancy.json "
-                f"in the same UI directory, but this file is missing:\n"
-                f"  - {occupancy_path.relative_to(root)}\n"
-                "occupancy.json candidates under kernel/rpf_v3:\n"
-                + _candidate_list(root, occupancy_candidates)
-            )
-            raise ValueError(message)
-
+        if paired is None:
+            continue
+        realtime_path, occupancy_path = paired
         discovered[simd_id] = SelectedCaptureFiles(
             simd_id=simd_id,
             realtime_path=realtime_path,
             occupancy_path=occupancy_path,
+        )
+
+    if not discovered:
+        kernel_dir = thread_trace / "kernel"
+        paired = _find_paired_capture_jsons(
+            root,
+            kernel_dir / "rpf_v3",
+            kernel_dir,
+            f"{kernel_dir.relative_to(root)}/rpf_v3/**/realtime.json",
+            "unwrapped kernel capture",
+        )
+        if paired is not None:
+            simd_id = _infer_unwrapped_simd_id(root)
+            realtime_path, occupancy_path = paired
+            discovered[simd_id] = SelectedCaptureFiles(
+                simd_id=simd_id,
+                realtime_path=realtime_path,
+                occupancy_path=occupancy_path,
+            )
+
+    if not discovered:
+        raise ValueError(
+            f"No usable ATT capture found under {thread_trace}; expected at "
+            "least one complete capture in thread_trace/simd0..simd3/"
+            "kernel/rpf_v3 or thread_trace/kernel/rpf_v3"
         )
 
     return discovered
@@ -1617,7 +1678,7 @@ def format_directory_summary(
             "Clock-domain interpretation:",
             "  SIMDn names an ATT SIMD-select capture, not an independent "
             "hardware clock domain.",
-            "  The four SIMD-select captures are independent captures; maxima "
+            "  SIMD-select captures are independent; maxima "
             "below are observations across captures, not simultaneous GPU state.",
             "  A WGP contains four SIMD32s. Shader-cycle counters are not "
             "synchronized across SIMDs.",
@@ -2597,10 +2658,51 @@ def run_self_test() -> None:
         (empty_root / "thread_trace").mkdir(parents=True)
         _expect_value_error(
             "no SIMD directories",
-            "No SIMD capture directories",
+            "No usable ATT capture found",
             lambda: discover_capture_files(empty_root),
         )
         print("[PASS] empty SIMD capture set is rejected")
+        checks += 1
+
+        partial_root = temp_root / "partial_simd.att"
+        _write_self_test_capture(partial_root, 0)
+        (
+            partial_root / "thread_trace" / "simd1" / "kernel" / "rpf_v3"
+        ).mkdir(parents=True)
+        partial_discovered = discover_capture_files(partial_root)
+        if tuple(partial_discovered) != (0,):
+            raise AssertionError(
+                "incomplete sibling SIMD directories should be skipped"
+            )
+        print("[PASS] incomplete sibling SIMD directories are skipped")
+        checks += 1
+
+        unwrapped_root = temp_root / "unwrapped_kernel.att"
+        unwrapped_ui = (
+            unwrapped_root
+            / "thread_trace"
+            / "kernel"
+            / "rpf_v3"
+            / "ui_output_agent_9_dispatch_1"
+        )
+        _write_self_test_realtime(unwrapped_ui / "realtime.json")
+        _write_self_test_occupancy(unwrapped_ui / "occupancy.json")
+        unwrapped_discovered = discover_capture_files(unwrapped_root)
+        if tuple(unwrapped_discovered) != (UNWRAPPED_DEFAULT_SIMD_ID,):
+            raise AssertionError(
+                "unwrapped kernel capture should default to SIMD "
+                f"{UNWRAPPED_DEFAULT_SIMD_ID}"
+            )
+        (unwrapped_root / "input_kernel.yaml").write_text(
+            "  att_simd_select: \"0\"\n",
+            encoding="utf-8",
+        )
+        labeled_unwrapped = discover_capture_files(unwrapped_root)
+        if tuple(labeled_unwrapped) != (0,):
+            raise AssertionError(
+                "unwrapped kernel capture should read att_simd_select from yaml"
+            )
+        print("[PASS] unwrapped thread_trace/kernel capture is accepted")
         checks += 1
 
         bad_length_path = temp_root / "bad_length.json"

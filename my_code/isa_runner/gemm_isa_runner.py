@@ -2877,8 +2877,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--warmup",
         type=int,
-        default=101,
-        help="continuously enqueued untimed warmup launches (default: 101)",
+        default=5,
+        help="continuously enqueued untimed warmup launches (default: 5)",
     )
     parser.add_argument(
         "--iters",

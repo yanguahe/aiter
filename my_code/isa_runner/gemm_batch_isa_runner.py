@@ -3434,7 +3434,7 @@ def _build_parser() -> argparse.ArgumentParser:
             action.help = (
                 "untimed launches: run_perftest handles profiler mode; "
                 "cuda-event mode queues them then synchronizes once "
-                "(default: 101)"
+                "(default: 5)"
             )
         elif action.dest == "iters":
             action.help = (
