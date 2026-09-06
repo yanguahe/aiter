@@ -101,6 +101,13 @@ class PerSECycleSpan:
 
 
 @dataclass(frozen=True)
+class ObservedCycleMaximum:
+    source_name: str
+    cycle_span: float
+    coordinates: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
 class WaveLifetime:
     se_name: str
     packed_sa_wgp: int
@@ -737,6 +744,26 @@ def compute_realtime_cycle_spans(
             )
         )
     return tuple(spans)
+
+
+def compute_realtime_event_span(
+    capture: RealtimeCapture,
+) -> tuple[float, float, float]:
+    """Return earliest, latest, and span across all REALTIME samples."""
+    realtime_ticks = tuple(
+        sample[1]
+        for samples in capture.samples_by_se.values()
+        for sample in samples
+    )
+    earliest = min(realtime_ticks)
+    latest = max(realtime_ticks)
+    span = latest - earliest
+    if span <= 0:
+        raise ValueError(
+            f"{capture.path}: all-SE REALTIME event span must be positive, "
+            f"got {span:g}"
+        )
+    return earliest, latest, span
 
 
 def compute_occupancy_cycle_spans(
@@ -1538,6 +1565,8 @@ def format_directory_summary(
         raise ValueError("Output paths do not match discovered SIMD captures")
 
     lines: list[str] = []
+    frequency_summary_lines: list[str] = []
+    observed_cycle_maxima: list[ObservedCycleMaximum] = []
     lines.append(
         "Selected SIMD-select capture files "
         "(strict kernel/rpf_v3 realtime + same-UI occupancy pairing):"
@@ -1634,16 +1663,15 @@ def format_directory_summary(
                 f"{item.max_interval_mhz:>10.3f}"
             )
 
-    lines.extend(
+    frequency_summary_lines.extend(
         [
-            "",
             "Per-SIMD-select capture means "
             "(REALTIME-tick weighted across SE series):",
         ]
     )
     for simd_id in simd_ids:
         summary = summaries[simd_id].realtime
-        lines.append(
+        frequency_summary_lines.append(
             f"  SIMD{simd_id}-select: "
             f"{summary.weighted_mean_mhz:.3f} MHz across "
             f"{len(summary.series)} SE series; {summary.valid_intervals} valid "
@@ -1659,17 +1687,19 @@ def format_directory_summary(
         all_series, key=lambda entry: entry[1].weighted_mean_mhz
     )
     spread_mhz = maximum.weighted_mean_mhz - minimum.weighted_mean_mhz
-    lines.append(
-        f"\nCombined mean across {len(all_series)} independent SIMD-select "
-        f"capture x SE series (REALTIME-tick weighted): "
-        f"{overall_mean_mhz:.3f} MHz"
-    )
-    lines.append(
-        f"Spread of the {len(all_series)} series means: {spread_mhz:.3f} MHz "
-        f"(min SIMD{minimum_simd}-select {minimum.se_name} "
-        f"{minimum.weighted_mean_mhz:.3f}; "
-        f"max SIMD{maximum_simd}-select {maximum.se_name} "
-        f"{maximum.weighted_mean_mhz:.3f})"
+    frequency_summary_lines.extend(
+        [
+            "",
+            f"Combined mean across {len(all_series)} independent SIMD-select "
+            f"capture x SE series (REALTIME-tick weighted): "
+            f"{overall_mean_mhz:.3f} MHz",
+            f"Spread of the {len(all_series)} series means: "
+            f"{spread_mhz:.3f} MHz "
+            f"(min SIMD{minimum_simd}-select {minimum.se_name} "
+            f"{minimum.weighted_mean_mhz:.3f}; "
+            f"max SIMD{maximum_simd}-select {maximum.se_name} "
+            f"{maximum.weighted_mean_mhz:.3f})",
+        ]
     )
 
     cycle_sources = (
@@ -1724,15 +1754,17 @@ def format_directory_summary(
                 f"{', '.join(tied_se_names)}"
             )
         observed_maximum = max(item.cycle_span for _, item in all_spans)
-        observed_coordinates = [
-            f"SIMD{simd_id}-select/{item.se_name}"
+        observed_coordinates = tuple(
+            (simd_id, item.se_name)
             for simd_id, item in all_spans
             if item.cycle_span == observed_maximum
-        ]
-        lines.append(
-            "Max observed across independent SIMD-select captures: "
-            f"per_se_cycle={_format_cycle_value(observed_maximum)} at "
-            f"{', '.join(observed_coordinates)}"
+        )
+        observed_cycle_maxima.append(
+            ObservedCycleMaximum(
+                source_name=source_name,
+                cycle_span=observed_maximum,
+                coordinates=observed_coordinates,
+            )
         )
 
     lines.extend(
@@ -1784,8 +1816,8 @@ def format_directory_summary(
         if item.wave_count == observed_reuse_max
     ]
     observed_reuse_simd, observed_reuse_item = observed_reuse_ties[0]
-    lines.append(
-        "  Max observed across independent SIMD-select captures: "
+    wave_reuse_summary_line = (
+        "Max observed across independent SIMD-select captures: "
         f"{observed_reuse_max} sequential wave lifetimes per slot at "
         f"SIMD{observed_reuse_simd}-select/"
         f"{_wave_reuse_coordinate(observed_reuse_item)}"
@@ -1851,19 +1883,22 @@ def format_directory_summary(
     ]
     distinct_simd, distinct_item = observed_distinct_ties[0]
     concurrent_simd, concurrent_item = observed_concurrent_ties[0]
-    lines.append(
-        "Max distinct slot IDs per physical-SIMD key observed across "
-        f"independent captures: {observed_distinct} at "
-        f"SIMD{distinct_simd}-select/{_slot_usage_coordinate(distinct_item)}"
-        f"{_tie_suffix(len(observed_distinct_ties))}"
-    )
-    lines.append(
-        "Max simultaneously active slot IDs per physical-SIMD key observed "
-        f"across independent captures: {observed_concurrent} at "
-        f"SIMD{concurrent_simd}-select/"
-        f"{_slot_usage_coordinate(concurrent_item)}"
-        f"{_tie_suffix(len(observed_concurrent_ties))}"
-    )
+    slot_maximum_summary_lines = [
+        (
+            "Max distinct slot IDs per physical-SIMD key observed across "
+            f"independent captures: {observed_distinct} at "
+            f"SIMD{distinct_simd}-select/"
+            f"{_slot_usage_coordinate(distinct_item)}"
+            f"{_tie_suffix(len(observed_distinct_ties))}"
+        ),
+        (
+            "Max simultaneously active slot IDs per physical-SIMD key "
+            f"observed across independent captures: {observed_concurrent} at "
+            f"SIMD{concurrent_simd}-select/"
+            f"{_slot_usage_coordinate(concurrent_item)}"
+            f"{_tie_suffix(len(observed_concurrent_ties))}"
+        ),
+    ]
 
     lines.extend(
         [
@@ -1962,6 +1997,7 @@ def format_directory_summary(
             )
             if item.completion_imbalance is not None:
                 calculable_imbalances.append((simd_id, item))
+    completion_summary_lines: list[str] = []
     if calculable_imbalances:
         imbalance_values = [
             item.completion_imbalance
@@ -1976,12 +2012,12 @@ def format_directory_summary(
                 else entry[1].completion_imbalance
             ),
         )
-        lines.append(
+        completion_summary_lines.append(
             "Completion imbalance arithmetic mean "
             f"({len(imbalance_values)} independent capture x SE x "
             f"kernel-PC-label rows): {fmean(imbalance_values):.6f}"
         )
-        lines.append(
+        completion_summary_lines.append(
             f"Completion imbalance median: {median(imbalance_values):.6f}; "
             f"max observed {maximum_imbalance_item.completion_imbalance:.6f} "
             f"at SIMD{maximum_imbalance_simd}-select/"
@@ -1989,7 +2025,7 @@ def format_directory_summary(
             f"kernel-label={maximum_imbalance_item.kernel_pc_index}"
         )
     else:
-        lines.append(
+        completion_summary_lines.append(
             "Completion imbalance arithmetic mean: N/A "
             "(no capture x SE x kernel-PC-label row has at least two "
             "physical WGP summaries)"
@@ -2004,6 +2040,47 @@ def format_directory_summary(
     )
     for simd_id in simd_ids:
         lines.append(f"  SIMD{simd_id}-select: {output_paths[simd_id]}")
+
+    lines.extend(["", "End-of-report summary:", wave_reuse_summary_line, ""])
+    lines.extend(slot_maximum_summary_lines)
+    lines.append("")
+    lines.extend(completion_summary_lines)
+    lines.append("")
+    lines.extend(frequency_summary_lines)
+    lines.append("")
+    for observed in observed_cycle_maxima:
+        coordinate_text = ", ".join(
+            f"SIMD{simd_id}-select/{se_name}"
+            for simd_id, se_name in observed.coordinates
+        )
+        lines.append(
+            "Max observed across independent SIMD-select captures: "
+            f"per_se_cycle={_format_cycle_value(observed.cycle_span)} at "
+            f"{coordinate_text} (source: {observed.source_name})"
+        )
+
+    lines.append("")
+    for observed in observed_cycle_maxima:
+        simd_id, se_name = observed.coordinates[0]
+        capture = summaries[simd_id].realtime.capture
+        earliest, latest, realtime_span = compute_realtime_event_span(capture)
+        kernel_time_us = realtime_span / capture.reference_hz * 1.0e6
+        derived_frequency_mhz = observed.cycle_span / kernel_time_us
+        coordinate_note = f"SIMD{simd_id}-select/{se_name}"
+        if len(observed.coordinates) > 1:
+            coordinate_note += (
+                f" (first of {len(observed.coordinates)} tied maxima)"
+            )
+        lines.append(
+            f"Derived frequency from {observed.source_name} max "
+            f"per_se_cycle: {derived_frequency_mhz:.3f} MHz "
+            f"({_format_cycle_value(observed.cycle_span)} cycles / "
+            f"{kernel_time_us:.3f} us at {coordinate_note}; matching "
+            f"realtime.json all-SE REALTIME earliest="
+            f"{_format_cycle_value(earliest)}, latest="
+            f"{_format_cycle_value(latest)}, span="
+            f"{_format_cycle_value(realtime_span)} ticks)"
+        )
 
     return "\n".join(lines)
 
@@ -2253,6 +2330,17 @@ def run_self_test() -> None:
         single_realtime_summary = summarize_capture(
             single_realtime_capture, simd_id=2
         )
+        earliest, latest, realtime_span = compute_realtime_event_span(
+            single_realtime_capture
+        )
+        if (earliest, latest, realtime_span) != (0.0, 5.0, 5.0):
+            raise AssertionError(
+                "all-SE REALTIME event span calculation produced the wrong "
+                "result"
+            )
+        print("[PASS] all-SE REALTIME event span uses earliest/latest samples")
+        checks += 1
+
         directory_text = format_directory_summary(
             {
                 2: DirectoryCaptureSummary(
@@ -2303,6 +2391,29 @@ def run_self_test() -> None:
             raise AssertionError("directory output is missing a required label")
         if not directory_text.isascii():
             raise AssertionError("directory output must remain ASCII-safe")
+        ordered_footer_fragments = (
+            "Max observed across independent SIMD-select captures: "
+            "1 sequential wave lifetimes per slot",
+            "Max distinct slot IDs per physical-SIMD key observed across",
+            "Max simultaneously active slot IDs per physical-SIMD key",
+            "Completion imbalance arithmetic mean",
+            "Per-SIMD-select capture means",
+            "source: occupancy.json event shader_timestamp",
+            "source: realtime.json gfx_clock",
+            "Derived frequency from occupancy.json event shader_timestamp",
+            "Derived frequency from realtime.json gfx_clock",
+        )
+        footer_start = directory_text.index("End-of-report summary:")
+        footer_positions = [
+            directory_text.index(fragment, footer_start)
+            for fragment in ordered_footer_fragments
+        ]
+        if footer_positions != sorted(footer_positions):
+            raise AssertionError("end-of-report summary order is incorrect")
+        if not directory_text.rstrip().endswith("span=5 ticks)"):
+            raise AssertionError(
+                "derived frequencies must be the final two summary lines"
+            )
         print("[PASS] directory labels are precise and ASCII-safe")
         checks += 1
 
