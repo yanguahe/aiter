@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 
 SIMD_IDS = (0, 1, 2, 3)
 EXPECTED_SE_NAMES = ("SE0", "SE1", "SE2", "SE3")
+DEFAULT_REFERENCE_HZ = 100_000_000.0
 COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red")
 LINE_STYLES = ("-", "--", "-.", ":")
 MARKERS = ("o", "s", "^", "D")
@@ -286,8 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Override metadata.frequency for every selected realtime.json; "
-            "must be greater than zero"
+            "REALTIME reference clock in Hz. When provided, overrides "
+            "metadata.frequency for every selected realtime.json. When "
+            "omitted, a valid metadata.frequency is used; if it is missing "
+            "or <= 0, the default "
+            f"{DEFAULT_REFERENCE_HZ:g} Hz (100 MHz) is used"
         ),
     )
     parser.add_argument(
@@ -358,15 +362,7 @@ def load_and_validate_realtime(
     )
     metadata_hz = _optional_metadata_frequency(metadata_value)
 
-    if reference_hz_override is None:
-        if metadata_hz is None or metadata_hz <= 0:
-            raise ValueError(
-                f"{path}: metadata.frequency must be greater than zero; "
-                "use --reference-hz only when the reference clock is known"
-            )
-        reference_hz = metadata_hz
-        reference_source = "metadata"
-    else:
+    if reference_hz_override is not None:
         reference_hz = float(reference_hz_override)
         if not math.isfinite(reference_hz) or reference_hz <= 0:
             raise ValueError("--reference-hz must be finite and greater than zero")
@@ -377,6 +373,12 @@ def load_and_validate_realtime(
         reference_source = (
             f"CLI override; metadata={metadata_description}"
         )
+    elif metadata_hz is not None and metadata_hz > 0:
+        reference_hz = metadata_hz
+        reference_source = "metadata"
+    else:
+        reference_hz = DEFAULT_REFERENCE_HZ
+        reference_source = "default --reference-hz 100 MHz"
 
     malformed_se_names = sorted(
         name
@@ -2194,15 +2196,20 @@ def run_legacy_mode(args: argparse.Namespace) -> Path:
     return output
 
 
-def _write_self_test_realtime(path: Path) -> None:
+def _write_self_test_realtime(
+    path: Path,
+    frequency: Optional[float] = 100,
+) -> None:
     payload = {
         se_name: [[0, 0], [10, 5]]
         for se_name in EXPECTED_SE_NAMES
     }
-    payload["metadata"] = {
+    metadata: dict[str, object] = {
         "descriptor": "[gfx_clock, realtime_clock]",
-        "frequency": 100,
     }
+    if frequency is not None:
+        metadata["frequency"] = frequency
+    payload["metadata"] = metadata
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -2321,6 +2328,39 @@ def run_self_test() -> None:
 
     with tempfile.TemporaryDirectory(prefix="att_capture_analysis_self_test_") as temp:
         temp_root = Path(temp)
+
+        zero_freq_path = temp_root / "zero_freq" / "realtime.json"
+        _write_self_test_realtime(zero_freq_path, frequency=0)
+        zero_freq_capture = load_and_validate_realtime(zero_freq_path)
+        if (
+            zero_freq_capture.reference_hz != DEFAULT_REFERENCE_HZ
+            or zero_freq_capture.metadata_hz != 0
+            or zero_freq_capture.reference_source
+            != "default --reference-hz 100 MHz"
+        ):
+            raise AssertionError(
+                "zero metadata.frequency did not fall back to 100 MHz"
+            )
+        missing_freq_path = temp_root / "missing_freq" / "realtime.json"
+        _write_self_test_realtime(missing_freq_path, frequency=None)
+        missing_freq_capture = load_and_validate_realtime(missing_freq_path)
+        if (
+            missing_freq_capture.reference_hz != DEFAULT_REFERENCE_HZ
+            or missing_freq_capture.metadata_hz is not None
+            or missing_freq_capture.reference_source
+            != "default --reference-hz 100 MHz"
+        ):
+            raise AssertionError(
+                "missing metadata.frequency did not fall back to 100 MHz"
+            )
+        override_capture = load_and_validate_realtime(
+            zero_freq_path,
+            reference_hz_override=50_000_000.0,
+        )
+        if override_capture.reference_hz != 50_000_000.0:
+            raise AssertionError("explicit --reference-hz override was ignored")
+        print("[PASS] missing/zero metadata.frequency falls back to 100 MHz")
+        checks += 1
 
         single_root = temp_root / "single_simd2.att"
         _write_self_test_capture(single_root, 2)
