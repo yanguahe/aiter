@@ -1,0 +1,17 @@
+requested_kernel=a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4_loadonly
+kernel_regex=a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4_loadonly
+kernel_name_validation=trusted_without_database_lookup
+all_simd=1
+simd_ids=0 1 2 3
+output_dir_name=moe_gemm1_a4w4_v0_loadonly.e96_t512_topk6_m7168_n3072.d01-3.20260903T1159Z.att
+test_command=AITER_LOG_MORE=1 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/moe_gemm1_a4w4_v0_loadonly.s --experts 96 --tokens 512 --topk 6 --model-dim 7168 --inter-dim 3072 --iters 20 --clang /opt/rocm/llvm/bin/clang
+kernel_trace_status=0
+att_status=0
+kernel_trace_state=success
+att_state=success
+simd0_att_status=0
+simd1_att_status=0
+simd2_att_status=0
+simd3_att_status=0
+final_output_dir=my_code/moe_gemm1_a4w4_v0_loadonly.e96_t512_topk6_m7168_n3072.d01-3.20260903T1159Z.att
+final_archive=my_code/moe_gemm1_a4w4_v0_loadonly.e96_t512_topk6_m7168_n3072.d01-3.20260903T1159Z.att.tar.gz

@@ -1,0 +1,88 @@
+Running kernel-trace-stats: rocprofv3 --kernel-trace --stats -d my_code/.get_isa_runner_att_f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att_874/kernel_trace -- env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 AITER_LOG_MORE=1 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly_v21.s --experts 96 --tokens 512 --topk 6 --model-dim 7168 --inter-dim 3072 --iters 20 --clang /opt/rocm/llvm/bin/clang
+W20260903 09:39:33.894798 134190337838656 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000501 sec
+W20260903 09:39:33.894864 134190337838656 simple_timer.cpp:55] [rocprofv3] 'env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 AITER_LOG_MORE=1 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly_v21.s --experts 96 --tokens 512 --topk 6 --model-dim 7168 --inter-dim 3072 --iters 20 --clang /opt/rocm/llvm/bin/clang' ::     0.000000 sec
+W20260903 09:39:33.920077 138241694191168 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000511 sec
+W20260903 09:39:33.920125 138241694191168 simple_timer.cpp:55] [rocprofv3] 'python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly_v21.s --experts 96 --tokens 512 --topk 6 --model-dim 7168 --inter-dim 3072 --iters 20 --clang /opt/rocm/llvm/bin/clang' ::     0.000000 sec
+W20260903 09:39:34.238054 138723107561024 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000592 sec
+W20260903 09:39:34.238115 138723107561024 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/offload-arch' ::     0.000000 sec
+W20260903 09:39:34.287830 135584633491072 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000375 sec
+W20260903 09:39:34.287883 135584633491072 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000000 sec
+W20260903 09:39:34.288101 135584633491072 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000218 sec
+W20260903 09:39:34.288522 135584633491072 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000321 sec
+W20260903 09:39:34.288600 135584633491072 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000467 sec
+W20260903 09:39:35.104613 138241694191168 tool.cpp:2476] HSA version 1.18.0 initialized (instance=0)
+W20260903 09:39:35.731536 139434651188800 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000599 sec
+W20260903 09:39:35.731599 139434651188800 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/hipconfig --version' ::     0.000000 sec
+W20260903 09:39:35.773697 140064507899456 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000512 sec
+W20260903 09:39:35.773754 140064507899456 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000000 sec
+W20260903 09:39:35.773814 140064507899456 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000060 sec
+W20260903 09:39:35.774239 140064507899456 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000319 sec
+W20260903 09:39:35.774324 140064507899456 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000479 sec
+W20260903 09:39:35.808251 127772184182336 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000584 sec
+W20260903 09:39:35.808302 127772184182336 simple_timer.cpp:55] [rocprofv3] '/bin/sh -c cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260903 09:39:35.836673 126061548809792 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000586 sec
+W20260903 09:39:35.836732 126061548809792 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260903 09:39:35.836881 126061548809792 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000149 sec
+W20260903 09:39:35.837325 126061548809792 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000345 sec
+W20260903 09:39:35.837441 126061548809792 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000528 sec
+[aiter INFO] 2026-09-03 09:39:35.947 - MainProcess:903 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+W20260903 09:39:36.101405 135379678838336 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000582 sec
+W20260903 09:39:36.101453 135379678838336 simple_timer.cpp:55] [rocprofv3] '/bin/sh /sbin/ldconfig -p' ::     0.000000 sec
+/data/yanguahe/code/wk_sp1/aiter/my_code/isa_runner/gemm_batch_isa_runner.py:858: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rocm-npi-dev/rocm-npi-dev/_therock/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  hidden = (torch.randn((contiguous_m, k)) * 0.5).to(torch.bfloat16).to(device)
+W20260903 09:39:47.961795 128650875851456 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000655 sec
+W20260903 09:39:47.991433 128650875851456 simple_timer.cpp:55] [rocprofv3] 'ld.lld -shared /tmp/kernelea-67ae0f.o -o /tmp/kernel-c0bd4e.hsaco' ::     0.000000 sec
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W903 09:39:48.124847469 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 1 (function operator())
+[gemm_batch_isa_runner] MoE user parameters: experts=96; tokens=512; topk=6; model_dim=7168; inter_dim=3072
+[gemm_batch_isa_runner] MoE derived contract: valid_routes=3072; valid_rows/expert=32; raw GEMM shape=(64, 6144, 7168); contiguous_m=9216; logical WG grid=(24,144,1); physical grid=(3456, 1, 1); working WGs=2304; tail WGs=1152; expert tile padding rows=3072; tail capacity rows=3072
+[gemm_batch_isa_runner] selected profile: a4w4-moe-v21-v18v2-load-pattern-loadonly; symbol=f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21; shape=(64, 6144, 7168); WG tile=(64, 256); wave tile=(64, 64); batch=96
+[gemm_batch_isa_runner] logical WG grid=(24, 144, 1); WG tasks total=3456; logical cluster grid=(24, 144, 1); cluster tasks/plane=3456; cluster tasks total=3456
+[gemm_batch_isa_runner] physical launch=(3456, 1, 1); block=(128, 1, 1); cluster=(1, 1, 1); physical cluster grid=(3456, 1, 1); clusters/plane=3456; clusters total=3456; physical WGs/plane=3456; physical WGs total=3456; encoded recurrence stride/plane=0; log2 X/Y grid=(0, 0)
+[gemm_batch_isa_runner] ABI=a8w4-moe-tdm-v1; kernarg=184 bytes; static LDS=202 KB; dynamic LDS=0 KB; WGs/WGP by LDS=1 (LDS budget=320 KB); VGPR/SGPR metadata=384/106; stores to D=False
+[gemm_batch_isa_runner] selected clang: /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/clang
+[gemm_batch_isa_runner] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly_v21.s -o /tmp/gemm_batch_isa_runner_8w5qzgdd/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21.o
+[gemm_batch_isa_runner] /opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/clang -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -nostdlib -Wl,--no-undefined -shared /tmp/gemm_batch_isa_runner_8w5qzgdd/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21.o -o /tmp/gemm_batch_isa_runner_8w5qzgdd/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21.co
+[gemm_isa_runner] AITER_LOG_MORE trace remains explicit; temporarily setting it to 0 inside run_perftest to avoid its additional CUDA-event iteration pass
+
+[gemm_isa_runner run_perftest trace_df]
+                                                                 name   cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21  19.0       0.000000        39.237000         2.065105        CUDA            2
+1                            gemm_isa_runner_903::launch_7d9ca5fe4fe0  19.0      39.237000         0.000000         0.000000         CPU          903
+[avg us/iter]                                                     NaN   NaN       2.065105         2.065105              NaN         NaN          NaN
+[gemm_isa_runner] captured kernel name=f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21
+[gemm_isa_runner] profiler count=19; device_time_sum=39.2370 us; device_time_avg=2.0651 us; profiler device_index=2; requested torch device ordinal=0
+[gemm_isa_runner] timing source=run_perftest testGraph=False torch-profiler; testGraph=False; run_perftest _us=2.0651
+[gemm_batch_isa_runner] useful logical logical_read_bytes=2257747968; logical_write_bytes=0 (stores output=False; detected mnemonic=none); logical_bytes=read+write=2257747968
+[gemm_batch_isa_runner] MoE stage-1 a4w4: experts=96 rows/expert=64 (32 valid) routed_m=6144 contiguous_m=9216 N=6144 K=7168; m_tiles=96 carry data x n_tiles=24 = 2304 working WGs of grid=(3456, 1, 1) (1152 exit at entry)
+[gemm_batch_isa_runner] useful logical read components: A MXFP4=11010048; ScaleA E8M0=688128; B MXFP4=2113929216; ScaleB E8M0=132120576; read total=2257747968
+[gemm_batch_isa_runner] useful logical output formula: 3072 valid routed rows x 3072 BF16 columns x 2 bytes = 18874368; output allocation footprint=56623104 (9216 capacity rows); logical_write_bytes=0
+[gemm_batch_isa_runner] scheduled/padding context (excluded from useful bytes): rows/expert=64; valid/expert=32; active m_tiles=96; working WGs=2304; tail capacity rows=3072; tensor footprints A=33030144 B=2113929216 sA=2064384 sB=132120576
+run_perftest kernel timing (microseconds; source=run_perftest testGraph=False torch-profiler; summary uses the captured target-row device_time_avg):
+| name                                                   | cnt | warmup | device_time_sum | device_time_avg | device_type | device_index | source                                      |
+| ------------------------------------------------------ | --- | ------ | --------------- | --------------- | ----------- | ------------ | ------------------------------------------- |
+| f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21 | 19  | 101    | 39.2370         | 2.0651          | CUDA        | 2            | run_perftest testGraph=False torch-profiler |
+GEMM ISA runner summary (markdown; profile=a4w4-moe-v21-v18v2-load-pattern-loadonly; symbol=f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21):
+| intype | batch | M  | N    | K    | apre | init   | seed | dtype | gfx     | logical cluster tasks/plane | physical clusters/plane | physical WGs/plane | encoded recurrence stride/plane | ref hash128         | gemm_a4w4 us | gemm_a4w4 TFLOPS | gemm_a4w4 bytes | gemm_a4w4 TB/s | gemm_a4w4 err       | gemm_a4w4 out hash128 | gemm_a4w4 max_err_info | gemm_a4w4 rel_l2    |
+| ------ | ----- | -- | ---- | ---- | ---- | ------ | ---- | ----- | ------- | --------------------------- | ----------------------- | ------------------ | ------------------------------- | ------------------- | ------------ | ---------------- | --------------- | -------------- | ------------------- | --------------------- | ---------------------- | ------------------- |
+| a4w4   | 96    | 64 | 6144 | 7168 | 1    | random | 0    | bf16  | gfx1250 | 3456                        | 3456                    | 3456               | 0                               | n/a (not validated) | 2.065        | n/a (no store)   | 2257747968      | 994.337        | n/a (not validated) | n/a (not validated)   | n/a (not validated)    | n/a (not validated) |
+W20260903 09:39:48.767703 138241694191168 generateRocpd.cpp:583] writing SQL database for process 903 on node 2161002656
+E20260903 09:39:48.768901 138241694191168 generateRocpd.cpp:606] Opened result file: my_code/.get_isa_runner_att_f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att_874/kernel_trace/heliosr-1b114-d01-3/903_results.db (UUID=00000365-d6a1-76a1-b2af-67ae586f0e1c)
+W20260903 09:39:48.926738 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_string             ::     0.126239 sec
+W20260903 09:39:48.927016 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_node          ::     0.000265 sec
+W20260903 09:39:48.927633 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_process       ::     0.000608 sec
+W20260903 09:39:48.929393 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_agent         ::     0.001265 sec
+W20260903 09:39:48.929403 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_pmc           ::     0.000003 sec
+W20260903 09:39:49.071670 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd kernel info        ::     0.142265 sec
+W20260903 09:39:49.071679 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_region             ::     0.000002 sec
+W20260903 09:39:49.117967 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_kernel_dispatch    ::     0.046286 sec
+W20260903 09:39:49.117974 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_pmc_event          ::     0.000000 sec
+W20260903 09:39:49.117976 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_memory_copy        ::     0.000000 sec
+W20260903 09:39:49.117983 138241694191168 simple_timer.cpp:55] SQLite3 generation :: rocpd_memory_allocate    ::     0.000006 sec
+W20260903 09:39:49.118157 138241694191168 simple_timer.cpp:55] SQLite3 generation :: SQL indexing             ::     0.000173 sec
+W20260903 09:39:49.123695 138241694191168 simple_timer.cpp:55] SQLite3 generation :: total                    ::     0.355992 sec
+W20260903 09:39:49.125157 138241694191168 simple_timer.cpp:55] [rocprofv3] output generation ::     0.369917 sec
+W20260903 09:39:49.126744 138241694191168 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.371549 sec
+kernel-trace-stats exit status: 0

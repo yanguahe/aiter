@@ -1,0 +1,21 @@
+baseline_sha256=bd0b038e8f577292ee0780c3481d066fe907e86d5e4a63f09eb060ea663cc1e2
+v0_loadonly_sha256=22e827b29cf75a5fb15654e4ea7ad4584d5cc9aa6379099677316f9b02f1cdd4
+pre_a_oob_v21_sha256=3211aad842e867bdefe92d07f57d7f61600da0076e352b5701ecd096811eaafc
+v21_sha256=08226d5e1b736fbd9e6af1d7c86ef96813c509d122907e540a21ba14d871c8e6
+pre_A_OOB_evidence=FAIL_EXPECTED lower_dim1=[196,576] upper_dim1=[194,574] upper_tile_dim1=2 => M[32,64) globally in-range
+patch_isolation=PASS changed_instructions=6 B/Scale/LDS/barrier/load_sites/metadata=source-identical
+A_descriptor_paths=PASS cold_lower=(base=M0,dim=[0xe000,2],tile=[0x800,2],stride=0xe000) cold_upper=(base=M0+32,dim=[0xe000,0],tile=[0x800,2],stride=0xe000) persistent_full=(base=M0,dim=[0xe000,2],tile=[0x800,4],stride=0xe000)
+v0_exact_A_OOB=PASS tensor_dim1=max((psum-block_start)-16*wave,0)=[32,16,0,0]
+tensor_load_to_lds: v18_v2=56 v21=56
+cluster_load_b128: v18_v2=40 v21=40
+s_wait_tensorcnt: v18_v2=23 v21=23
+s_wait_loadcnt: v18_v2=4 v21=4
+s_barrier_signal: v18_v2=67 v21=67
+s_barrier_wait: v18_v2=75 v21=75
+non_A_address_sets=PASS B=b1dffdb7f445377e ScaleA=45601648f40abe65 ScaleB=228b363790310364
+LDS=PASS allocation=0x32800 input_end=0x2a800 A_OOB_zero_ranges=4x0x1000 no_padding no_overlap
+mapping=PASS grid=3456 active=2304 tail=1152 coverage=96x24 psum[e]=64*e+32
+A_addresses=PASS enumerated=258048=96x24x28x4 nominal=528482304 in_range=264241152 useful=264241152 v0_in_range=264241152
+intentional_changes=prologue+184B_ABI,swizzle+upper_bound,expert/tile_addresses,A_M32_OOB,noncluster_TDM_masks,unique_symbol+metadata
+executable_store_detection=False
+audit=PASS

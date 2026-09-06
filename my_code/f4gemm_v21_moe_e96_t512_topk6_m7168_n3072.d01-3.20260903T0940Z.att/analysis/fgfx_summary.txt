@@ -1,0 +1,46 @@
+Selected realtime.json files (strict kernel/rpf_v3 rule):
+  SIMD0: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att/thread_trace/simd0/kernel/rpf_v3/ui_output_agent_59740_dispatch_3523/realtime.json
+  SIMD1: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att/thread_trace/simd1/kernel/rpf_v3/ui_output_agent_27982_dispatch_3523/realtime.json
+  SIMD2: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att/thread_trace/simd2/kernel/rpf_v3/ui_output_agent_63112_dispatch_3523/realtime.json
+  SIMD3: /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att/thread_trace/simd3/kernel/rpf_v3/ui_output_agent_30343_dispatch_3523/realtime.json
+
+Reference clocks by SIMD-select ATT capture:
+  SIMD0: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD1: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD2: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD3: 100.000 MHz (metadata; metadata=100.000 MHz)
+
+SIMD capture × SE clock series (delta_realtime<=0 pairs are filtered):
+SIMD    SE    Samples   Valid  Dropped    Ref MHz    Mean MHz    Min MHz    Max MHz
+----------------------------------------------------------------------------------------------
+SIMD0   SE0       945     944        0    100.000    1965.722   1650.000   2466.667
+SIMD0   SE1       938     937        0    100.000    1963.462   1650.000   2466.667
+SIMD0   SE2       955     954        0    100.000    1919.730   1600.000   2466.667
+SIMD0   SE3       944     943        0    100.000    1915.334   1600.000   2466.667
+SIMD1   SE0       926     925        0    100.000    1963.411   1700.000   2466.667
+SIMD1   SE1       930     929        0    100.000    1964.732   1700.000   2466.667
+SIMD1   SE2       927     926        0    100.000    1914.380   1600.000   2466.667
+SIMD1   SE3       949     948        0    100.000    1923.467   1600.000   2466.667
+SIMD2   SE0       946     945        0    100.000    1963.463   1700.000   2466.667
+SIMD2   SE1       955     954        0    100.000    1966.531   1700.000   2466.667
+SIMD2   SE2       941     940        0    100.000    1914.200   1600.000   2466.667
+SIMD2   SE3       948     947        0    100.000    1917.078   1600.000   2466.667
+SIMD3   SE0       941     940        0    100.000    1964.918   1700.000   2466.667
+SIMD3   SE1       940     939        0    100.000    1964.799   1693.750   2466.667
+SIMD3   SE2       957     956        0    100.000    1922.601   1600.000   2466.667
+SIMD3   SE3       961     960        0    100.000    1924.264   1600.000   2466.667
+
+Per-SIMD capture means (REALTIME-tick weighted across 4 SE series):
+  SIMD0: 1940.961 MHz; 3778 valid intervals; 0 dropped
+  SIMD1: 1941.393 MHz; 3728 valid intervals; 0 dropped
+  SIMD2: 1940.329 MHz; 3786 valid intervals; 0 dropped
+  SIMD3: 1943.956 MHz; 3795 valid intervals; 0 dropped
+
+Overall (16 SIMD capture × SE clock series, REALTIME-tick weighted): 1941.663 MHz
+Spread of the 16 series means: 52.331 MHz (min SIMD2 SE2 1914.200; max SIMD2 SE1 1966.531)
+
+Saved 4 SIMD-select capture plots (shared y-axis):
+  /tmp/f4gemm_v21_att_analysis_20260903T0940Z/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att.simd0.png
+  /tmp/f4gemm_v21_att_analysis_20260903T0940Z/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att.simd1.png
+  /tmp/f4gemm_v21_att_analysis_20260903T0940Z/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att.simd2.png
+  /tmp/f4gemm_v21_att_analysis_20260903T0940Z/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att.simd3.png

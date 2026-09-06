@@ -1,0 +1,225 @@
+{
+  "kernel": "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4_loadonly",
+  "captures": {
+    "SIMD0": {
+      "dispatch_id": 3523,
+      "ui_dir": "thread_trace/simd0/kernel/rpf_v3/ui_output_agent_21453_dispatch_3523",
+      "att_count": 4,
+      "att_bytes": 507008,
+      "required_json_bytes": {
+        "realtime.json": 75850,
+        "occupancy.json": 138236,
+        "code.json": 89365,
+        "filenames.json": 2245
+      },
+      "stats_count": 1,
+      "agent_info_count": 1,
+      "wave_json_count": 47,
+      "wave_json_by_se": {
+        "SE0": 13,
+        "SE1": 9,
+        "SE2": 14,
+        "SE3": 11
+      },
+      "slots_by_se": {
+        "SE0": [
+          0,
+          1,
+          2
+        ],
+        "SE1": [
+          0,
+          1,
+          2
+        ],
+        "SE2": [
+          0,
+          1,
+          2
+        ],
+        "SE3": [
+          0,
+          1,
+          2
+        ]
+      },
+      "realtime_samples_by_se": {
+        "SE0": 820,
+        "SE1": 823,
+        "SE2": 824,
+        "SE3": 826
+      }
+    },
+    "SIMD1": {
+      "dispatch_id": 3523,
+      "ui_dir": "thread_trace/simd1/kernel/rpf_v3/ui_output_agent_11143_dispatch_3523",
+      "att_count": 4,
+      "att_bytes": 525408,
+      "required_json_bytes": {
+        "realtime.json": 80703,
+        "occupancy.json": 137804,
+        "code.json": 89447,
+        "filenames.json": 2863
+      },
+      "stats_count": 1,
+      "agent_info_count": 1,
+      "wave_json_count": 61,
+      "wave_json_by_se": {
+        "SE0": 9,
+        "SE1": 16,
+        "SE2": 12,
+        "SE3": 24
+      },
+      "slots_by_se": {
+        "SE0": [
+          0,
+          1,
+          2
+        ],
+        "SE1": [
+          0,
+          1,
+          2
+        ],
+        "SE2": [
+          0,
+          1,
+          2
+        ],
+        "SE3": [
+          0,
+          1,
+          2
+        ]
+      },
+      "realtime_samples_by_se": {
+        "SE0": 886,
+        "SE1": 869,
+        "SE2": 873,
+        "SE3": 876
+      }
+    },
+    "SIMD2": {
+      "dispatch_id": 3523,
+      "ui_dir": "thread_trace/simd2/kernel/rpf_v3/ui_output_agent_12206_dispatch_3523",
+      "att_count": 4,
+      "att_bytes": 524992,
+      "required_json_bytes": {
+        "realtime.json": 78955,
+        "occupancy.json": 137932,
+        "code.json": 89449,
+        "filenames.json": 3049
+      },
+      "stats_count": 1,
+      "agent_info_count": 1,
+      "wave_json_count": 65,
+      "wave_json_by_se": {
+        "SE0": 9,
+        "SE1": 13,
+        "SE2": 9,
+        "SE3": 34
+      },
+      "slots_by_se": {
+        "SE0": [
+          0,
+          1,
+          2
+        ],
+        "SE1": [
+          0,
+          1,
+          2
+        ],
+        "SE2": [
+          0,
+          1,
+          2
+        ],
+        "SE3": [
+          0,
+          1,
+          2
+        ]
+      },
+      "realtime_samples_by_se": {
+        "SE0": 857,
+        "SE1": 860,
+        "SE2": 856,
+        "SE3": 855
+      }
+    },
+    "SIMD3": {
+      "dispatch_id": 3523,
+      "ui_dir": "thread_trace/simd3/kernel/rpf_v3/ui_output_agent_47956_dispatch_3523",
+      "att_count": 4,
+      "att_bytes": 525088,
+      "required_json_bytes": {
+        "realtime.json": 79691,
+        "occupancy.json": 137772,
+        "code.json": 89392,
+        "filenames.json": 2996
+      },
+      "stats_count": 1,
+      "agent_info_count": 1,
+      "wave_json_count": 64,
+      "wave_json_by_se": {
+        "SE0": 10,
+        "SE1": 13,
+        "SE2": 26,
+        "SE3": 15
+      },
+      "slots_by_se": {
+        "SE0": [
+          0,
+          1,
+          2
+        ],
+        "SE1": [
+          0,
+          1,
+          2
+        ],
+        "SE2": [
+          0,
+          1,
+          2
+        ],
+        "SE3": [
+          0,
+          1,
+          2
+        ]
+      },
+      "realtime_samples_by_se": {
+        "SE0": 869,
+        "SE1": 868,
+        "SE2": 870,
+        "SE3": 853
+      }
+    }
+  },
+  "dispatch_ids": [
+    3523,
+    3523,
+    3523,
+    3523
+  ],
+  "overflow_log_hits": [],
+  "exact_dispatch_id": 3523,
+  "trace_complete": true,
+  "overflow_evidence_found": false,
+  "config": {
+    "advanced_thread_trace": true,
+    "att_target_cu": 1,
+    "att_shader_engine_mask": "0xf",
+    "att_simd_select": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "att_buffer_size": "0x10000000",
+    "kernel_iteration_range": "[1]",
+    "pmc_counters_mixed": false
+  }
+}

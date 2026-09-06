@@ -1,0 +1,23 @@
+date: 2026-09-03T09:39:33+00:00
+host: heliosr-1b114-d01-3
+pwd: /data/yanguahe/code/wk_sp1/aiter
+HIP_VISIBLE_DEVICES: 0
+requested kernel: f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21
+capture all SIMDs: 1
+output directory name: f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att
+output directory: my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att
+output archive: my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att.tar.gz
+python: /opt/venv/bin/python
+Python 3.12.3
+rocprofv3: /data/yanguahe/code/wk_sp1/rocprof-install/bin/rocprofv3
+             version: 1.1.0
+        git_revision: 3f3cbc315f8764cde8565a1cb29cf9673426d93c
+        library_arch: x86_64-linux-gnu
+         system_name: Linux
+    system_processor: x86_64
+      system_version: 6.14.0-37-generic
+         compiler_id: GNU
+    compiler_version: 13.3.0
+        rocm_version: 7.12.0
+
+test command: AITER_LOG_MORE=1 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps_loadonly_v21.s --experts 96 --tokens 512 --topk 6 --model-dim 7168 --inter-dim 3072 --iters 20 --clang /opt/rocm/llvm/bin/clang

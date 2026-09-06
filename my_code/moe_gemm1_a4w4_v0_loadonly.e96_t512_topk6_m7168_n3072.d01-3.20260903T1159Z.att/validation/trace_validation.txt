@@ -1,0 +1,9 @@
+kernel=a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4_loadonly
+exact_dispatch_id=3523
+trace_complete=true
+overflow_log_hits=0
+config=advanced_thread_trace; target_cu=1; se_mask=0xf; simd_select=0,1,2,3; buffer=0x10000000; iteration=[1]; no PMC
+SIMD0: att=4; att_bytes=507008; UI JSON=4; stats=1; agent_info=1; wave_json=47; realtime_samples={'SE0': 820, 'SE1': 823, 'SE2': 824, 'SE3': 826}; slots={'SE0': [0, 1, 2], 'SE1': [0, 1, 2], 'SE2': [0, 1, 2], 'SE3': [0, 1, 2]}
+SIMD1: att=4; att_bytes=525408; UI JSON=4; stats=1; agent_info=1; wave_json=61; realtime_samples={'SE0': 886, 'SE1': 869, 'SE2': 873, 'SE3': 876}; slots={'SE0': [0, 1, 2], 'SE1': [0, 1, 2], 'SE2': [0, 1, 2], 'SE3': [0, 1, 2]}
+SIMD2: att=4; att_bytes=524992; UI JSON=4; stats=1; agent_info=1; wave_json=65; realtime_samples={'SE0': 857, 'SE1': 860, 'SE2': 856, 'SE3': 855}; slots={'SE0': [0, 1, 2], 'SE1': [0, 1, 2], 'SE2': [0, 1, 2], 'SE3': [0, 1, 2]}
+SIMD3: att=4; att_bytes=525088; UI JSON=4; stats=1; agent_info=1; wave_json=64; realtime_samples={'SE0': 869, 'SE1': 868, 'SE2': 870, 'SE3': 853}; slots={'SE0': [0, 1, 2], 'SE1': [0, 1, 2], 'SE2': [0, 1, 2], 'SE3': [0, 1, 2]}

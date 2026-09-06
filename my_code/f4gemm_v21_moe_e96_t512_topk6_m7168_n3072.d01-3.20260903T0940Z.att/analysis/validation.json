@@ -1,0 +1,494 @@
+{
+  "root": "/data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_v21_moe_e96_t512_topk6_m7168_n3072.d01-3.20260903T0940Z.att",
+  "kernel": "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21",
+  "dispatch_ids": [
+    3523,
+    3523,
+    3523,
+    3523
+  ],
+  "simd_captures": {
+    "SIMD0": {
+      "ui_dir": "thread_trace/simd0/kernel/rpf_v3/ui_output_agent_59740_dispatch_3523",
+      "dispatch_id": 3523,
+      "att_files": [
+        {
+          "name": "out_59740_shader_engine_0_3523.att",
+          "bytes": 100256
+        },
+        {
+          "name": "out_59740_shader_engine_1_3523.att",
+          "bytes": 100832
+        },
+        {
+          "name": "out_59740_shader_engine_2_3523.att",
+          "bytes": 103008
+        },
+        {
+          "name": "out_59740_shader_engine_3_3523.att",
+          "bytes": 101024
+        }
+      ],
+      "stats_csv": "thread_trace/simd0/kernel/rpf_v3/stats_ui_output_agent_59740_dispatch_3523.csv",
+      "agent_info": "thread_trace/simd0/kernel/rpf_v3/out_agent_info.csv",
+      "wave_mapping": {
+        "shader_engines": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "selected_simd": 0,
+        "slot": 0,
+        "wave_files_by_se": {
+          "SE0": 15,
+          "SE1": 16,
+          "SE2": 21,
+          "SE3": 16
+        }
+      },
+      "weighted_mean_across_se_mhz": 1940.9613162009655,
+      "series": [
+        {
+          "se": "SE0",
+          "samples": 945,
+          "valid_intervals": 944,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1965.7220708446866,
+          "linear_fit_fgfx_mhz": 1966.3070173115345,
+          "linear_fit_r2": 0.9997232949283671,
+          "linear_fit_residual_rms_gfx_ticks": 1396.8495674110616,
+          "gfx_tick_start": 246304,
+          "gfx_tick_end": 534872,
+          "realtime_tick_start": 5726540915637,
+          "realtime_tick_end": 5726540930317,
+          "wall_time_us": 146.79999999999998,
+          "wave_files": 15,
+          "total_gfx_delta": 288568.0,
+          "total_realtime_delta": 14680.0
+        },
+        {
+          "se": "SE1",
+          "samples": 938,
+          "valid_intervals": 937,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1963.4620651876198,
+          "linear_fit_fgfx_mhz": 1965.8252034544432,
+          "linear_fit_r2": 0.9997220154283432,
+          "linear_fit_residual_rms_gfx_ticks": 1390.3331667536365,
+          "gfx_tick_start": 243257,
+          "gfx_tick_end": 530001,
+          "realtime_tick_start": 5726540915641,
+          "realtime_tick_end": 5726540930245,
+          "wall_time_us": 146.04,
+          "wave_files": 16,
+          "total_gfx_delta": 286744.0,
+          "total_realtime_delta": 14604.0
+        },
+        {
+          "se": "SE2",
+          "samples": 955,
+          "valid_intervals": 954,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1919.7304582210243,
+          "linear_fit_fgfx_mhz": 1915.5412913166872,
+          "linear_fit_r2": 0.999694188584679,
+          "linear_fit_residual_rms_gfx_ticks": 1448.6402562540286,
+          "gfx_tick_start": 241302,
+          "gfx_tick_end": 526190,
+          "realtime_tick_start": 5726540915632,
+          "realtime_tick_end": 5726540930472,
+          "wall_time_us": 148.4,
+          "wave_files": 21,
+          "total_gfx_delta": 284888.0,
+          "total_realtime_delta": 14840.0
+        },
+        {
+          "se": "SE3",
+          "samples": 944,
+          "valid_intervals": 943,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1915.3344208809135,
+          "linear_fit_fgfx_mhz": 1914.446860941631,
+          "linear_fit_r2": 0.9996955775478117,
+          "linear_fit_residual_rms_gfx_ticks": 1429.376884572031,
+          "gfx_tick_start": 238191,
+          "gfx_tick_end": 519975,
+          "realtime_tick_start": 5726540915640,
+          "realtime_tick_end": 5726540930352,
+          "wall_time_us": 147.11999999999998,
+          "wave_files": 16,
+          "total_gfx_delta": 281784.0,
+          "total_realtime_delta": 14712.0
+        }
+      ]
+    },
+    "SIMD1": {
+      "ui_dir": "thread_trace/simd1/kernel/rpf_v3/ui_output_agent_27982_dispatch_3523",
+      "dispatch_id": 3523,
+      "att_files": [
+        {
+          "name": "out_27982_shader_engine_0_3523.att",
+          "bytes": 94432
+        },
+        {
+          "name": "out_27982_shader_engine_1_3523.att",
+          "bytes": 95360
+        },
+        {
+          "name": "out_27982_shader_engine_2_3523.att",
+          "bytes": 94528
+        },
+        {
+          "name": "out_27982_shader_engine_3_3523.att",
+          "bytes": 97472
+        }
+      ],
+      "stats_csv": "thread_trace/simd1/kernel/rpf_v3/stats_ui_output_agent_27982_dispatch_3523.csv",
+      "agent_info": "thread_trace/simd1/kernel/rpf_v3/out_agent_info.csv",
+      "wave_mapping": {
+        "shader_engines": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "selected_simd": 1,
+        "slot": 0,
+        "wave_files_by_se": {
+          "SE0": 10,
+          "SE1": 12,
+          "SE2": 9,
+          "SE3": 17
+        }
+      },
+      "weighted_mean_across_se_mhz": 1941.3932461127474,
+      "series": [
+        {
+          "se": "SE0",
+          "samples": 926,
+          "valid_intervals": 925,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1963.4105960264899,
+          "linear_fit_fgfx_mhz": 1956.230794836523,
+          "linear_fit_r2": 0.9998772854723467,
+          "linear_fit_residual_rms_gfx_ticks": 917.6164583230687,
+          "gfx_tick_start": 242356,
+          "gfx_tick_end": 526972,
+          "realtime_tick_start": 5728069168009,
+          "realtime_tick_end": 5728069182505,
+          "wall_time_us": 144.96,
+          "wave_files": 10,
+          "total_gfx_delta": 284616.0,
+          "total_realtime_delta": 14496.0
+        },
+        {
+          "se": "SE1",
+          "samples": 930,
+          "valid_intervals": 929,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1964.7317744154057,
+          "linear_fit_fgfx_mhz": 1956.6237808668661,
+          "linear_fit_r2": 0.9998755154401144,
+          "linear_fit_residual_rms_gfx_ticks": 928.2879274051234,
+          "gfx_tick_start": 238773,
+          "gfx_tick_end": 524445,
+          "realtime_tick_start": 5728069168013,
+          "realtime_tick_end": 5728069182553,
+          "wall_time_us": 145.4,
+          "wave_files": 12,
+          "total_gfx_delta": 285672.0,
+          "total_realtime_delta": 14540.0
+        },
+        {
+          "se": "SE2",
+          "samples": 927,
+          "valid_intervals": 926,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1914.379983502887,
+          "linear_fit_fgfx_mhz": 1904.6007468502075,
+          "linear_fit_r2": 0.9998659406140936,
+          "linear_fit_residual_rms_gfx_ticks": 937.5818135100658,
+          "gfx_tick_start": 235403,
+          "gfx_tick_end": 513907,
+          "realtime_tick_start": 5728069168008,
+          "realtime_tick_end": 5728069182556,
+          "wall_time_us": 145.48,
+          "wave_files": 9,
+          "total_gfx_delta": 278504.0,
+          "total_realtime_delta": 14548.0
+        },
+        {
+          "se": "SE3",
+          "samples": 949,
+          "valid_intervals": 948,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1923.4674588171752,
+          "linear_fit_fgfx_mhz": 1907.4624554156715,
+          "linear_fit_r2": 0.999843147963986,
+          "linear_fit_residual_rms_gfx_ticks": 1038.9473833741852,
+          "gfx_tick_start": 232291,
+          "gfx_tick_end": 517195,
+          "realtime_tick_start": 5728069168008,
+          "realtime_tick_end": 5728069182820,
+          "wall_time_us": 148.12,
+          "wave_files": 17,
+          "total_gfx_delta": 284904.0,
+          "total_realtime_delta": 14812.0
+        }
+      ]
+    },
+    "SIMD2": {
+      "ui_dir": "thread_trace/simd2/kernel/rpf_v3/ui_output_agent_63112_dispatch_3523",
+      "dispatch_id": 3523,
+      "att_files": [
+        {
+          "name": "out_63112_shader_engine_0_3523.att",
+          "bytes": 97792
+        },
+        {
+          "name": "out_63112_shader_engine_1_3523.att",
+          "bytes": 98080
+        },
+        {
+          "name": "out_63112_shader_engine_2_3523.att",
+          "bytes": 98752
+        },
+        {
+          "name": "out_63112_shader_engine_3_3523.att",
+          "bytes": 97376
+        }
+      ],
+      "stats_csv": "thread_trace/simd2/kernel/rpf_v3/stats_ui_output_agent_63112_dispatch_3523.csv",
+      "agent_info": "thread_trace/simd2/kernel/rpf_v3/out_agent_info.csv",
+      "wave_mapping": {
+        "shader_engines": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "selected_simd": 2,
+        "slot": 0,
+        "wave_files_by_se": {
+          "SE0": 13,
+          "SE1": 12,
+          "SE2": 18,
+          "SE3": 9
+        }
+      },
+      "weighted_mean_across_se_mhz": 1940.3293861440043,
+      "series": [
+        {
+          "se": "SE0",
+          "samples": 946,
+          "valid_intervals": 945,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1963.4625887493173,
+          "linear_fit_fgfx_mhz": 1965.8490286554054,
+          "linear_fit_r2": 0.9997332741562517,
+          "linear_fit_residual_rms_gfx_ticks": 1363.9846421545901,
+          "gfx_tick_start": 235438,
+          "gfx_tick_end": 523046,
+          "realtime_tick_start": 5729601184993,
+          "realtime_tick_end": 5729601199641,
+          "wall_time_us": 146.48,
+          "wave_files": 13,
+          "total_gfx_delta": 287608.0,
+          "total_realtime_delta": 14648.0
+        },
+        {
+          "se": "SE1",
+          "samples": 955,
+          "valid_intervals": 954,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1966.5310550583129,
+          "linear_fit_fgfx_mhz": 1966.9150772600096,
+          "linear_fit_r2": 0.9997324303769914,
+          "linear_fit_residual_rms_gfx_ticks": 1378.0870662196076,
+          "gfx_tick_start": 232077,
+          "gfx_tick_end": 522101,
+          "realtime_tick_start": 5729601185001,
+          "realtime_tick_end": 5729601199749,
+          "wall_time_us": 147.48,
+          "wave_files": 12,
+          "total_gfx_delta": 290024.0,
+          "total_realtime_delta": 14748.0
+        },
+        {
+          "se": "SE2",
+          "samples": 941,
+          "valid_intervals": 940,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1914.199890770071,
+          "linear_fit_fgfx_mhz": 1915.9104033332503,
+          "linear_fit_r2": 0.9996986091239075,
+          "linear_fit_residual_rms_gfx_ticks": 1412.8359296174776,
+          "gfx_tick_start": 228382,
+          "gfx_tick_end": 508774,
+          "realtime_tick_start": 5729601184988,
+          "realtime_tick_end": 5729601199636,
+          "wall_time_us": 146.48,
+          "wave_files": 18,
+          "total_gfx_delta": 280392.0,
+          "total_realtime_delta": 14648.0
+        },
+        {
+          "se": "SE3",
+          "samples": 948,
+          "valid_intervals": 947,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1917.078468639696,
+          "linear_fit_fgfx_mhz": 1916.6981733698701,
+          "linear_fit_r2": 0.9996978538022641,
+          "linear_fit_residual_rms_gfx_ticks": 1425.6031581255907,
+          "gfx_tick_start": 225275,
+          "gfx_tick_end": 507699,
+          "realtime_tick_start": 5729601184988,
+          "realtime_tick_end": 5729601199720,
+          "wall_time_us": 147.32,
+          "wave_files": 9,
+          "total_gfx_delta": 282424.0,
+          "total_realtime_delta": 14732.0
+        }
+      ]
+    },
+    "SIMD3": {
+      "ui_dir": "thread_trace/simd3/kernel/rpf_v3/ui_output_agent_30343_dispatch_3523",
+      "dispatch_id": 3523,
+      "att_files": [
+        {
+          "name": "out_30343_shader_engine_0_3523.att",
+          "bytes": 97408
+        },
+        {
+          "name": "out_30343_shader_engine_1_3523.att",
+          "bytes": 100000
+        },
+        {
+          "name": "out_30343_shader_engine_2_3523.att",
+          "bytes": 97920
+        },
+        {
+          "name": "out_30343_shader_engine_3_3523.att",
+          "bytes": 97984
+        }
+      ],
+      "stats_csv": "thread_trace/simd3/kernel/rpf_v3/stats_ui_output_agent_30343_dispatch_3523.csv",
+      "agent_info": "thread_trace/simd3/kernel/rpf_v3/out_agent_info.csv",
+      "wave_mapping": {
+        "shader_engines": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "selected_simd": 3,
+        "slot": 0,
+        "wave_files_by_se": {
+          "SE0": 9,
+          "SE1": 18,
+          "SE2": 9,
+          "SE3": 10
+        }
+      },
+      "weighted_mean_across_se_mhz": 1943.955597671585,
+      "series": [
+        {
+          "se": "SE0",
+          "samples": 941,
+          "valid_intervals": 940,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1964.9180327868853,
+          "linear_fit_fgfx_mhz": 1961.9346834980875,
+          "linear_fit_r2": 0.9998571267004663,
+          "linear_fit_residual_rms_gfx_ticks": 1001.8644408447724,
+          "gfx_tick_start": 237203,
+          "gfx_tick_end": 524867,
+          "realtime_tick_start": 5731123464393,
+          "realtime_tick_end": 5731123479033,
+          "wall_time_us": 146.4,
+          "wave_files": 9,
+          "total_gfx_delta": 287664.0,
+          "total_realtime_delta": 14640.0
+        },
+        {
+          "se": "SE1",
+          "samples": 940,
+          "valid_intervals": 939,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1964.7991254441104,
+          "linear_fit_fgfx_mhz": 1961.9805754291601,
+          "linear_fit_r2": 0.9998571541541572,
+          "linear_fit_residual_rms_gfx_ticks": 1001.1556900493754,
+          "gfx_tick_start": 233806,
+          "gfx_tick_end": 521374,
+          "realtime_tick_start": 5731123464397,
+          "realtime_tick_end": 5731123479033,
+          "wall_time_us": 146.36,
+          "wave_files": 18,
+          "total_gfx_delta": 287568.0,
+          "total_realtime_delta": 14636.0
+        },
+        {
+          "se": "SE2",
+          "samples": 957,
+          "valid_intervals": 956,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1922.6014512227896,
+          "linear_fit_fgfx_mhz": 1912.859046302293,
+          "linear_fit_r2": 0.9998295353263373,
+          "linear_fit_residual_rms_gfx_ticks": 1088.1512461223178,
+          "gfx_tick_start": 232664,
+          "gfx_tick_end": 518824,
+          "realtime_tick_start": 5731123464392,
+          "realtime_tick_end": 5731123479276,
+          "wall_time_us": 148.84,
+          "wave_files": 9,
+          "total_gfx_delta": 286160.0,
+          "total_realtime_delta": 14884.0
+        },
+        {
+          "se": "SE3",
+          "samples": 961,
+          "valid_intervals": 960,
+          "dropped_intervals": 0,
+          "reference_hz": 100000000.0,
+          "weighted_fgfx_mhz": 1924.2635243706482,
+          "linear_fit_fgfx_mhz": 1913.3764897527506,
+          "linear_fit_r2": 0.9998242694966786,
+          "linear_fit_residual_rms_gfx_ticks": 1110.1850986419738,
+          "gfx_tick_start": 229289,
+          "gfx_tick_end": 516697,
+          "realtime_tick_start": 5731123464388,
+          "realtime_tick_end": 5731123479324,
+          "wall_time_us": 149.35999999999999,
+          "wave_files": 10,
+          "total_gfx_delta": 287408.0,
+          "total_realtime_delta": 14936.0
+        }
+      ]
+    }
+  },
+  "overflow_log_hits": [],
+  "exact_dispatch_id": 3523,
+  "overall_weighted_fgfx_mhz": 1941.663263917245,
+  "trace_complete": true,
+  "overflow_evidence_found": false,
+  "interpretation": "Each row is one SIMD-select run \u00d7 one SE realtime clock series. These are not 16 independent physical clocks; realtime.json supplies one gfx/realtime mapping per SE. Fixed att_target_cu=1 applies the same selection rule to every run, while separate processes do not by themselves prove a persistent physical WGP identity beyond that deterministic selector."
+}

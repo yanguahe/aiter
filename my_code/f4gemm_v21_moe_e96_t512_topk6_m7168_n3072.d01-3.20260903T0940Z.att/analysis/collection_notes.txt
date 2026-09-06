@@ -1,0 +1,8 @@
+Machine: heliosr-1b114-d01-3.mnb.dcgpu
+Container: hyg_fyd1
+Kernel: f4gemm_bf16_mxfp4_ABpreShuffle_64x256_moe_loadonly_v21
+Workload: E=96, tokens=512, topk=6, model_dim=7168, inter_dim=3072, iters=20
+ATT: advanced_thread_trace=true; att_target_cu=1; att_shader_engine_mask=0xf; four separate att_simd_select runs 0,1,2,3; buffer=0x10000000; kernel_iteration_range=[1].
+No PMC counters were mixed into ATT.
+Toolchain note: the configured custom clang-23 aborted in SmallPtrSet during assembly on both a07-3 and d01-3. The source and runner were not modified. The successful capture added runner option --clang /opt/rocm/llvm/bin/clang; this resolves to the packaged ROCm clang-22, which assembled and linked the exact same v21 source.
+Interpretation: realtime.json exposes one gfx/realtime mapping per SE. Therefore the 16 rows are SIMD-select capture x SE series, not 16 independent clocks and not four physically independent SIMD clock domains. filenames.json proves each run decoded only sm0/sm1/sm2/sm3 respectively at slot 0 across SE0..SE3. All runs used the same deterministic att_target_cu=1 rule, but separate process runs do not prove a persistent physical WGP identity beyond that selector; SE0..SE3 are distinct shader-engine targets and must not be called one WGP.
