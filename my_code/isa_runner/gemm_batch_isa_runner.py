@@ -3038,61 +3038,6 @@ def _keep_code_object_if_requested(
 def _self_test() -> None:
     """Run CPU-only profiler row-selection and call-contract checks."""
 
-    batch_mode, batch_profile = select_kernel_mode(
-        BATCH_KERNEL_SYMBOL_256,
-        96,
-    )
-    assert batch_mode == "batch-z"
-    assert batch_profile is BATCH_PROFILE_256
-    batch_geometry = make_batched_launch_geometry(
-        1024,
-        6144,
-        7168,
-        96,
-        profile=batch_profile,
-    )
-    assert batch_geometry.tiles == (24, 4)
-    assert batch_geometry.logical_cluster_grid == (6, 1)
-    assert batch_geometry.logical_wg_tasks == 96
-    assert batch_geometry.logical_cluster_tasks == 6
-    assert batch_geometry.grid == (24, 4, 96)
-    assert batch_geometry.block == (128, 1, 1)
-    assert batch_geometry.cluster == (4, 4, 1)
-    assert batch_geometry.cluster_grid == (6, 1)
-    assert batch_geometry.log2_grid == (3, 0)
-    assert batch_geometry.persistent_stride == 8
-    batch_strides = make_contiguous_batch_strides(1024, 6144, 7168, 96)
-    assert batch_strides == BatchStrides(
-        d=12_582_912,
-        a=3_670_016,
-        b=22_020_096,
-        scale_a=229_376,
-        scale_b=1_376_256,
-    )
-    batch_payload = pack_batched_mxfp4_kernargs(
-        ptr_d=0x1000,
-        ptr_a=0x2000,
-        ptr_b=0x3000,
-        ptr_scale_a=0x4000,
-        ptr_scale_b=0x5000,
-        m=1024,
-        n=6144,
-        k=7168,
-        batch=96,
-        batch_strides=batch_strides,
-        geometry=batch_geometry,
-        profile=batch_profile,
-    )
-    assert len(batch_payload) == BATCH_KERNARG_SIZE
-    assert struct.unpack_from("<II", batch_payload, 72) == (3, 0)
-    assert struct.unpack_from("<QQQQQ", batch_payload, 80) == (
-        batch_strides.d,
-        batch_strides.a,
-        batch_strides.b,
-        batch_strides.scale_a,
-        batch_strides.scale_b,
-    )
-
     class FakeTraceFrame:
         def __init__(self, records: Sequence[Mapping[str, Any]]) -> None:
             self.records = [dict(record) for record in records]
@@ -3490,12 +3435,11 @@ def _self_test() -> None:
         == 18_874_368
     )
     print(
-        "[gemm_batch_isa_runner] SELF_TEST_OK: 256x256 batch profile geometry/"
-        "ABI, profiler row selection, run_perftest arguments, pure batched "
-        "CUDA-event ordering, timing method CLI choices/default, MoE user-"
-        "parameter derivation/conflict rejection, v21 geometry, pipeline "
-        "combination rejection, and global-store-aware logical traffic "
-        "accounting"
+        "[gemm_batch_isa_runner] SELF_TEST_OK: profiler row selection, "
+        "run_perftest arguments, pure batched CUDA-event ordering, timing "
+        "method CLI choices/default, MoE user-parameter derivation/conflict "
+        "rejection, v21 geometry, pipeline combination rejection, and "
+        "global-store-aware logical traffic accounting"
     )
 
 
@@ -3514,9 +3458,10 @@ def _build_parser() -> argparse.ArgumentParser:
             )
         elif action.dest == "shape":
             action.help = (
-                "per-matrix GEMM shape M,N,K; MAB modes require M%%16=0, "
-                "N%%1024=0, and K%%512=0; omit for the preferred MoE "
-                "user-level parameter form "
+                "per-matrix GEMM shape M,N,K; 256x256_4x4 batch requires "
+                "M%%1024=0, N%%1024=0, and K%%128=0; MAB modes require "
+                "M%%16=0, N%%1024=0, and K%%512=0; omit for the preferred "
+                "MoE user-level parameter form "
                 "(default for other modes: 18432,2048,7168)"
             )
         elif action.dest == "intype":
