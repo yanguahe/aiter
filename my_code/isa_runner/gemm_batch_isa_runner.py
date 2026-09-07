@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 r"""Compile and benchmark batched gfx1250 MXFP4 GEMM assembly.
 
-The batched kernel uses one physical grid-Z plane per independent matrix while
-retaining the original 64x256 workgroup tile and persistent X/Y task traversal
-in every plane.  The default physical layout uses N on X and M on Y with a 4x1
-cluster; an explicitly marked ISA variant supports M on X and N on Y with a
-1x4 cluster.  It launches one physical cluster per logical task up to 64; small
+The batched kernels use one physical grid-Z plane per independent matrix while
+retaining each kernel's workgroup tile and persistent X/Y task traversal in
+every plane.  The 64x256 kernel uses a 4x1 cluster and the 256x256 kernel uses
+a 4x4 cluster.  The default physical layout uses N on X and M on Y; explicitly
+marked ISA variants may transpose those axes.  Each plane launches one physical
+cluster per logical task up to the selected profile's persistent limit; small
 non-power-of-two grids encode a separate power-of-two recurrence stride.
 Inputs are contiguous and batch-major:
 
@@ -43,7 +44,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
-import math
 import os
 import re
 import shutil
@@ -67,14 +67,21 @@ except ImportError:
     import gemm_isa_runner as single
 
 
-BATCH_KERNEL_SYMBOL = (
+BATCH_KERNEL_SYMBOL_64X256 = (
     "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_batch_ps"
 )
+BATCH_KERNEL_SYMBOL_256 = (
+    "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps"
+)
+BATCH_KERNEL_SYMBOLS = (
+    BATCH_KERNEL_SYMBOL_64X256,
+    BATCH_KERNEL_SYMBOL_256,
+)
+# Backward-compatible aliases for callers that imported the original runner API.
+BATCH_KERNEL_SYMBOL = BATCH_KERNEL_SYMBOL_64X256
 LEGACY_KERNEL_SYMBOL = single.KERNEL_SYMBOL_64X256
 # HIP's maximum grid-Z dimension is 65535 workgroups.
 MAX_BATCH = (1 << 16) - 1
-MAX_PERSISTENT_CLUSTERS = 64
-MAX_PERSISTENT_CLUSTER_GRID = (16, 4)
 GRID_LAYOUT_N_ON_X_M_ON_Y = "n-on-x-m-on-y"
 GRID_LAYOUT_M_ON_X_N_ON_Y = "m-on-x-n-on-y"
 GRID_LAYOUT_CHOICES = (
@@ -93,15 +100,29 @@ BATCH_KERNARG_LAYOUT = (
     ("batch_stride_ScaleA", 104, "Q"),
     ("batch_stride_ScaleB", 112, "Q"),
 )
-BATCH_PROFILE = replace(
+BATCH_PROFILE_64X256 = replace(
     single.KERNEL_PROFILE_64X256,
     name="bf16-mxfp4-wg64x256-wave64-1x4-persistent-batch-z",
-    primary_symbol=BATCH_KERNEL_SYMBOL,
-    symbols=(BATCH_KERNEL_SYMBOL,),
+    primary_symbol=BATCH_KERNEL_SYMBOL_64X256,
+    symbols=(BATCH_KERNEL_SYMBOL_64X256,),
     abi_name="bf16-mxfp4-preload-batch-z-v1",
     kernarg_size=BATCH_KERNARG_SIZE,
     kernarg_layout=BATCH_KERNARG_LAYOUT,
 )
+BATCH_PROFILE_256 = replace(
+    single.KERNEL_PROFILE_256,
+    name="bf16-mxfp4-wg256-wave128-4x4-persistent-batch-z",
+    primary_symbol=BATCH_KERNEL_SYMBOL_256,
+    symbols=(BATCH_KERNEL_SYMBOL_256,),
+    abi_name="bf16-mxfp4-preload-batch-z-v1",
+    kernarg_size=BATCH_KERNARG_SIZE,
+    kernarg_layout=BATCH_KERNARG_LAYOUT,
+)
+BATCH_PROFILES_BY_SYMBOL = {
+    BATCH_PROFILE_64X256.primary_symbol: BATCH_PROFILE_64X256,
+    BATCH_PROFILE_256.primary_symbol: BATCH_PROFILE_256,
+}
+BATCH_PROFILE = BATCH_PROFILE_64X256
 
 MAB_KERNEL_SYMBOL = "mab_tdm_gemm"
 MAB_FULL_KERNEL_SYMBOL = "mab_tdm_gemm_full"
@@ -1116,11 +1137,12 @@ def _validate_grid_layout(grid_layout: str) -> str:
 
 def _physical_cluster_for_layout(
     grid_layout: str,
+    profile: single.KernelProfile = BATCH_PROFILE,
 ) -> tuple[int, int, int]:
     grid_layout = _validate_grid_layout(grid_layout)
     if grid_layout == GRID_LAYOUT_N_ON_X_M_ON_Y:
-        return BATCH_PROFILE.cluster
-    cluster_x, cluster_y, cluster_z = BATCH_PROFILE.cluster
+        return profile.cluster
+    cluster_x, cluster_y, cluster_z = profile.cluster
     return (cluster_y, cluster_x, cluster_z)
 
 
@@ -1179,6 +1201,7 @@ def make_contiguous_batch_strides(
 def _batch_scheduler_layout(
     logical_tasks: int,
     grid_layout: str = DEFAULT_GRID_LAYOUT,
+    profile: single.KernelProfile = BATCH_PROFILE,
 ) -> tuple[int, int, tuple[int, int], int]:
     """Return physical cluster X/Y, encoded log2 X/Y, and recurrence stride."""
 
@@ -1187,7 +1210,22 @@ def _batch_scheduler_layout(
         raise single.GemmIsaRunnerError(
             f"logical cluster-task count must be positive, got {logical_tasks}"
         )
-    if logical_tasks <= MAX_PERSISTENT_CLUSTERS:
+    cluster_x, cluster_y, cluster_z = profile.cluster
+    cluster_size = cluster_x * cluster_y * cluster_z
+    if profile.persistent_tg % cluster_size:
+        raise single.GemmIsaRunnerError(
+            f"profile {profile.name} persistent_tg={profile.persistent_tg} is "
+            f"not divisible by cluster size {cluster_size}"
+        )
+    max_persistent_clusters = profile.persistent_tg // cluster_size
+    max_grid_y = profile.persistent_grid_y
+    if max_grid_y <= 0 or max_persistent_clusters % max_grid_y:
+        raise single.GemmIsaRunnerError(
+            f"profile {profile.name} persistent grid_y={max_grid_y} must "
+            f"divide {max_persistent_clusters} clusters"
+        )
+    max_cluster_grid = (max_persistent_clusters // max_grid_y, max_grid_y)
+    if logical_tasks <= max_persistent_clusters:
         persistent_stride = 1 << (logical_tasks - 1).bit_length()
         layout = (
             logical_tasks,
@@ -1196,7 +1234,7 @@ def _batch_scheduler_layout(
             persistent_stride,
         )
     else:
-        cluster_grid_x, cluster_grid_y = MAX_PERSISTENT_CLUSTER_GRID
+        cluster_grid_x, cluster_grid_y = max_cluster_grid
         layout = (
             cluster_grid_x,
             cluster_grid_y,
@@ -1204,7 +1242,7 @@ def _batch_scheduler_layout(
                 cluster_grid_x.bit_length() - 1,
                 cluster_grid_y.bit_length() - 1,
             ),
-            MAX_PERSISTENT_CLUSTERS,
+            max_persistent_clusters,
         )
     if grid_layout == GRID_LAYOUT_N_ON_X_M_ON_Y:
         return layout
@@ -1223,12 +1261,14 @@ def make_batched_launch_geometry(
     k: int,
     batch: int,
     grid_layout: str = DEFAULT_GRID_LAYOUT,
+    *,
+    profile: single.KernelProfile = BATCH_PROFILE,
 ) -> single.LaunchGeometry:
     """Build an adaptive persistent X/Y launch and replicate it in grid Z."""
 
     batch = _validate_batch(batch)
     grid_layout = _validate_grid_layout(grid_layout)
-    base = single.make_launch_geometry(m, n, k, profile=BATCH_PROFILE)
+    base = single.make_launch_geometry(m, n, k, profile=profile)
     # Fail before compilation/allocation if either the appended u64 batch
     # address span or an inherited u32 row-stride field would overflow.
     make_contiguous_batch_strides(m, n, k, batch)
@@ -1246,15 +1286,21 @@ def make_batched_launch_geometry(
         cluster_grid_y,
         log2_grid,
         persistent_stride,
-    ) = _batch_scheduler_layout(base.logical_cluster_tasks, grid_layout)
+    ) = _batch_scheduler_layout(
+        base.logical_cluster_tasks,
+        grid_layout,
+        profile,
+    )
     physical_clusters = cluster_grid_x * cluster_grid_y
     if physical_clusters != min(
         base.logical_cluster_tasks,
-        MAX_PERSISTENT_CLUSTERS,
+        profile.persistent_tg
+        // (profile.cluster[0] * profile.cluster[1] * profile.cluster[2]),
     ):
         raise single.GemmIsaRunnerError(
             f"adaptive physical cluster count {physical_clusters} does not "
-            f"equal min(T_XY,64) for T_XY={base.logical_cluster_tasks}"
+            "match the selected profile's persistent limit for "
+            f"T_XY={base.logical_cluster_tasks}"
         )
     if persistent_stride < physical_clusters:
         raise single.GemmIsaRunnerError(
@@ -1267,7 +1313,8 @@ def make_batched_launch_geometry(
             f"encoded log2 grid {log2_grid}"
         )
     cluster_x, cluster_y, cluster_z = _physical_cluster_for_layout(
-        grid_layout
+        grid_layout,
+        profile,
     )
     return replace(
         base,
@@ -1297,6 +1344,7 @@ def pack_batched_mxfp4_kernargs(
     batch_strides: BatchStrides,
     geometry: single.LaunchGeometry,
     grid_layout: str = DEFAULT_GRID_LAYOUT,
+    profile: single.KernelProfile = BATCH_PROFILE,
 ) -> bytes:
     """Pack the exact 120-byte batch-Z preload ABI."""
 
@@ -1306,10 +1354,10 @@ def pack_batched_mxfp4_kernargs(
         raise single.GemmIsaRunnerError(
             f"grid Z={geometry.grid[2]} does not match batch={batch}"
         )
-    if geometry.block != BATCH_PROFILE.block:
+    if geometry.block != profile.block:
         raise single.GemmIsaRunnerError(
             f"launch block {geometry.block} does not match "
-            f"{BATCH_PROFILE.block}"
+            f"{profile.block}"
         )
     expected_geometry = make_batched_launch_geometry(
         m,
@@ -1317,6 +1365,7 @@ def pack_batched_mxfp4_kernargs(
         k,
         batch,
         grid_layout,
+        profile=profile,
     )
     if geometry != expected_geometry:
         raise single.GemmIsaRunnerError(
@@ -1354,8 +1403,8 @@ def pack_batched_mxfp4_kernargs(
             "log2_grid_y": geometry.log2_grid[1],
             **stride_values,
         },
-        layout=BATCH_KERNARG_LAYOUT,
-        size=BATCH_KERNARG_SIZE,
+        layout=profile.kernarg_layout,
+        size=profile.kernarg_size,
     )
 
 
@@ -1601,8 +1650,9 @@ def select_kernel_mode(
                 f"{BATCH_KERNEL_SYMBOL!r} from the _batch_ps.s source"
             )
         return "legacy", single.KERNEL_PROFILE_64X256
-    if symbol == BATCH_KERNEL_SYMBOL:
-        return "batch-z", BATCH_PROFILE
+    batch_profile = BATCH_PROFILES_BY_SYMBOL.get(symbol)
+    if batch_profile is not None:
+        return "batch-z", batch_profile
     raise single.GemmIsaRunnerError(
         f"unsupported kernel {symbol!r}; this runner accepts "
         f"{MAB_KERNEL_SYMBOL!r}, {MAB_FULL_KERNEL_SYMBOL!r}, and "
@@ -1611,7 +1661,8 @@ def select_kernel_mode(
         f"{MAB_FULL_BATCH_LOADONLY_KERNEL_SYMBOL!r} and "
         f"{MAB_FULL_BATCH_LOADONLY_WV23_256K_KERNEL_SYMBOL!r} "
         "for supported batches; or "
-        f"{BATCH_KERNEL_SYMBOL!r} for any supported batch; MoE symbols: "
+        f"{', '.join(repr(item) for item in BATCH_KERNEL_SYMBOLS)} for any "
+        "supported batch; MoE symbols: "
         + ", ".join(repr(item) for item in MOE_GEMM1_SYMBOLS)
     )
 
@@ -2728,6 +2779,9 @@ def _run_batch_gemm(
     code_object: Path,
     geometry: single.LaunchGeometry,
     store_detection: single.GlobalOutputStoreDetection,
+    *,
+    symbol: str,
+    profile: single.KernelProfile,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -2748,7 +2802,7 @@ def _run_batch_gemm(
     dtype = torch.bfloat16
     with single._LoadedClusterKernel(
         code_object,
-        BATCH_KERNEL_SYMBOL,
+        symbol,
         args.device,
     ) as module:
         torch.manual_seed(args.seed)
@@ -2792,12 +2846,13 @@ def _run_batch_gemm(
             batch_strides=batch_strides,
             geometry=geometry,
             grid_layout=args.grid_layout,
+            profile=profile,
         )
         module.configure(
             payload,
             geometry,
             int(stream.cuda_stream),
-            BATCH_KERNARG_SIZE,
+            profile.kernarg_size,
         )
 
         def launch() -> Any:
@@ -2829,7 +2884,7 @@ def _run_batch_gemm(
             },
             target_shape=(m, n, k),
             stream=stream,
-            symbol=BATCH_KERNEL_SYMBOL,
+            symbol=symbol,
             mark_stream_synchronized=module.mark_stream_synchronized,
         )
         us = float(timing["device_time_avg"])
@@ -2982,6 +3037,61 @@ def _keep_code_object_if_requested(
 
 def _self_test() -> None:
     """Run CPU-only profiler row-selection and call-contract checks."""
+
+    batch_mode, batch_profile = select_kernel_mode(
+        BATCH_KERNEL_SYMBOL_256,
+        96,
+    )
+    assert batch_mode == "batch-z"
+    assert batch_profile is BATCH_PROFILE_256
+    batch_geometry = make_batched_launch_geometry(
+        1024,
+        6144,
+        7168,
+        96,
+        profile=batch_profile,
+    )
+    assert batch_geometry.tiles == (24, 4)
+    assert batch_geometry.logical_cluster_grid == (6, 1)
+    assert batch_geometry.logical_wg_tasks == 96
+    assert batch_geometry.logical_cluster_tasks == 6
+    assert batch_geometry.grid == (24, 4, 96)
+    assert batch_geometry.block == (128, 1, 1)
+    assert batch_geometry.cluster == (4, 4, 1)
+    assert batch_geometry.cluster_grid == (6, 1)
+    assert batch_geometry.log2_grid == (3, 0)
+    assert batch_geometry.persistent_stride == 8
+    batch_strides = make_contiguous_batch_strides(1024, 6144, 7168, 96)
+    assert batch_strides == BatchStrides(
+        d=12_582_912,
+        a=3_670_016,
+        b=22_020_096,
+        scale_a=229_376,
+        scale_b=1_376_256,
+    )
+    batch_payload = pack_batched_mxfp4_kernargs(
+        ptr_d=0x1000,
+        ptr_a=0x2000,
+        ptr_b=0x3000,
+        ptr_scale_a=0x4000,
+        ptr_scale_b=0x5000,
+        m=1024,
+        n=6144,
+        k=7168,
+        batch=96,
+        batch_strides=batch_strides,
+        geometry=batch_geometry,
+        profile=batch_profile,
+    )
+    assert len(batch_payload) == BATCH_KERNARG_SIZE
+    assert struct.unpack_from("<II", batch_payload, 72) == (3, 0)
+    assert struct.unpack_from("<QQQQQ", batch_payload, 80) == (
+        batch_strides.d,
+        batch_strides.a,
+        batch_strides.b,
+        batch_strides.scale_a,
+        batch_strides.scale_b,
+    )
 
     class FakeTraceFrame:
         def __init__(self, records: Sequence[Mapping[str, Any]]) -> None:
@@ -3380,11 +3490,12 @@ def _self_test() -> None:
         == 18_874_368
     )
     print(
-        "[gemm_batch_isa_runner] SELF_TEST_OK: profiler row selection, "
-        "run_perftest arguments, pure batched CUDA-event ordering, timing "
-        "method CLI choices/default, MoE user-parameter derivation/conflict "
-        "rejection, v21 geometry, pipeline combination rejection, and "
-        "global-store-aware logical traffic accounting"
+        "[gemm_batch_isa_runner] SELF_TEST_OK: 256x256 batch profile geometry/"
+        "ABI, profiler row selection, run_perftest arguments, pure batched "
+        "CUDA-event ordering, timing method CLI choices/default, MoE user-"
+        "parameter derivation/conflict rejection, v21 geometry, pipeline "
+        "combination rejection, and global-store-aware logical traffic "
+        "accounting"
     )
 
 
@@ -3397,7 +3508,8 @@ def _build_parser() -> argparse.ArgumentParser:
             action.help = (
                 "complete gfx1250 AMDGPU assembly source: the original MAB "
                 "symbols require --batch 1; mab_tdm_gemm_full_batch and "
-                "64x256_1x4_batch_ps support batched dispatch; omitted only "
+                "64x256_1x4_batch_ps and 256x256_4x4_batch_ps support "
+                "batched dispatch; omitted only "
                 "with --self-test"
             )
         elif action.dest == "shape":
@@ -3689,6 +3801,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 *args.shape,
                 batch=args.batch,
                 grid_layout=args.grid_layout,
+                profile=profile,
             )
 
         single.print_contract(
@@ -3828,6 +3941,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     code_object,
                     geometry,
                     store_detection,
+                    symbol=symbol,
+                    profile=profile,
                 )
 
             row["logical cluster tasks/plane"] = geometry.logical_cluster_tasks
