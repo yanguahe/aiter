@@ -1820,6 +1820,7 @@ def _prepare_batched_inputs(
     apre: int,
     dtype: Any,
     init: str,
+    const_init: float | None = None,
 ) -> tuple[dict[str, Any], Any]:
     names = ("A", "B", "sA", "sB")
     first_inputs, first_reference = single.prepare_mxfp4_inputs_and_reference(
@@ -1829,6 +1830,7 @@ def _prepare_batched_inputs(
         apre,
         dtype,
         init,
+        const_init=const_init,
     )
     if batch == 1:
         inputs = {
@@ -1860,17 +1862,25 @@ def _prepare_batched_inputs(
     del first_inputs, first_reference
 
     for index in range(1, batch):
-        inputs_i, reference_i = single.prepare_mxfp4_inputs_and_reference(
-            m,
-            n,
-            k,
-            apre,
-            dtype,
-            init,
-        )
-        for name in names:
-            inputs[name][index].copy_(inputs_i[name])
-        reference[index].copy_(reference_i)
+        if const_init is None:
+            inputs_i, reference_i = single.prepare_mxfp4_inputs_and_reference(
+                m,
+                n,
+                k,
+                apre,
+                dtype,
+                init,
+            )
+            for name in names:
+                inputs[name][index].copy_(inputs_i[name])
+            reference[index].copy_(reference_i)
+        else:
+            # Every batch plane is identical under constant initialization.
+            # Reuse the first prepared/quantized matrix instead of repeating
+            # the quantizer and the large decoded reference GEMM.
+            for name in names:
+                inputs[name][index].copy_(inputs[name][0])
+            reference[index].copy_(reference[0])
     return inputs, reference
 
 
@@ -2816,6 +2826,7 @@ def _run_batch_gemm(
             apre=args.apre,
             dtype=dtype,
             init=args.init,
+            const_init=args.const_init,
         )
         reference_hash = single.tensor_blake2b128(reference)
         output = torch.empty(
@@ -2922,7 +2933,11 @@ def _run_batch_gemm(
         "N": n,
         "K": k,
         "apre": args.apre,
-        "init": args.init,
+        "init": (
+            args.init
+            if args.const_init is None
+            else f"const({args.const_init:g})"
+        ),
         "seed": args.seed,
         "dtype": args.dtype,
         "gfx": gfx,
@@ -3245,9 +3260,27 @@ def _self_test() -> None:
     assert default_args.cudagh is False
     assert default_args.shape == (18432, 2048, 7168)
     assert default_args.batch == 1
+    assert default_args.const_init is None
     assert all(
         getattr(default_args, name) is None for name in MOE_CLI_FIELDS
     )
+    assert parser.parse_args(
+        ["--self-test", "--const-init"]
+    ).const_init == 0.0
+    assert parser.parse_args(
+        ["--self-test", "--const-init", "1.5"]
+    ).const_init == 1.5
+    assert single._mxfp4_const_init_uint8_value(0.0) == 0
+    assert single._mxfp4_const_init_uint8_value(255.9) == 255
+    for invalid_const_init in (-1.0, 256.0, float("nan"), float("inf")):
+        try:
+            single._mxfp4_const_init_uint8_value(invalid_const_init)
+        except single.GemmIsaRunnerError:
+            pass
+        else:
+            raise AssertionError(
+                f"invalid const-init must be rejected: {invalid_const_init!r}"
+            )
     moe_args = parser.parse_args(
         [
             "--self-test",
@@ -3437,9 +3470,10 @@ def _self_test() -> None:
     print(
         "[gemm_batch_isa_runner] SELF_TEST_OK: profiler row selection, "
         "run_perftest arguments, pure batched CUDA-event ordering, timing "
-        "method CLI choices/default, MoE user-parameter derivation/conflict "
-        "rejection, v21 geometry, pipeline combination rejection, and "
-        "global-store-aware logical traffic accounting"
+        "method CLI choices/default, const-init parsing/range checks, MoE "
+        "user-parameter derivation/conflict rejection, v21 geometry, pipeline "
+        "combination rejection, and global-store-aware logical traffic "
+        "accounting"
     )
 
 
@@ -3506,6 +3540,21 @@ def _build_parser() -> argparse.ArgumentParser:
             f"number of independent batch-major GEMMs in one dispatch "
             f"(default: 1; maximum: {MAX_BATCH}); omit for the preferred "
             "MoE user-level parameter form"
+        ),
+    )
+    parser.add_argument(
+        "--const-init",
+        type=float,
+        nargs="?",
+        const=0.0,
+        default=None,
+        metavar="VALUE",
+        help=(
+            "initialize dense batched MXFP4 inputs like the grouped gfx1250 "
+            "benchmark: fill BF16 activations with VALUE before per-1x32 "
+            "quantization, and fill packed B / raw E8M0 B-scale uint8 tensors "
+            "with int(VALUE). Bare --const-init uses 0.0; cannot be combined "
+            "with an explicit --init"
         ),
     )
     moe_group = parser.add_argument_group(
@@ -3641,6 +3690,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         symbol = single.resolve_kernel_symbol_from_text(source, args.symbol)
         validate_moe_v21_source_contract(source, symbol)
         mode, profile = select_kernel_mode(symbol, args.batch)
+        if args.const_init is not None:
+            if _argv_has_option(raw_argv, "--init"):
+                raise single.GemmIsaRunnerError(
+                    "--const-init cannot be combined with an explicit --init"
+                )
+            if mode != "batch-z":
+                raise single.GemmIsaRunnerError(
+                    "--const-init is supported only by the batched MXFP4 "
+                    "_batch_ps symbols"
+                )
+            single._mxfp4_const_init_uint8_value(args.const_init)
         workload: MoeWorkload | None = None
         moe_options_supplied = any(
             getattr(args, name) is not None for name in MOE_CLI_FIELDS

@@ -640,6 +640,22 @@ def _run_torch_mxfp4_reference(
     return ((x_f32 * xs_f32) @ (w_f32 * ws_f32).T).to(dtype)
 
 
+def _mxfp4_const_init_uint8_value(const_init: float) -> int:
+    """Convert a const-init value to the raw uint8 payload used by B/Bs."""
+
+    if not math.isfinite(const_init):
+        raise GemmIsaRunnerError(
+            f"--const-init must be finite, got {const_init!r}"
+        )
+    value = int(const_init)
+    if not 0 <= value <= 0xFF:
+        raise GemmIsaRunnerError(
+            "--const-init must convert with int(VALUE) to a uint8 value in "
+            f"[0, 255], got VALUE={const_init!r} -> {value}"
+        )
+    return value
+
+
 def prepare_mxfp4_inputs_and_reference(
     m: int,
     n: int,
@@ -647,15 +663,45 @@ def prepare_mxfp4_inputs_and_reference(
     apre: int,
     dtype: Any,
     init: str,
+    *,
+    const_init: float | None = None,
 ) -> tuple[dict[str, Any], Any]:
-    """Prepare the production MXFP4 inputs and decoded FP32 reference."""
+    """Prepare production MXFP4 inputs and their decoded FP32 reference.
+
+    ``const_init`` mirrors the grouped-gfx1250 benchmark: A starts as a BF16
+    tensor filled with VALUE and follows the normal per-1x32 quantizer, while
+    packed B and its raw E8M0 scale bytes are filled with ``int(VALUE)``.
+    """
 
     import aiter
     import torch  # type: ignore[import-not-found]
     from aiter.ops.shuffle import shuffle_scale_f4, shuffle_weight_f4
 
     device = torch.device("cuda", torch.cuda.current_device())
-    if init == "random":
+    if const_init is not None:
+        uint8_value = _mxfp4_const_init_uint8_value(const_init)
+        quant = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+        x = torch.full(
+            (m, k),
+            float(const_init),
+            dtype=dtype,
+            device=device,
+        )
+        xq, xs = quant(x, shuffle=False)
+        xq, xs = xq.view(torch.uint8), xs.view(torch.uint8)
+        wq = torch.full(
+            (n, k // 2),
+            uint8_value,
+            dtype=torch.uint8,
+            device=device,
+        )
+        ws = torch.full(
+            (n, k // MXFP4_SCALE_BLOCK),
+            uint8_value,
+            dtype=torch.uint8,
+            device=device,
+        )
+    elif init == "random":
         quant = aiter.get_triton_quant(aiter.QuantType.per_1x32)
         x = torch.randn((m, k), dtype=dtype, device=device)
         w = torch.randn((n, k), dtype=dtype, device=device)
