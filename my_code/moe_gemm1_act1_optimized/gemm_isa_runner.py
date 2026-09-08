@@ -1,0 +1,3110 @@
+#!/usr/bin/env python3
+r"""Compile and benchmark one dense gfx1250 MXFP4 GEMM assembly kernel.
+
+The input ``.s`` is treated as a complete AMDGPU assembly source.  This runner
+reads its kernel-name directives but never synthesizes or modifies the kernel
+descriptor or metadata.  It assembles and links the source, loads the resulting
+code object once, and then launches the selected symbol on PyTorch's current
+HIP stream.
+
+The input/reference construction embeds the production MXFP4 algorithm.  The
+launch ABI and each profile's persistent cluster geometry mirror
+``csrc/py_itfs_cu/asm_f4gemm.cu``.
+
+Typical use from the aiter repository root::
+
+    AITER_LOG_MORE=1 python my_code/isa_runner/gemm_isa_runner.py \
+        --iters 100 \
+        --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps.s
+
+The exact ``256x256_4x4`` and ``128x128_4x4`` symbols remain supported with
+the same command line; symbols with unrelated suffixes are rejected.
+
+This file can be imported on a machine without ROCm for its pure ABI/geometry
+checks.  Compilation and execution require a Linux ROCm installation and a
+gfx1250 GPU.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import hashlib
+import math
+import os
+import re
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
+
+
+ARCH = "gfx1250"
+CODE_OBJECT_VERSION = 6
+DEFAULT_CLANG = Path(
+    "/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang"
+)
+DEFAULT_CLANG_RUNTIME_LIBRARIES = (
+    Path(
+        "/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/"
+        "rocm_sysdeps/lib"
+    ),
+    Path("/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib"),
+    Path("/opt/rocm/lib"),
+)
+DEFAULT_SYMBOL: str | None = None
+TIMING_METHOD_PROFILER = "profiler"
+TIMING_METHOD_CUDA_EVENT = "cuda-event"
+TIMING_METHOD_CHOICES = (
+    TIMING_METHOD_PROFILER,
+    TIMING_METHOD_CUDA_EVENT,
+)
+RUN_PERFTEST_TIMING_SOURCE = "run_perftest testGraph=False torch-profiler"
+RUN_PERFTEST_GRAPH_TIMING_SOURCE = (
+    "run_perftest testGraph=True CUDA-graph torch-profiler"
+)
+CUDA_EVENT_TIMING_SOURCE = "cuda.Event batched"
+
+
+def run_perftest_timing_source(test_graph: bool) -> str:
+    return (
+        RUN_PERFTEST_GRAPH_TIMING_SOURCE
+        if test_graph
+        else RUN_PERFTEST_TIMING_SOURCE
+    )
+
+
+def moe_pipeline_timing_source(test_graph: bool) -> str:
+    return f"{run_perftest_timing_source(test_graph)} full MoE pipeline"
+KERNEL_SYMBOL_256 = "f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_ps"
+KERNEL_SYMBOL_128 = "f4gemm_bf16_mxfp4_ABpreShuffle_128x128_4x4_ps"
+KERNEL_SYMBOL_64X256 = "f4gemm_bf16_mxfp4_ABpreShuffle_64x256_1x4_ps"
+LEGACY_MANGLED_SYMBOL = (
+    "_ZN5aiter45f4gemm_bf16_mxfp4_"
+    "ABpreShuffle_256x256_4x4_psE"
+)
+_SYMBOL_TOKEN = r"[A-Za-z_][A-Za-z0-9_]*"
+_SYMBOL_RE = re.compile(rf"^{_SYMBOL_TOKEN}$")
+_METADATA_BLOCK_RE = re.compile(
+    r"(?ms)^[ \t]*\.amdgpu_metadata[ \t]*$"
+    r"(?P<body>.*?)"
+    r"^[ \t]*\.end_amdgpu_metadata[ \t]*$"
+)
+
+MXFP4_SCALE_BLOCK = 32
+MAX_LDS_PER_WGP = 320 * 1024
+# User-facing TB/s applies the requested binary/decimal conversion:
+# 1.024**4 = 2**40 / 10**12.
+TBPS_DIVISOR = 1.024 ** 4
+GLOBAL_OUTPUT_STORE_MNEMONIC_PREFIXES = (
+    "tensor_store",
+    "global_store",
+    "global_atomic",
+    "buffer_store",
+    "buffer_atomic",
+    "flat_store",
+    "flat_atomic",
+    "image_store",
+    "image_atomic",
+    "tbuffer_store",
+    "raw_buffer_store",
+    "raw_buffer_atomic",
+    "struct_buffer_store",
+    "struct_buffer_atomic",
+)
+NON_OUTPUT_STORE_MNEMONIC_PREFIXES = (
+    "ds_store",
+    "ds_atomic",
+    "scratch_store",
+    "scratch_atomic",
+)
+KERNARG_SIZE = 80
+KERNARG_LAYOUT = (
+    ("ptr_D", 0, "Q"),
+    ("ptr_A", 8, "Q"),
+    ("ptr_B", 16, "Q"),
+    ("ptr_ScaleA", 24, "Q"),
+    ("ptr_ScaleB", 32, "Q"),
+    ("strideD0", 40, "I"),
+    ("strideA0", 44, "I"),
+    ("strideB0", 48, "I"),
+    ("ScaleA_stride0", 52, "I"),
+    ("ScaleB_stride0", 56, "I"),
+    ("M", 60, "I"),
+    ("N", 64, "I"),
+    ("K", 68, "I"),
+    # For MXFP4, asm_f4gemm.cu stores these raw uint32 values in the two
+    # GlobalScale float slots and ships exactly 80 bytes.
+    ("log2_grid_x", 72, "I"),
+    ("log2_grid_y", 76, "I"),
+)
+
+
+def bytes_per_microsecond_to_tbps(
+    bytes_count: int | float,
+    time_us: int | float,
+) -> float:
+    return bytes_count / time_us / 1e6 / TBPS_DIVISOR
+
+
+@dataclass(frozen=True)
+class KernelProfile:
+    """Exact symbol, geometry, and host ABI profile for one ISA."""
+
+    name: str
+    primary_symbol: str
+    symbols: tuple[str, ...]
+    wg_tile: tuple[int, int]
+    wave_tile: tuple[int, int]
+    output_quadrants: tuple[int, int]
+    cluster: tuple[int, int, int]
+    block: tuple[int, int, int]
+    k_multiple: int
+    persistent_tg: int
+    persistent_grid_y: int
+    apre: int
+    abi_name: str
+    kernarg_size: int
+    kernarg_layout: tuple[tuple[str, int, str], ...]
+
+
+KERNEL_PROFILE_256 = KernelProfile(
+    name="bf16-mxfp4-wg256-wave128-4x4-persistent",
+    primary_symbol=KERNEL_SYMBOL_256,
+    symbols=(KERNEL_SYMBOL_256, LEGACY_MANGLED_SYMBOL),
+    wg_tile=(256, 256),
+    wave_tile=(128, 128),
+    output_quadrants=(2, 2),
+    cluster=(4, 4, 1),
+    block=(128, 1, 1),
+    # Preserve the original runner's accepted K domain.  The old ISA document
+    # establishes K%128 for input shuffling but does not establish that every
+    # K%128 path is a complete K256 body.
+    k_multiple=128,
+    persistent_tg=256,
+    persistent_grid_y=4,
+    apre=1,
+    abi_name="bf16-mxfp4-preload-v1",
+    kernarg_size=KERNARG_SIZE,
+    kernarg_layout=KERNARG_LAYOUT,
+)
+KERNEL_PROFILE_128 = KernelProfile(
+    name="bf16-mxfp4-wg128-wave64-4x4-persistent",
+    primary_symbol=KERNEL_SYMBOL_128,
+    symbols=(KERNEL_SYMBOL_128,),
+    wg_tile=(128, 128),
+    wave_tile=(64, 64),
+    output_quadrants=(2, 2),
+    cluster=(4, 4, 1),
+    block=(128, 1, 1),
+    k_multiple=256,
+    persistent_tg=256,
+    persistent_grid_y=4,
+    apre=1,
+    abi_name="bf16-mxfp4-preload-v1",
+    kernarg_size=KERNARG_SIZE,
+    kernarg_layout=KERNARG_LAYOUT,
+)
+KERNEL_PROFILE_64X256 = KernelProfile(
+    name="bf16-mxfp4-wg64x256-wave64-1x4-persistent",
+    primary_symbol=KERNEL_SYMBOL_64X256,
+    symbols=(KERNEL_SYMBOL_64X256,),
+    wg_tile=(64, 256),
+    wave_tile=(64, 64),
+    output_quadrants=(1, 4),
+    # HIP cluster dimensions are (x=N, y=M, z).
+    cluster=(4, 1, 1),
+    block=(128, 1, 1),
+    k_multiple=256,
+    persistent_tg=256,
+    persistent_grid_y=4,
+    apre=1,
+    abi_name="bf16-mxfp4-preload-v1",
+    kernarg_size=KERNARG_SIZE,
+    kernarg_layout=KERNARG_LAYOUT,
+)
+SUPPORTED_KERNEL_PROFILES = (
+    KERNEL_PROFILE_256,
+    KERNEL_PROFILE_128,
+    KERNEL_PROFILE_64X256,
+)
+
+
+def _build_kernel_profile_lookup(
+    profiles: Sequence[KernelProfile],
+) -> dict[str, KernelProfile]:
+    """Build an exact-symbol map and reject ambiguous registrations."""
+
+    lookup: dict[str, KernelProfile] = {}
+    for profile in profiles:
+        for symbol in profile.symbols:
+            if symbol in lookup:
+                raise ValueError(
+                    f"kernel symbol {symbol!r} is registered by both "
+                    f"{lookup[symbol].name!r} and {profile.name!r}"
+                )
+            lookup[symbol] = profile
+    return lookup
+
+
+_KERNEL_PROFILE_BY_SYMBOL = _build_kernel_profile_lookup(
+    SUPPORTED_KERNEL_PROFILES
+)
+
+SUMMARY_COLUMNS = (
+    "intype",
+    "batch",
+    "M",
+    "N",
+    "K",
+    "apre",
+    "init",
+    "seed",
+    "dtype",
+    "gfx",
+    "logical cluster tasks/plane",
+    "physical clusters/plane",
+    "physical WGs/plane",
+    "encoded recurrence stride/plane",
+    "ref hash128",
+    "gemm_a4w4 us",
+    "gemm_a4w4 TFLOPS",
+    "gemm_a4w4 bytes",
+    "gemm_a4w4 TB/s",
+    "gemm_a4w4 err",
+    "gemm_a4w4 out hash128",
+    "gemm_a4w4 max_err_info",
+    "gemm_a4w4 rel_l2",
+)
+assert len(SUMMARY_COLUMNS) == 23
+
+EVENT_TIMING_COLUMNS = (
+    "name",
+    "cnt",
+    "warmup",
+    "device_time_sum",
+    "device_time_avg",
+    "device_type",
+    "device_index",
+    "source",
+)
+
+
+class GemmIsaRunnerError(RuntimeError):
+    """Expected build, validation, HIP, or launch failure."""
+
+
+class CompileError(GemmIsaRunnerError):
+    """A clang subprocess failed, with all diagnostics retained."""
+
+    def __init__(
+        self,
+        command: Sequence[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+    ) -> None:
+        self.command = tuple(command)
+        self.returncode = int(returncode)
+        self.stdout = stdout
+        self.stderr = stderr
+        super().__init__(
+            f"command failed with exit code {self.returncode}:\n"
+            f"{_format_command(self.command)}\n"
+            f"--- stdout ---\n{self.stdout}"
+            f"{'' if self.stdout.endswith(chr(10)) or not self.stdout else chr(10)}"
+            f"--- stderr ---\n{self.stderr}"
+        )
+
+
+def select_kernel_profile(symbol: str) -> KernelProfile:
+    """Select a profile only for an explicitly supported, exact symbol."""
+
+    profile = _KERNEL_PROFILE_BY_SYMBOL.get(symbol)
+    if profile is None:
+        supported = ", ".join(
+            repr(profile.primary_symbol)
+            for profile in SUPPORTED_KERNEL_PROFILES
+        )
+        raise GemmIsaRunnerError(
+            f"unsupported BF16 MXFP4 ISA kernel symbol {symbol!r}; "
+            f"supported exact basenames are {supported}"
+        )
+    return profile
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """One temporary code object and the commands that produced it."""
+
+    code_object: Path
+    commands: tuple[tuple[str, ...], ...]
+    patches: tuple[str, ...] = ()
+    object_file: Path | None = None
+
+
+@dataclass(frozen=True)
+class LaunchGeometry:
+    """Persistent launch dimensions derived exactly as in asm_f4gemm.cu."""
+
+    grid: tuple[int, int, int]
+    block: tuple[int, int, int]
+    cluster: tuple[int, int, int]
+    tiles: tuple[int, int]
+    cluster_grid: tuple[int, int]
+    log2_grid: tuple[int, int]
+    logical_cluster_grid: tuple[int, int]
+    logical_wg_tasks: int
+    logical_cluster_tasks: int
+    persistent_stride: int
+    # How many independent launch planes --batch stands for.  For the f4gemm
+    # and MAB kernels each batch entry is its own GEMM plane with its own set
+    # of workgroups, so the reported grids gain `batch` as a third dimension
+    # and the totals scale by it.  A kernel that already folds the batch into
+    # its tile count -- the grouped MoE kernel folds all 96 experts into
+    # contiguous_m, hence into m_tiles -- launches exactly once and must set
+    # this to 1, or the grids and totals double-count the batch.
+    planes: int | None = None
+
+    @property
+    def logical_wg_grid(self) -> tuple[int, int, int]:
+        return (*self.tiles, 1)
+
+    @property
+    def logical_cluster_grid_3d(self) -> tuple[int, int, int]:
+        return (*self.logical_cluster_grid, 1)
+
+    @property
+    def physical_cluster_grid(self) -> tuple[int, int, int]:
+        return (*self.cluster_grid, 1)
+
+
+@dataclass(frozen=True)
+class AssemblyResources:
+    descriptor_lds: int
+    metadata_lds: int
+    kernarg_size: int
+    metadata_vgpr: int
+    metadata_sgpr: int
+
+
+@dataclass(frozen=True)
+class ContractReport:
+    runner: str
+    profile: KernelProfile
+    symbol: str
+    shape: tuple[int, int, int]
+    batch: int
+    geometry: LaunchGeometry
+    resources: AssemblyResources
+    stores_to_d: bool
+    dynamic_lds_bytes: int = 0
+
+
+def _format_lds_kb(byte_count: int) -> str:
+    """Format LDS using 1 KB = 1024 bytes."""
+
+    if byte_count < 0:
+        raise GemmIsaRunnerError(
+            f"LDS byte count must be non-negative, got {byte_count}"
+        )
+    whole_kb, remainder = divmod(byte_count, 1024)
+    if remainder == 0:
+        return str(whole_kb)
+    return f"{byte_count / 1024:.10f}".rstrip("0").rstrip(".")
+
+
+def print_contract(report: ContractReport) -> None:
+    geometry = report.geometry
+    resources = report.resources
+    batch = report.batch
+    planes = batch if geometry.planes is None else geometry.planes
+    prefix = f"[{report.runner}]"
+    logical_wg_grid = (*geometry.tiles, planes)
+    logical_cluster_grid = (*geometry.logical_cluster_grid, planes)
+    physical_cluster_grid = (*geometry.cluster_grid, planes)
+    clusters_per_plane = geometry.cluster_grid[0] * geometry.cluster_grid[1]
+    physical_wgs_per_plane = geometry.grid[0] * geometry.grid[1]
+    static_lds = (
+        f"{_format_lds_kb(resources.metadata_lds)} KB (metadata/AQL; "
+        f"descriptor={_format_lds_kb(resources.descriptor_lds)} KB)"
+        if resources.descriptor_lds != resources.metadata_lds
+        else f"{_format_lds_kb(resources.metadata_lds)} KB"
+    )
+    total_lds = resources.metadata_lds + report.dynamic_lds_bytes
+    wgs_per_wgp = (
+        str(MAX_LDS_PER_WGP // total_lds)
+        if total_lds
+        else "n/a"
+    )
+    print(
+        f"{prefix} selected profile: {report.profile.name}; "
+        f"symbol={report.symbol}; shape={report.shape}; "
+        f"WG tile={report.profile.wg_tile}; wave tile={report.profile.wave_tile}; "
+        f"batch={batch}"
+    )
+    print(
+        f"{prefix} logical WG grid={logical_wg_grid}; WG tasks total="
+        f"{geometry.logical_wg_tasks * planes}; logical cluster grid="
+        f"{logical_cluster_grid}; cluster tasks/plane="
+        f"{geometry.logical_cluster_tasks}; cluster tasks total="
+        f"{geometry.logical_cluster_tasks * planes}"
+    )
+    print(
+        f"{prefix} physical launch={geometry.grid}; block={geometry.block}; "
+        f"cluster={geometry.cluster}; physical cluster grid="
+        f"{physical_cluster_grid}; clusters/plane={clusters_per_plane}; "
+        f"clusters total={clusters_per_plane * planes}; physical WGs/plane="
+        f"{physical_wgs_per_plane}; physical WGs total="
+        f"{physical_wgs_per_plane * planes}; encoded recurrence stride/plane="
+        f"{geometry.persistent_stride}; log2 X/Y grid={geometry.log2_grid}"
+    )
+    print(
+        f"{prefix} ABI={report.profile.abi_name}; "
+        f"kernarg={resources.kernarg_size} bytes; static LDS={static_lds}; "
+        f"dynamic LDS={_format_lds_kb(report.dynamic_lds_bytes)} KB; "
+        f"WGs/WGP by LDS={wgs_per_wgp} "
+        f"(LDS budget={_format_lds_kb(MAX_LDS_PER_WGP)} KB); "
+        f"VGPR/SGPR metadata={resources.metadata_vgpr}/"
+        f"{resources.metadata_sgpr}; stores to D={report.stores_to_d}"
+    )
+
+
+@dataclass(frozen=True)
+class GlobalOutputStoreDetection:
+    mnemonics: tuple[str, ...]
+
+    @property
+    def writes_output(self) -> bool:
+        return bool(self.mnemonics)
+
+    @property
+    def summary(self) -> str:
+        return ",".join(self.mnemonics) if self.mnemonics else "none"
+
+
+@dataclass(frozen=True)
+class LogicalTraffic:
+    read_bytes: int
+    write_bytes: int
+    store_detection: GlobalOutputStoreDetection
+
+    @property
+    def total_bytes(self) -> int:
+        return self.read_bytes + self.write_bytes
+
+
+@dataclass(frozen=True)
+class MoeA4W4UsefulBytes:
+    a_payload_bytes: int
+    a_scale_bytes: int
+    b_payload_bytes: int
+    b_scale_bytes: int
+    output_payload_bytes: int
+
+    @property
+    def read_bytes(self) -> int:
+        return (
+            self.a_payload_bytes
+            + self.a_scale_bytes
+            + self.b_payload_bytes
+            + self.b_scale_bytes
+        )
+
+
+def calculate_moe_a4w4_bf16_useful_bytes(
+    *,
+    valid_rows: int,
+    active_experts: int,
+    n: int,
+    k: int,
+    output_n: int,
+) -> MoeA4W4UsefulBytes:
+    """Match grouped-MoE effective stage metrics' useful-byte definition."""
+
+    values = (valid_rows, active_experts, n, k, output_n)
+    if any(value < 0 for value in values):
+        raise GemmIsaRunnerError("MoE useful-byte dimensions must be non-negative")
+    if k % 2 or k % MXFP4_SCALE_BLOCK:
+        raise GemmIsaRunnerError(
+            f"MoE A4W4 K must be divisible by {MXFP4_SCALE_BLOCK}, got {k}"
+        )
+    return MoeA4W4UsefulBytes(
+        a_payload_bytes=valid_rows * (k // 2),
+        a_scale_bytes=valid_rows * (k // MXFP4_SCALE_BLOCK),
+        b_payload_bytes=active_experts * n * (k // 2),
+        b_scale_bytes=active_experts * n * (k // MXFP4_SCALE_BLOCK),
+        output_payload_bytes=valid_rows * output_n * 2,
+    )
+
+
+def detect_global_output_stores(source: str) -> GlobalOutputStoreDetection:
+    """Detect executable global-memory stores after removing comments."""
+
+    detected: set[str] = set()
+    ambiguous: set[str] = set()
+    for line in source.splitlines():
+        clean = _strip_asm_comment(line)
+        while clean:
+            label = re.match(
+                r"^(?:[A-Za-z_$]|\.[A-Z])[\w.$]*:\s*(.*)$",
+                clean,
+            )
+            if label is None:
+                break
+            clean = label.group(1).strip()
+        if not clean or clean.startswith("."):
+            continue
+        mnemonic = clean.split(maxsplit=1)[0].lower()
+        if mnemonic.startswith(GLOBAL_OUTPUT_STORE_MNEMONIC_PREFIXES):
+            detected.add(mnemonic)
+        elif mnemonic.startswith(NON_OUTPUT_STORE_MNEMONIC_PREFIXES):
+            continue
+        elif "store" in mnemonic or "atomic" in mnemonic:
+            ambiguous.add(mnemonic)
+    if ambiguous:
+        raise GemmIsaRunnerError(
+            "unclassified store/atomic mnemonic(s) in ISA; refusing to "
+            f"guess output traffic: {sorted(ambiguous)}"
+        )
+    return GlobalOutputStoreDetection(tuple(sorted(detected)))
+
+
+def isa_writes_global_output(source: str) -> bool:
+    return detect_global_output_stores(source).writes_output
+
+
+def isa_writes_output(source: str) -> bool:
+    """Backward-compatible alias for global output-store detection."""
+
+    return isa_writes_global_output(source)
+
+
+def make_logical_traffic(
+    *,
+    read_bytes: int,
+    output_bytes_if_stored: int,
+    store_detection: GlobalOutputStoreDetection,
+) -> LogicalTraffic:
+    if read_bytes < 0 or output_bytes_if_stored < 0:
+        raise GemmIsaRunnerError("logical traffic byte counts must be non-negative")
+    if store_detection.writes_output and output_bytes_if_stored == 0:
+        raise GemmIsaRunnerError(
+            "ISA contains a global output store but output byte formula is zero"
+        )
+    return LogicalTraffic(
+        read_bytes=int(read_bytes),
+        write_bytes=(
+            int(output_bytes_if_stored) if store_detection.writes_output else 0
+        ),
+        store_detection=store_detection,
+    )
+
+
+def print_logical_traffic(prefix: str, traffic: LogicalTraffic) -> None:
+    print(
+        f"{prefix} logical_read_bytes={traffic.read_bytes}; "
+        f"logical_write_bytes={traffic.write_bytes} "
+        f"(stores output={traffic.store_detection.writes_output}; "
+        f"detected mnemonic={traffic.store_detection.summary}); "
+        f"logical_bytes=read+write={traffic.total_bytes}"
+    )
+
+
+def _run_torch_mxfp4_reference(
+    xq: Any,
+    wq: Any,
+    xs: Any,
+    ws: Any,
+    dtype: Any,
+) -> Any:
+    """Decode packed MXFP4 inputs and compute the FP32 reference."""
+
+    from aiter.utility import fp4_utils
+
+    x_f32 = fp4_utils.mxfp4_to_f32(xq)
+    w_f32 = fp4_utils.mxfp4_to_f32(wq)
+    xs_f32 = fp4_utils.e8m0_to_f32(xs).repeat_interleave(
+        MXFP4_SCALE_BLOCK,
+        dim=1,
+    )
+    ws_f32 = fp4_utils.e8m0_to_f32(ws).repeat_interleave(
+        MXFP4_SCALE_BLOCK,
+        dim=1,
+    )
+    return ((x_f32 * xs_f32) @ (w_f32 * ws_f32).T).to(dtype)
+
+
+def _mxfp4_const_init_uint8_value(const_init: float) -> int:
+    """Convert a const-init value to the raw uint8 payload used by B/Bs."""
+
+    if not math.isfinite(const_init):
+        raise GemmIsaRunnerError(
+            f"--const-init must be finite, got {const_init!r}"
+        )
+    value = int(const_init)
+    if not 0 <= value <= 0xFF:
+        raise GemmIsaRunnerError(
+            "--const-init must convert with int(VALUE) to a uint8 value in "
+            f"[0, 255], got VALUE={const_init!r} -> {value}"
+        )
+    return value
+
+
+def prepare_mxfp4_inputs_and_reference(
+    m: int,
+    n: int,
+    k: int,
+    apre: int,
+    dtype: Any,
+    init: str,
+    *,
+    const_init: float | None = None,
+) -> tuple[dict[str, Any], Any]:
+    """Prepare production MXFP4 inputs and their decoded FP32 reference.
+
+    ``const_init`` mirrors the grouped-gfx1250 benchmark: A starts as a BF16
+    tensor filled with VALUE and follows the normal per-1x32 quantizer, while
+    packed B and its raw E8M0 scale bytes are filled with ``int(VALUE)``.
+    """
+
+    import aiter
+    import torch  # type: ignore[import-not-found]
+    from aiter.ops.shuffle import shuffle_scale_f4, shuffle_weight_f4
+
+    device = torch.device("cuda", torch.cuda.current_device())
+    if const_init is not None:
+        uint8_value = _mxfp4_const_init_uint8_value(const_init)
+        quant = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+        x = torch.full(
+            (m, k),
+            float(const_init),
+            dtype=dtype,
+            device=device,
+        )
+        xq, xs = quant(x, shuffle=False)
+        xq, xs = xq.view(torch.uint8), xs.view(torch.uint8)
+        wq = torch.full(
+            (n, k // 2),
+            uint8_value,
+            dtype=torch.uint8,
+            device=device,
+        )
+        ws = torch.full(
+            (n, k // MXFP4_SCALE_BLOCK),
+            uint8_value,
+            dtype=torch.uint8,
+            device=device,
+        )
+    elif init == "random":
+        quant = aiter.get_triton_quant(aiter.QuantType.per_1x32)
+        x = torch.randn((m, k), dtype=dtype, device=device)
+        w = torch.randn((n, k), dtype=dtype, device=device)
+        xq, xs = quant(x, shuffle=False)
+        wq, ws = quant(w, shuffle=False)
+        xq, wq = xq.view(torch.uint8), wq.view(torch.uint8)
+        xs, ws = xs.view(torch.uint8), ws.view(torch.uint8)
+    else:
+        xq = torch.full(
+            (m, k // 2),
+            0x22,
+            dtype=torch.uint8,
+            device=device,
+        )
+        wq = torch.full(
+            (n, k // 2),
+            0x33,
+            dtype=torch.uint8,
+            device=device,
+        )
+        xs = torch.full(
+            (m, k // MXFP4_SCALE_BLOCK),
+            0x7F,
+            dtype=torch.uint8,
+            device=device,
+        )
+        ws = torch.full(
+            (n, k // MXFP4_SCALE_BLOCK),
+            0x7F,
+            dtype=torch.uint8,
+            device=device,
+        )
+
+    reference = _run_torch_mxfp4_reference(
+        xq,
+        wq,
+        xs,
+        ws,
+        dtype,
+    )
+    inputs = {
+        "A": shuffle_weight_f4(xq) if apre else xq,
+        "B": shuffle_weight_f4(wq),
+        "sA": shuffle_scale_f4(xs, 7),
+        "sB": shuffle_scale_f4(ws, 7),
+        "gA": None,
+        "gB": None,
+    }
+    return inputs, reference
+
+
+def tensor_blake2b128(tensor: Any) -> str:
+    """Hash raw contiguous tensor bytes without dtype/shape metadata."""
+
+    import torch  # type: ignore[import-not-found]
+
+    raw = tensor.detach().contiguous().view(torch.uint8).cpu()
+    return hashlib.blake2b(raw.numpy(), digest_size=16).hexdigest()
+
+
+@dataclass(frozen=True)
+class _Dependencies:
+    torch: Any
+    check_allclose: Any
+    get_gfx: Any
+
+
+def _format_command(command: Sequence[str]) -> str:
+    return shlex.join(str(part) for part in command)
+
+
+def _parse_shape(text: str) -> tuple[int, int, int]:
+    pieces = text.split(",")
+    if len(pieces) != 3:
+        raise argparse.ArgumentTypeError(
+            f"shape must be M,N,K (three comma-separated integers), got {text!r}"
+        )
+    try:
+        shape = tuple(int(piece.strip()) for piece in pieces)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"shape must contain integers, got {text!r}"
+        ) from exc
+    if any(value <= 0 for value in shape):
+        raise argparse.ArgumentTypeError(f"shape dimensions must be positive, got {shape}")
+    return shape  # type: ignore[return-value]
+
+
+def _resolve_isa(path_text: str) -> Path:
+    path = Path(os.path.expandvars(path_text)).expanduser().resolve()
+    if not path.is_file():
+        raise GemmIsaRunnerError(f"ISA source does not exist or is not a file: {path}")
+    if path.suffix.lower() != ".s":
+        raise GemmIsaRunnerError(f"--isa must name an AMDGPU .s source, got: {path}")
+    return path
+
+
+def _validate_symbol_token(symbol: str, context: str) -> str:
+    """Accept ordinary C identifiers and Itanium-mangled symbol names."""
+
+    if not _SYMBOL_RE.fullmatch(symbol):
+        raise GemmIsaRunnerError(
+            f"{context} contains unsupported kernel symbol {symbol!r}; "
+            "expected a C identifier or Itanium-mangled name"
+        )
+    return symbol
+
+
+def _strip_asm_comment(text: str) -> str:
+    return re.split(r";|//|#", text, maxsplit=1)[0].strip()
+
+
+def _parse_asm_directive_symbols(
+    source: str,
+    directive: str,
+    *,
+    allow_many_per_line: bool,
+) -> tuple[str, ...]:
+    """Parse symbol operands from one GNU-style assembly directive."""
+
+    lines = re.findall(
+        rf"(?m)^\s*\.{re.escape(directive)}\b(?P<body>.*)$",
+        source,
+    )
+    symbols: list[str] = []
+    for body in lines:
+        operand_text = _strip_asm_comment(body)
+        operands = [
+            item
+            for item in re.split(r"[\s,]+", operand_text)
+            if item
+        ]
+        if not operands:
+            raise GemmIsaRunnerError(
+                f".{directive} directive has no symbol; pass --symbol explicitly"
+            )
+        if not allow_many_per_line and len(operands) != 1:
+            raise GemmIsaRunnerError(
+                f".{directive} directive must contain exactly one symbol, got "
+                f"{operands}; pass --symbol explicitly"
+            )
+        symbols.extend(
+            _validate_symbol_token(item, f".{directive} directive")
+            for item in operands
+        )
+    return tuple(symbols)
+
+
+def _parse_function_type_symbols(source: str) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for line in source.splitlines():
+        clean = _strip_asm_comment(line)
+        match = re.fullmatch(
+            rf"\s*\.type\s+({_SYMBOL_TOKEN})\s*,\s*[@%]function\s*",
+            clean,
+        )
+        if match:
+            symbols.append(match.group(1))
+    return tuple(symbols)
+
+
+def _parse_metadata_symbols(source: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return metadata (.name values, .symbol values without the .kd suffix)."""
+
+    names: list[str] = []
+    symbols: list[str] = []
+    for block_match in _METADATA_BLOCK_RE.finditer(source):
+        block = block_match.group("body")
+        for line in block.splitlines():
+            clean = line.split("#", maxsplit=1)[0].strip()
+            name_match = re.fullmatch(
+                rf"\.name:\s*['\"]?({_SYMBOL_TOKEN})['\"]?\s*",
+                clean,
+            )
+            if name_match:
+                names.append(name_match.group(1))
+                continue
+            symbol_match = re.fullmatch(
+                rf"\.symbol:\s*['\"]?({_SYMBOL_TOKEN})\.kd['\"]?\s*",
+                clean,
+            )
+            if symbol_match:
+                symbols.append(symbol_match.group(1))
+    return tuple(names), tuple(symbols)
+
+
+def _one_candidate(
+    candidates: Sequence[str],
+    source_kind: str,
+) -> str | None:
+    unique = tuple(dict.fromkeys(candidates))
+    if len(unique) > 1:
+        raise GemmIsaRunnerError(
+            f"multiple kernel candidates from {source_kind}: {list(unique)}; "
+            "pass --symbol explicitly"
+        )
+    return unique[0] if unique else None
+
+
+def detect_kernel_symbol_from_text(source: str) -> str:
+    """Safely detect one kernel symbol from complete AMDGPU assembly text.
+
+    ``.amdhsa_kernel`` is authoritative.  Metadata and global/function
+    directives are cross-checked when present, and are used as fallbacks only
+    when no kernel descriptor directive exists.
+    """
+
+    descriptor = _one_candidate(
+        _parse_asm_directive_symbols(
+            source,
+            "amdhsa_kernel",
+            allow_many_per_line=False,
+        ),
+        ".amdhsa_kernel",
+    )
+    globals_ = _parse_asm_directive_symbols(
+        source,
+        "globl",
+        allow_many_per_line=True,
+    )
+    function_types = _parse_function_type_symbols(source)
+    metadata_names, metadata_symbols = _parse_metadata_symbols(source)
+    metadata_name = _one_candidate(metadata_names, "metadata .name")
+    metadata_symbol = _one_candidate(metadata_symbols, "metadata .symbol")
+    if (
+        metadata_name is not None
+        and metadata_symbol is not None
+        and metadata_name != metadata_symbol
+    ):
+        raise GemmIsaRunnerError(
+            f"metadata .name {metadata_name!r} conflicts with metadata .symbol "
+            f"{metadata_symbol!r}.kd; pass --symbol explicitly"
+        )
+    metadata = metadata_name or metadata_symbol
+
+    if descriptor is not None:
+        if metadata is not None and metadata != descriptor:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} conflicts with metadata kernel "
+                f"{metadata!r}; pass --symbol explicitly"
+            )
+        if globals_ and descriptor not in globals_:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} is not declared by .globl "
+                f"{list(dict.fromkeys(globals_))}; pass --symbol explicitly"
+            )
+        if function_types and descriptor not in function_types:
+            raise GemmIsaRunnerError(
+                f".amdhsa_kernel {descriptor!r} has no matching "
+                f".type <symbol>,@function directive; pass --symbol explicitly"
+            )
+        return descriptor
+
+    if metadata is not None:
+        if globals_ and metadata not in globals_:
+            raise GemmIsaRunnerError(
+                f"metadata kernel {metadata!r} conflicts with .globl candidates "
+                f"{list(dict.fromkeys(globals_))}; pass --symbol explicitly"
+            )
+        if function_types and metadata not in function_types:
+            raise GemmIsaRunnerError(
+                f"metadata kernel {metadata!r} has no matching "
+                f".type <symbol>,@function directive; pass --symbol explicitly"
+            )
+        return metadata
+
+    global_candidates = tuple(dict.fromkeys(globals_))
+    if function_types:
+        typed = set(function_types)
+        global_candidates = tuple(
+            symbol for symbol in global_candidates if symbol in typed
+        )
+    fallback = _one_candidate(global_candidates, ".globl/.type fallback")
+    if fallback is None:
+        raise GemmIsaRunnerError(
+            "could not detect a kernel symbol: no .amdhsa_kernel, metadata "
+            ".name/.symbol, or unique .globl function candidate; pass "
+            "--symbol explicitly"
+        )
+    return fallback
+
+
+def _read_isa_source(isa: Path) -> str:
+    try:
+        return isa.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise GemmIsaRunnerError(
+            f"failed to read ISA source: {isa}: {exc}"
+        ) from exc
+
+
+def detect_kernel_symbol(isa: Path) -> str:
+    return detect_kernel_symbol_from_text(_read_isa_source(isa))
+
+
+def resolve_kernel_symbol_from_text(source: str, override: str | None) -> str:
+    """Resolve a symbol and require an override to match the actual ISA."""
+
+    detected = detect_kernel_symbol_from_text(source)
+    if override is None:
+        return detected
+
+    explicit = _validate_symbol_token(override, "--symbol")
+    if explicit != detected:
+        raise GemmIsaRunnerError(
+            f"--symbol {explicit!r} does not match the actual ISA kernel "
+            f"symbol {detected!r}"
+        )
+    return detected
+
+
+def resolve_kernel_symbol(isa: Path, override: str | None) -> str:
+    return resolve_kernel_symbol_from_text(_read_isa_source(isa), override)
+
+
+def _required_int(
+    text: str,
+    pattern: str,
+    label: str,
+) -> int:
+    matches = re.findall(pattern, text)
+    if len(matches) != 1:
+        raise GemmIsaRunnerError(
+            f"ISA contract requires exactly one {label}, found {len(matches)}"
+        )
+    try:
+        return int(matches[0], 0)
+    except ValueError as exc:
+        raise GemmIsaRunnerError(
+            f"ISA contract has invalid integer for {label}: {matches[0]!r}"
+        ) from exc
+
+
+def _descriptor_body(source: str, symbol: str) -> str:
+    matches = re.findall(
+        rf"(?ms)^[ \t]*\.amdhsa_kernel[ \t]+{re.escape(symbol)}[ \t]*$"
+        rf"(?P<body>.*?)"
+        rf"^[ \t]*\.end_amdhsa_kernel[ \t]*$",
+        source,
+    )
+    if len(matches) != 1:
+        raise GemmIsaRunnerError(
+            f"ISA contract requires exactly one .amdhsa_kernel block for "
+            f"{symbol!r}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _metadata_body(source: str) -> str:
+    matches = [
+        match.group("body")
+        for match in _METADATA_BLOCK_RE.finditer(source)
+    ]
+    if len(matches) != 1:
+        raise GemmIsaRunnerError(
+            "ISA contract requires exactly one .amdgpu_metadata block, "
+            f"found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _descriptor_int(body: str, directive: str) -> int:
+    return _required_int(
+        body,
+        rf"(?m)^[ \t]*\.{re.escape(directive)}[ \t]+"
+        rf"(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:[;#].*)?$",
+        f".{directive}",
+    )
+
+
+def _metadata_int(body: str, field: str) -> int:
+    return _required_int(
+        body,
+        rf"(?m)^[ \t]*\.{re.escape(field)}:[ \t]*"
+        rf"(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:#.*)?$",
+        f"metadata .{field}",
+    )
+
+
+def parse_assembly_resources(
+    source: str,
+    symbol: str,
+) -> AssemblyResources:
+    """Parse resource values needed for logging and code-object patching."""
+
+    actual_symbol = detect_kernel_symbol_from_text(source)
+    if actual_symbol != symbol:
+        raise GemmIsaRunnerError(
+            f"selected symbol {symbol!r} does not match actual ISA symbol "
+            f"{actual_symbol!r}"
+        )
+    descriptor = _descriptor_body(source, symbol)
+    metadata = _metadata_body(source)
+    return AssemblyResources(
+        descriptor_lds=_descriptor_int(
+            descriptor, "amdhsa_group_segment_fixed_size"
+        ),
+        metadata_lds=_metadata_int(metadata, "group_segment_fixed_size"),
+        kernarg_size=_metadata_int(metadata, "kernarg_segment_size"),
+        metadata_vgpr=_metadata_int(metadata, "vgpr_count"),
+        metadata_sgpr=_metadata_int(metadata, "sgpr_count"),
+    )
+
+
+def _resolve_clang(override: str | None) -> Path:
+    """Resolve explicit ``--clang`` or require the fixed default clang.
+
+    An explicit override is interpreted as a path first and then as a command
+    name for ``shutil.which``.  Without an override, no ROCm or PATH fallback
+    is attempted.
+    """
+
+    if override is not None:
+        expanded = os.path.expandvars(os.path.expanduser(override))
+        candidate = Path(expanded)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+        found = shutil.which(expanded)
+        if found:
+            return Path(found).resolve()
+        raise GemmIsaRunnerError(
+            f"--clang is neither an executable file nor a command found on "
+            f"PATH: {override}"
+        )
+
+    if DEFAULT_CLANG.is_file() and os.access(DEFAULT_CLANG, os.X_OK):
+        return DEFAULT_CLANG.resolve()
+    raise GemmIsaRunnerError(
+        f"fixed default AMDGPU clang is missing or not executable: "
+        f"{DEFAULT_CLANG}; pass --clang explicitly"
+    )
+
+
+def _clang_uses_default_runtime_libraries(clang: Path) -> bool:
+    """Return whether clang is the fixed build with extra runtime dependencies."""
+
+    return clang.resolve() == DEFAULT_CLANG.resolve()
+
+
+def _prepend_default_clang_runtime_libraries() -> None:
+    """Prepend fixed-clang runtime dependencies without dropping user entries."""
+
+    requested = [str(path) for path in DEFAULT_CLANG_RUNTIME_LIBRARIES]
+    existing = [
+        entry
+        for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+        if entry
+    ]
+    combined: list[str] = []
+    for entry in (*requested, *existing):
+        if entry not in combined:
+            combined.append(entry)
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(combined)
+
+
+def _run_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        process = subprocess.run(
+            [str(part) for part in command],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        raise CompileError(command, 127, "", str(exc)) from exc
+    if process.returncode:
+        raise CompileError(
+            command,
+            process.returncode,
+            process.stdout,
+            process.stderr,
+        )
+    return process
+
+
+# gfx1250 divides the 384 KiB per-WGP SRAM between the LDS partition and the
+# vector cache, and COMPUTE_PGM_RSRC3.TCP_SPLIT selects the division.  The
+# clang 22 assembler in the ROCm container exposes no directive for that field,
+# so an ISA source asks for a value with the absolute symbol below and the
+# linked code object is rewritten here, before ROCr loads it.  ROCr does not
+# validate RSRC3; the field is forwarded to CP/SPI as written.
+TCP_SPLIT_REQUEST_SYMBOL = "__aiter_tcp_split"
+
+KERNEL_DESCRIPTOR_SIZE = 64
+_KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET = 0
+_KD_COMPUTE_PGM_RSRC3_OFFSET = 44
+# Field positions match LLVM's AMDHSAKernelDescriptor.h for gfx12.
+_RSRC3_TCP_SPLIT_SHIFT = 18
+_RSRC3_TCP_SPLIT_MASK = 0x7
+_RSRC3_INST_PREF_SIZE_SHIFT = 4
+_RSRC3_INST_PREF_SIZE_MASK = 0xFF
+_ELF64_SECTION_HEADER_SIZE = 64
+_ELF64_SYMBOL_SIZE = 24
+_SHT_SYMTAB = 2
+_SHT_STRTAB = 3
+_SHT_NOBITS = 8
+_SHT_DYNSYM = 11
+
+
+def parse_requested_tcp_split(source: str) -> int | None:
+    """Read the optional ``.set __aiter_tcp_split, N`` resource request."""
+
+    matches = re.findall(
+        rf"(?m)^[ \t]*\.set[ \t]+{re.escape(TCP_SPLIT_REQUEST_SYMBOL)}[ \t]*,"
+        rf"[ \t]*(0[xX][0-9A-Fa-f]+|[0-9]+)[ \t]*(?:(?:[;#]|//).*)?$",
+        source,
+    )
+    if not matches:
+        return None
+    values = {int(value, 0) for value in matches}
+    if len(values) != 1:
+        raise GemmIsaRunnerError(
+            f"ISA sets {TCP_SPLIT_REQUEST_SYMBOL} to conflicting values "
+            f"{sorted(values)}"
+        )
+    value = values.pop()
+    if not 0 <= value <= _RSRC3_TCP_SPLIT_MASK:
+        raise GemmIsaRunnerError(
+            f".set {TCP_SPLIT_REQUEST_SYMBOL} must be in 0..."
+            f"{_RSRC3_TCP_SPLIT_MASK} because COMPUTE_PGM_RSRC3.TCP_SPLIT is "
+            f"bits [20:18], got {value}"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class _ElfSection:
+    index: int
+    name_offset: int
+    type: int
+    addr: int
+    offset: int
+    size: int
+    link: int
+    entsize: int
+
+
+def _elf64_sections(data: bytes, label: str) -> tuple[_ElfSection, ...]:
+    if len(data) < _ELF64_SECTION_HEADER_SIZE or data[:4] != b"\x7fELF":
+        raise GemmIsaRunnerError(f"{label} is not an ELF file")
+    if data[4] != 2:
+        raise GemmIsaRunnerError(
+            f"{label} is not ELFCLASS64 (EI_CLASS={data[4]})"
+        )
+    if data[5] != 1:
+        raise GemmIsaRunnerError(
+            f"{label} is not ELFDATA2LSB (EI_DATA={data[5]})"
+        )
+    (e_shoff,) = struct.unpack_from("<Q", data, 0x28)
+    e_shentsize, e_shnum = struct.unpack_from("<HH", data, 0x3A)
+    if e_shentsize != _ELF64_SECTION_HEADER_SIZE:
+        raise GemmIsaRunnerError(
+            f"{label} has unexpected e_shentsize {e_shentsize}, "
+            f"expected {_ELF64_SECTION_HEADER_SIZE}"
+        )
+    if e_shoff == 0 or e_shnum == 0:
+        raise GemmIsaRunnerError(f"{label} has no section header table")
+    if e_shoff + e_shnum * e_shentsize > len(data):
+        raise GemmIsaRunnerError(f"{label} section header table is truncated")
+    sections = []
+    for index in range(e_shnum):
+        (
+            name_offset,
+            kind,
+            _flags,
+            addr,
+            offset,
+            size,
+            link,
+            _info,
+            _align,
+            entsize,
+        ) = struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + index * e_shentsize)
+        if kind != _SHT_NOBITS and offset + size > len(data):
+            raise GemmIsaRunnerError(
+                f"{label} section {index} extends past the end of the file"
+            )
+        sections.append(
+            _ElfSection(index, name_offset, kind, addr, offset, size, link, entsize)
+        )
+    return tuple(sections)
+
+
+def _elf64_string(
+    data: bytes,
+    table: _ElfSection,
+    offset: int,
+    label: str,
+) -> str:
+    if table.type != _SHT_STRTAB:
+        raise GemmIsaRunnerError(
+            f"{label} section {table.index} is not a string table"
+        )
+    if offset >= table.size:
+        raise GemmIsaRunnerError(
+            f"{label} string offset {offset} is outside section {table.index}"
+        )
+    start = table.offset + offset
+    end = data.find(b"\x00", start, table.offset + table.size)
+    if end < 0:
+        raise GemmIsaRunnerError(
+            f"{label} string at offset {offset} is unterminated"
+        )
+    return data[start:end].decode("utf-8", errors="replace")
+
+
+def _find_kernel_descriptor_offset(
+    data: bytes,
+    sections: Sequence[_ElfSection],
+    kd_name: str,
+    label: str,
+) -> tuple[int, str]:
+    """Map ``<kernel>.kd`` to the single file offset holding its 64 bytes."""
+
+    origins: dict[int, str] = {}
+    symbol_tables = 0
+    for section in sections:
+        if section.type not in (_SHT_SYMTAB, _SHT_DYNSYM):
+            continue
+        if section.entsize != _ELF64_SYMBOL_SIZE:
+            raise GemmIsaRunnerError(
+                f"{label} symbol table {section.index} has sh_entsize "
+                f"{section.entsize}, expected {_ELF64_SYMBOL_SIZE}"
+            )
+        if section.link >= len(sections):
+            raise GemmIsaRunnerError(
+                f"{label} symbol table {section.index} links to missing "
+                f"string table {section.link}"
+            )
+        strtab = sections[section.link]
+        symbol_tables += 1
+        for index in range(section.size // _ELF64_SYMBOL_SIZE):
+            base = section.offset + index * _ELF64_SYMBOL_SIZE
+            st_name, _info, _other, st_shndx, st_value, st_size = (
+                struct.unpack_from("<IBBHQQ", data, base)
+            )
+            if st_name == 0:
+                continue
+            if _elf64_string(data, strtab, st_name, label) != kd_name:
+                continue
+            if st_size < KERNEL_DESCRIPTOR_SIZE:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} has st_size {st_size}, expected at "
+                    f"least {KERNEL_DESCRIPTOR_SIZE}"
+                )
+            if st_shndx == 0 or st_shndx >= len(sections):
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} has unusable st_shndx {st_shndx}"
+                )
+            host = sections[st_shndx]
+            if host.type == _SHT_NOBITS:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} lives in SHT_NOBITS section "
+                    f"{host.index}, which has no file bytes to patch"
+                )
+            if st_value < host.addr:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} st_value 0x{st_value:x} is below "
+                    f"section {host.index} sh_addr 0x{host.addr:x}"
+                )
+            delta = st_value - host.addr
+            if delta + KERNEL_DESCRIPTOR_SIZE > host.size:
+                raise GemmIsaRunnerError(
+                    f"{label}: {kd_name} does not fit inside section "
+                    f"{host.index}"
+                )
+            origins.setdefault(
+                host.offset + delta,
+                f"section {host.index} via symbol table {section.index}",
+            )
+    if symbol_tables == 0:
+        raise GemmIsaRunnerError(
+            f"{label} has neither .symtab nor .dynsym, so {kd_name} cannot be "
+            f"located"
+        )
+    if not origins:
+        raise GemmIsaRunnerError(f"{label} has no symbol named {kd_name}")
+    if len(origins) != 1:
+        found = ", ".join(
+            f"0x{offset:x} ({origin})" for offset, origin in sorted(origins.items())
+        )
+        raise GemmIsaRunnerError(
+            f"{label} resolves {kd_name} to {len(origins)} distinct file "
+            f"offsets: {found}"
+        )
+    return next(iter(origins.items()))
+
+
+def patch_code_object_tcp_split(
+    code_object: Path,
+    kernel_symbol: str,
+    tcp_split: int,
+    expected_group_segment_fixed_size: int,
+) -> str:
+    """Rewrite COMPUTE_PGM_RSRC3.TCP_SPLIT in a linked code object."""
+
+    if not 0 <= tcp_split <= _RSRC3_TCP_SPLIT_MASK:
+        raise GemmIsaRunnerError(
+            f"TCP_SPLIT must be in 0...{_RSRC3_TCP_SPLIT_MASK}, got {tcp_split}"
+        )
+    label = str(code_object)
+    try:
+        data = bytearray(code_object.read_bytes())
+    except OSError as exc:
+        raise GemmIsaRunnerError(
+            f"failed to read code object {label}: {exc}"
+        ) from exc
+    sections = _elf64_sections(bytes(data), label)
+    kd_name = f"{_validate_symbol_token(kernel_symbol, 'kernel symbol')}.kd"
+    offset, origin = _find_kernel_descriptor_offset(
+        bytes(data),
+        sections,
+        kd_name,
+        label,
+    )
+
+    (group_segment,) = struct.unpack_from(
+        "<I",
+        data,
+        offset + _KD_GROUP_SEGMENT_FIXED_SIZE_OFFSET,
+    )
+    if group_segment != expected_group_segment_fixed_size:
+        raise GemmIsaRunnerError(
+            f"{label}: {kd_name} declares group_segment_fixed_size "
+            f"{group_segment}, but the ISA descriptor declares "
+            f"{expected_group_segment_fixed_size}; refusing to patch a "
+            f"descriptor that is not the one that was assembled"
+        )
+    (old_rsrc3,) = struct.unpack_from(
+        "<I",
+        data,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+    )
+    old_split = (old_rsrc3 >> _RSRC3_TCP_SPLIT_SHIFT) & _RSRC3_TCP_SPLIT_MASK
+    inst_pref_size = (
+        old_rsrc3 >> _RSRC3_INST_PREF_SIZE_SHIFT
+    ) & _RSRC3_INST_PREF_SIZE_MASK
+    new_rsrc3 = (
+        old_rsrc3 & ~(_RSRC3_TCP_SPLIT_MASK << _RSRC3_TCP_SPLIT_SHIFT)
+    ) | (tcp_split << _RSRC3_TCP_SPLIT_SHIFT)
+    struct.pack_into(
+        "<I",
+        data,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+        new_rsrc3,
+    )
+    try:
+        code_object.write_bytes(bytes(data))
+        verified = code_object.read_bytes()
+    except OSError as exc:
+        raise GemmIsaRunnerError(
+            f"failed to rewrite code object {label}: {exc}"
+        ) from exc
+    if verified != bytes(data):
+        raise GemmIsaRunnerError(
+            f"{label} does not read back byte-identical after patching"
+        )
+    (read_back,) = struct.unpack_from(
+        "<I",
+        verified,
+        offset + _KD_COMPUTE_PGM_RSRC3_OFFSET,
+    )
+    if read_back != new_rsrc3:
+        raise GemmIsaRunnerError(
+            f"{label}: RSRC3 reads back 0x{read_back:08x}, expected "
+            f"0x{new_rsrc3:08x}"
+        )
+    return (
+        f"patched TCP_SPLIT {old_split} -> {tcp_split}, "
+        f"RSRC3 0x{old_rsrc3:08x} -> 0x{new_rsrc3:08x} "
+        f"(INST_PREF_SIZE {inst_pref_size} and every other RSRC3 bit "
+        f"unchanged; group_segment_fixed_size {group_segment}; {kd_name} at "
+        f"file offset 0x{offset:x}, {origin})"
+    )
+
+
+def make_compile_isa_commands(
+    isa: Path,
+    clang: Path,
+    work_dir: Path,
+    symbol: str | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...], Path, Path]:
+    """Return the exact assemble/link commands and their output paths."""
+
+    artifact_stem = (
+        _validate_symbol_token(symbol, "compile symbol")
+        if symbol is not None
+        else isa.stem
+    )
+    obj = work_dir / f"{artifact_stem}.o"
+    code_object = work_dir / f"{artifact_stem}.co"
+    common = (
+        str(clang),
+        "-target",
+        "amdgcn-amd-amdhsa",
+        f"-mcpu={ARCH}",
+        f"-mcode-object-version={CODE_OBJECT_VERSION}",
+    )
+    assemble = (
+        str(clang),
+        "-x",
+        "assembler",
+        *common[1:],
+        "-c",
+        str(isa),
+        "-o",
+        str(obj),
+    )
+    link = (
+        *common,
+        "-nostdlib",
+        "-Wl,--no-undefined",
+        "-shared",
+        str(obj),
+        "-o",
+        str(code_object),
+    )
+    return assemble, link, obj, code_object
+
+
+def compile_isa(
+    isa: Path,
+    clang: Path,
+    work_dir: Path,
+    symbol: str | None = None,
+) -> BuildResult:
+    """Assemble and link a complete AMDGPU source without changing it."""
+
+    assemble, link, obj, code_object = make_compile_isa_commands(
+        isa,
+        clang,
+        work_dir,
+        symbol,
+    )
+    _run_command(assemble)
+    _run_command(link)
+    if not code_object.is_file() or code_object.stat().st_size == 0:
+        raise GemmIsaRunnerError(
+            f"clang reported success but did not create a non-empty code object: "
+            f"{code_object}"
+        )
+    source = _read_isa_source(isa)
+    requested_tcp_split = parse_requested_tcp_split(source)
+    patches: tuple[str, ...] = ()
+    if requested_tcp_split is not None:
+        kernel_symbol = resolve_kernel_symbol_from_text(source, symbol)
+        patches = (
+            patch_code_object_tcp_split(
+                code_object,
+                kernel_symbol,
+                requested_tcp_split,
+                _descriptor_int(
+                    _descriptor_body(source, kernel_symbol),
+                    "amdhsa_group_segment_fixed_size",
+                ),
+            ),
+        )
+    return BuildResult(
+        code_object=code_object,
+        commands=(assemble, link),
+        patches=patches,
+        object_file=obj,
+    )
+
+
+def _is_power_of_two(value: int) -> bool:
+    return value > 0 and (value & (value - 1)) == 0
+
+
+def make_launch_geometry(
+    m: int,
+    n: int,
+    k: int,
+    profile: KernelProfile = KERNEL_PROFILE_256,
+) -> LaunchGeometry:
+    """Validate a shape and reproduce the C++ persistent-cluster geometry."""
+
+    for name, value in (("M", m), ("N", n), ("K", k)):
+        if value <= 0:
+            raise GemmIsaRunnerError(f"{name} must be positive, got {value}")
+        if value > 0xFFFFFFFF:
+            raise GemmIsaRunnerError(
+                f"{name}={value} does not fit the uint32 preload kernarg"
+            )
+    if k % MXFP4_SCALE_BLOCK:
+        raise GemmIsaRunnerError(
+            f"K={k} must be divisible by the MXFP4 scale block "
+            f"{MXFP4_SCALE_BLOCK}"
+        )
+    scale_shuffle_k = MXFP4_SCALE_BLOCK * 4
+    if k % scale_shuffle_k:
+        raise GemmIsaRunnerError(
+            f"K={k} must be divisible by {scale_shuffle_k} for the "
+            "MXFP4 scale shuffle"
+        )
+    if k % profile.k_multiple:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} requires K to be divisible by "
+            f"{profile.k_multiple} with no K tail; got K={k}"
+        )
+
+    tile_m, tile_n = profile.wg_tile
+    if m % tile_m or n % tile_n:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} requires exact {tile_m}x{tile_n} WG "
+            f"tiles with no M/N boundary tiles; got M={m}, N={n}"
+        )
+
+    tiles_x = n // tile_n
+    tiles_y = m // tile_m
+    cluster_x, cluster_y, cluster_z = profile.cluster
+    if cluster_z != 1:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} requires unsupported cluster_z={cluster_z}; "
+            "this dense GEMM launcher is two-dimensional"
+        )
+    if tiles_x < cluster_x or tiles_x % cluster_x:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} cluster_x={cluster_x} requires "
+            f"N/{tile_n}={tiles_x} tiles to be a "
+            f"positive multiple of {cluster_x}; N must be a multiple of "
+            f"{tile_n * cluster_x}"
+        )
+    if tiles_y < cluster_y or tiles_y % cluster_y:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} cluster_y={cluster_y} requires "
+            f"M/{tile_m}={tiles_y} tiles to be a "
+            f"positive multiple of {cluster_y}; M must be a multiple of "
+            f"{tile_m * cluster_y}"
+        )
+
+    cluster_size = cluster_x * cluster_y * cluster_z
+    if profile.persistent_tg % cluster_size:
+        raise GemmIsaRunnerError(
+            f"persistent_tg={profile.persistent_tg} is not divisible by "
+            f"cluster size {cluster_size}"
+        )
+    persistent_clusters = profile.persistent_tg // cluster_size
+    if (
+        profile.persistent_grid_y <= 0
+        or persistent_clusters % profile.persistent_grid_y
+    ):
+        raise GemmIsaRunnerError(
+            f"persistent grid_y={profile.persistent_grid_y} must divide "
+            f"{persistent_clusters} clusters"
+        )
+    grid_y = profile.persistent_grid_y
+    grid_x = persistent_clusters // grid_y
+    if not (
+        _is_power_of_two(persistent_clusters)
+        and _is_power_of_two(grid_x)
+        and _is_power_of_two(grid_y)
+    ):
+        raise GemmIsaRunnerError(
+            f"persistent cluster count/grid must be powers of two; got "
+            f"clusters={persistent_clusters}, gridX={grid_x}, gridY={grid_y}"
+        )
+
+    log2_grid = (grid_x.bit_length() - 1, grid_y.bit_length() - 1)
+    persistent_stride = 1 << sum(log2_grid)
+    if persistent_stride != persistent_clusters:
+        raise GemmIsaRunnerError(
+            f"profile {profile.name} persistent stride {persistent_stride} "
+            f"does not equal physical cluster count {persistent_clusters}"
+        )
+    logical_cluster_grid = (
+        tiles_x // cluster_x,
+        tiles_y // cluster_y,
+    )
+    return LaunchGeometry(
+        grid=(grid_x * cluster_x, grid_y * cluster_y, 1),
+        block=profile.block,
+        cluster=profile.cluster,
+        tiles=(tiles_x, tiles_y),
+        cluster_grid=(grid_x, grid_y),
+        log2_grid=log2_grid,
+        logical_cluster_grid=logical_cluster_grid,
+        logical_wg_tasks=tiles_x * tiles_y,
+        logical_cluster_tasks=(
+            logical_cluster_grid[0] * logical_cluster_grid[1]
+        ),
+        persistent_stride=persistent_stride,
+    )
+
+
+def _checked_unsigned(name: str, value: int, bits: int) -> int:
+    maximum = (1 << bits) - 1
+    if not 0 <= int(value) <= maximum:
+        raise GemmIsaRunnerError(
+            f"{name}={value} does not fit an unsigned {bits}-bit ABI field"
+        )
+    return int(value)
+
+
+def _pack_kernarg_fields(
+    fields: Mapping[str, int],
+    *,
+    layout: tuple[tuple[str, int, str], ...] = KERNARG_LAYOUT,
+    size: int = KERNARG_SIZE,
+) -> bytes:
+    """Pack named fields at explicit C++ offsets; no implicit alignment."""
+
+    expected = {name for name, _offset, _kind in layout}
+    missing = expected.difference(fields)
+    extra = set(fields).difference(expected)
+    if missing or extra:
+        raise GemmIsaRunnerError(
+            f"invalid kernarg fields: missing={sorted(missing)}, extra={sorted(extra)}"
+        )
+
+    payload = bytearray(size)
+    for name, offset, kind in layout:
+        field_size = struct.calcsize(f"<{kind}")
+        if offset < 0 or offset + field_size > size:
+            raise GemmIsaRunnerError(
+                f"kernarg field {name} at {offset} with size {field_size} "
+                f"does not fit the {size}-byte ABI"
+            )
+        bits = 64 if kind == "Q" else 32
+        value = _checked_unsigned(name, fields[name], bits)
+        struct.pack_into(f"<{kind}", payload, offset, value)
+    return bytes(payload)
+
+
+def pack_mxfp4_kernargs(
+    *,
+    ptr_d: int,
+    ptr_a: int,
+    ptr_b: int,
+    ptr_scale_a: int,
+    ptr_scale_b: int,
+    m: int,
+    n: int,
+    k: int,
+    geometry: LaunchGeometry,
+    profile: KernelProfile = KERNEL_PROFILE_256,
+) -> bytes:
+    """Build the profile's exact preload-SGPR MXFP4 argument payload."""
+
+    if geometry.block != profile.block or geometry.cluster != profile.cluster:
+        raise GemmIsaRunnerError(
+            f"launch geometry block/cluster "
+            f"{geometry.block}/{geometry.cluster} does not match profile "
+            f"{profile.block}/{profile.cluster}"
+        )
+
+    stride_d = n * 2
+    stride_a = k // 2
+    stride_b = k // 2
+    stride_scale_a = k // MXFP4_SCALE_BLOCK
+    stride_scale_b = k // MXFP4_SCALE_BLOCK
+    return _pack_kernarg_fields(
+        {
+            "ptr_D": ptr_d,
+            "ptr_A": ptr_a,
+            "ptr_B": ptr_b,
+            "ptr_ScaleA": ptr_scale_a,
+            "ptr_ScaleB": ptr_scale_b,
+            "strideD0": stride_d,
+            "strideA0": stride_a,
+            "strideB0": stride_b,
+            "ScaleA_stride0": stride_scale_a,
+            "ScaleB_stride0": stride_scale_b,
+            "M": m,
+            "N": n,
+            "K": k,
+            "log2_grid_x": geometry.log2_grid[0],
+            "log2_grid_y": geometry.log2_grid[1],
+        },
+        layout=profile.kernarg_layout,
+        size=profile.kernarg_size,
+    )
+
+
+class _Dim3(ctypes.Structure):
+    _fields_ = (
+        ("x", ctypes.c_uint),
+        ("y", ctypes.c_uint),
+        ("z", ctypes.c_uint),
+    )
+
+
+class _HipLaunchAttributeValue(ctypes.Union):
+    # The public HIP ABI reserves 64 bytes.  The pointer member forces the same
+    # 8-byte union alignment as the complete C union.
+    _fields_ = (
+        ("pad", ctypes.c_ubyte * 64),
+        ("_pointer_alignment", ctypes.c_void_p),
+        ("clusterDim", _Dim3),
+    )
+
+
+class _HipLaunchAttribute(ctypes.Structure):
+    # hip_runtime_api.h explicitly pads the enum to an 8-byte value offset.
+    _fields_ = (
+        ("id", ctypes.c_int),
+        ("_pad", ctypes.c_char * 4),
+        ("value", _HipLaunchAttributeValue),
+    )
+
+
+class _HipLaunchConfig(ctypes.Structure):
+    _fields_ = (
+        ("gridDimX", ctypes.c_uint),
+        ("gridDimY", ctypes.c_uint),
+        ("gridDimZ", ctypes.c_uint),
+        ("blockDimX", ctypes.c_uint),
+        ("blockDimY", ctypes.c_uint),
+        ("blockDimZ", ctypes.c_uint),
+        ("sharedMemBytes", ctypes.c_uint),
+        ("hStream", ctypes.c_void_p),
+        ("attrs", ctypes.POINTER(_HipLaunchAttribute)),
+        ("numAttrs", ctypes.c_uint),
+    )
+
+
+_HIP_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION = 4
+_HIP_LAUNCH_PARAM_BUFFER_POINTER = ctypes.c_void_p(1)
+_HIP_LAUNCH_PARAM_BUFFER_SIZE = ctypes.c_void_p(2)
+_HIP_LAUNCH_PARAM_END = ctypes.c_void_p(3)
+
+
+def _make_hip_launch_config(
+    geometry: LaunchGeometry,
+    stream: ctypes.c_void_p,
+) -> tuple[Any, _HipLaunchConfig]:
+    """Build profile-derived HIP dimensions and any required cluster attribute.
+
+    A 1x1x1 launch is an ordinary non-cluster dispatch.  Omitting the
+    attribute is significant on gfx1250: ClusterID remains zero, cluster
+    barriers are NOPs, and cluster loads follow their documented downgrade to
+    global loads.
+    """
+
+    if geometry.cluster == (1, 1, 1):
+        attributes = None
+        attribute_pointer = ctypes.POINTER(_HipLaunchAttribute)()
+        attribute_count = 0
+    else:
+        attributes = (_HipLaunchAttribute * 1)()
+        attributes[0].id = _HIP_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION
+        attributes[0].value.clusterDim = _Dim3(*geometry.cluster)
+        attribute_pointer = ctypes.cast(
+            attributes,
+            ctypes.POINTER(_HipLaunchAttribute),
+        )
+        attribute_count = 1
+    config = _HipLaunchConfig(
+        gridDimX=geometry.grid[0],
+        gridDimY=geometry.grid[1],
+        gridDimZ=geometry.grid[2],
+        blockDimX=geometry.block[0],
+        blockDimY=geometry.block[1],
+        blockDimZ=geometry.block[2],
+        # The assembly descriptor owns its static LDS segment; no dynamic LDS.
+        sharedMemBytes=0,
+        hStream=stream,
+        attrs=attribute_pointer,
+        numAttrs=attribute_count,
+    )
+    return attributes, config
+
+
+class _HipRuntime:
+    """Minimal checked HIP runtime/driver binding used by the dense runner."""
+
+    def __init__(self) -> None:
+        rocm = Path(os.environ.get("ROCM_PATH", "/opt/rocm"))
+        candidates = (
+            rocm / "lib" / "libamdhip64.so",
+            rocm / "lib64" / "libamdhip64.so",
+            Path("libamdhip64.so"),
+            Path("libamdhip64.so.7"),
+            Path("libamdhip64.so.6"),
+        )
+        failures: list[str] = []
+        self.lib: Any | None = None
+        for candidate in candidates:
+            try:
+                self.lib = ctypes.CDLL(str(candidate))
+                break
+            except OSError as exc:
+                failures.append(f"{candidate}: {exc}")
+        if self.lib is None:
+            raise GemmIsaRunnerError(
+                "libamdhip64.so was not found; tried:\n  " + "\n  ".join(failures)
+            )
+
+        void_p = ctypes.c_void_p
+        self._bind("hipGetErrorString", [ctypes.c_int], ctypes.c_char_p)
+        self._bind("hipInit", [ctypes.c_uint], ctypes.c_int)
+        self._bind("hipSetDevice", [ctypes.c_int], ctypes.c_int)
+        self._bind(
+            "hipModuleLoadData",
+            [ctypes.POINTER(void_p), void_p],
+            ctypes.c_int,
+        )
+        self._bind("hipModuleUnload", [void_p], ctypes.c_int)
+        self._bind(
+            "hipModuleGetFunction",
+            [ctypes.POINTER(void_p), void_p, ctypes.c_char_p],
+            ctypes.c_int,
+        )
+        self._bind(
+            "hipModuleLaunchKernel",
+            [
+                void_p,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                ctypes.c_uint,
+                void_p,
+                ctypes.POINTER(void_p),
+                ctypes.POINTER(void_p),
+            ],
+            ctypes.c_int,
+        )
+        self._bind(
+            "hipDrvLaunchKernelEx",
+            [
+                ctypes.POINTER(_HipLaunchConfig),
+                void_p,
+                ctypes.POINTER(void_p),
+                ctypes.POINTER(void_p),
+            ],
+            ctypes.c_int,
+        )
+        self._bind("hipStreamSynchronize", [void_p], ctypes.c_int)
+        self.check(self.lib.hipInit(0), "hipInit")
+
+    def _bind(
+        self,
+        name: str,
+        argtypes: Sequence[Any],
+        restype: Any,
+    ) -> None:
+        try:
+            function = getattr(self.lib, name)
+        except AttributeError as exc:
+            if name == "hipDrvLaunchKernelEx":
+                raise GemmIsaRunnerError(
+                    "the HIP runtime does not export hipDrvLaunchKernelEx; "
+                    "a workgroup-cluster kernel cannot be launched safely"
+                ) from exc
+            raise GemmIsaRunnerError(
+                f"the HIP runtime does not export required function {name}"
+            ) from exc
+        function.argtypes = list(argtypes)
+        function.restype = restype
+
+    def check(self, error: int, call: str) -> None:
+        if error == 0:
+            return
+        raw = self.lib.hipGetErrorString(int(error))
+        message = raw.decode(errors="replace") if raw else "unknown HIP error"
+        raise GemmIsaRunnerError(f"{call} failed with HIP error {error}: {message}")
+
+
+class _LoadedClusterKernel:
+    """A loaded module/function kept resident for all timed launches."""
+
+    def __init__(
+        self,
+        code_object: Path,
+        symbol: str,
+        device: int,
+    ) -> None:
+        self._hip = _HipRuntime()
+        self._hip.check(self._hip.lib.hipSetDevice(device), "hipSetDevice")
+        self._module = ctypes.c_void_p()
+        self._function = ctypes.c_void_p()
+        self._stream = ctypes.c_void_p()
+        self._configured = False
+        self._stream_synchronized = True
+
+        data = code_object.read_bytes()
+        self._blob = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+        self._hip.check(
+            self._hip.lib.hipModuleLoadData(
+                ctypes.byref(self._module),
+                ctypes.cast(self._blob, ctypes.c_void_p),
+            ),
+            f"hipModuleLoadData({code_object})",
+        )
+        try:
+            self._hip.check(
+                self._hip.lib.hipModuleGetFunction(
+                    ctypes.byref(self._function),
+                    self._module,
+                    symbol.encode(),
+                ),
+                f"hipModuleGetFunction({symbol})",
+            )
+        except BaseException:
+            self._hip.lib.hipModuleUnload(self._module)
+            self._module = ctypes.c_void_p()
+            raise
+
+    def configure(
+        self,
+        payload: bytes,
+        geometry: LaunchGeometry,
+        stream: int,
+        expected_kernarg_size: int,
+    ) -> None:
+        if len(payload) != expected_kernarg_size:
+            raise GemmIsaRunnerError(
+                f"MXFP4 kernarg payload must be {expected_kernarg_size} bytes, "
+                f"got {len(payload)}"
+            )
+        self._arg_buffer = (
+            ctypes.c_ubyte * len(payload)
+        ).from_buffer_copy(payload)
+        self._arg_size = ctypes.c_size_t(len(payload))
+        self._extra = (ctypes.c_void_p * 5)(
+            _HIP_LAUNCH_PARAM_BUFFER_POINTER,
+            ctypes.cast(self._arg_buffer, ctypes.c_void_p),
+            _HIP_LAUNCH_PARAM_BUFFER_SIZE,
+            ctypes.cast(ctypes.byref(self._arg_size), ctypes.c_void_p),
+            _HIP_LAUNCH_PARAM_END,
+        )
+
+        self._stream = ctypes.c_void_p(stream)
+        self._attributes, self._config = _make_hip_launch_config(
+            geometry,
+            self._stream,
+        )
+        self._configured = True
+        self._stream_synchronized = True
+
+    def launch(self) -> None:
+        """Enqueue exactly one dispatch; no loading, packing, or synchronization."""
+
+        if not self._configured:
+            raise GemmIsaRunnerError("kernel launch attempted before configure()")
+        self._stream_synchronized = False
+        extra = ctypes.cast(
+            self._extra,
+            ctypes.POINTER(ctypes.c_void_p),
+        )
+        if self._config.numAttrs == 0:
+            self._hip.check(
+                self._hip.lib.hipModuleLaunchKernel(
+                    self._function,
+                    self._config.gridDimX,
+                    self._config.gridDimY,
+                    self._config.gridDimZ,
+                    self._config.blockDimX,
+                    self._config.blockDimY,
+                    self._config.blockDimZ,
+                    self._config.sharedMemBytes,
+                    self._stream,
+                    None,
+                    extra,
+                ),
+                "hipModuleLaunchKernel",
+            )
+            return
+
+        self._hip.check(
+            self._hip.lib.hipDrvLaunchKernelEx(
+                ctypes.byref(self._config),
+                self._function,
+                None,
+                extra,
+            ),
+            "hipDrvLaunchKernelEx",
+        )
+
+    def synchronize(self) -> None:
+        self._hip.check(
+            self._hip.lib.hipStreamSynchronize(self._stream),
+            "hipStreamSynchronize",
+        )
+        self._stream_synchronized = True
+
+    def mark_stream_synchronized(self) -> None:
+        """Record that an event on this same stream has completed."""
+
+        self._stream_synchronized = True
+
+    def close(self) -> None:
+        if not self._module.value:
+            return
+        sync_error: BaseException | None = None
+        if self._configured and not self._stream_synchronized:
+            try:
+                self.synchronize()
+            except BaseException as exc:
+                sync_error = exc
+        module = self._module
+        self._module = ctypes.c_void_p()
+        unload_error = self._hip.lib.hipModuleUnload(module)
+        if sync_error is not None:
+            raise sync_error
+        self._hip.check(unload_error, "hipModuleUnload")
+
+    def __enter__(self) -> "_LoadedClusterKernel":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        if exc_type is None:
+            self.close()
+        else:
+            try:
+                self.close()
+            except BaseException:
+                # Preserve the original build/input/launch exception.
+                pass
+        return False
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except BaseException:
+            pass
+
+
+def _load_dependencies(device: int) -> _Dependencies:
+    """Import the repo implementation only after CLI parsing/build."""
+
+    try:
+        import torch  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise GemmIsaRunnerError("PyTorch is required to run the GEMM") from exc
+    if not torch.cuda.is_available():
+        raise GemmIsaRunnerError("a ROCm PyTorch GPU device is required")
+    if getattr(torch.version, "hip", None) is None:
+        raise GemmIsaRunnerError(
+            "this runner requires a ROCm PyTorch build (torch.version.hip is unset)"
+        )
+    try:
+        torch.cuda.set_device(device)
+    except Exception as exc:
+        raise GemmIsaRunnerError(
+            f"cannot select PyTorch/HIP device {device}: {exc}"
+        ) from exc
+
+    try:
+        from aiter.jit.utils.chip_info import get_gfx_runtime
+        from aiter.test_common import checkAllclose
+    except ImportError as exc:
+        raise GemmIsaRunnerError(
+            f"failed to import aiter runtime dependencies: {exc}"
+        ) from exc
+    return _Dependencies(
+        torch=torch,
+        check_allclose=checkAllclose,
+        get_gfx=get_gfx_runtime,
+    )
+
+
+def _validate_mode(
+    intype: str,
+    apre: int,
+    dtype: str,
+    symbol: str,
+) -> KernelProfile:
+    if intype != "mxfp4":
+        raise GemmIsaRunnerError(
+            "this independent ISA runner supports only MXFP4.  NVFP4 uses an "
+            "88-byte ABI with global scales and different scale blocking; use "
+            "an NVFP4-specific runner/kernel instead"
+        )
+    if dtype != "bf16":
+        raise GemmIsaRunnerError(
+            f"this kernel writes BF16 output only, not {dtype}"
+        )
+    profile = select_kernel_profile(symbol)
+    if apre != profile.apre:
+        raise GemmIsaRunnerError(
+            f"--apre {apre} is incompatible with profile {profile.name}; "
+            f"exact symbol {symbol!r} requires --apre {profile.apre}"
+        )
+    return profile
+
+
+def _run_batched_cuda_event_timing(
+    torch_module: Any,
+    launch: Any,
+    stream: Any,
+    *,
+    num_warmup: int,
+    num_iters: int,
+) -> tuple[Any, float]:
+    """Time one continuously queued launch batch with two CUDA events.
+
+    Warmups are enqueued back-to-back and followed by one device sync.  The
+    measured launches are then enclosed by one start/end pair on the exact
+    PyTorch stream also passed to ``hipDrvLaunchKernelEx``.  Only the end event
+    is synchronized; there is no per-iteration synchronization or cache flush.
+    """
+
+    if num_warmup < 0:
+        raise GemmIsaRunnerError(
+            f"batched CUDA-event warmup must be non-negative, got {num_warmup}"
+        )
+    if num_iters < 1:
+        raise GemmIsaRunnerError(
+            f"batched CUDA-event iterations must be at least one, got {num_iters}"
+        )
+
+    for _ in range(num_warmup):
+        launch()
+    torch_module.cuda.synchronize()
+
+    start = torch_module.cuda.Event(enable_timing=True)
+    end = torch_module.cuda.Event(enable_timing=True)
+    start.record(stream)
+    output = None
+    for _ in range(num_iters):
+        output = launch()
+    end.record(stream)
+    end.synchronize()
+    avg_us = float(start.elapsed_time(end)) * 1000.0 / num_iters
+    return output, avg_us
+
+
+def make_cuda_event_timing_row(
+    symbol: str,
+    iters: int,
+    warmup: int,
+    avg_us: float,
+    device: int,
+) -> dict[str, Any]:
+    """Build a profiler-like row explicitly sourced from batched CUDA events."""
+
+    avg_us = float(avg_us)
+    if avg_us <= 0.0:
+        raise GemmIsaRunnerError(
+            f"cuda.Event returned a non-positive latency: {avg_us} us"
+        )
+    if iters < 1:
+        raise GemmIsaRunnerError(
+            f"CUDA-event timing requires at least one iteration, got {iters}"
+        )
+    if warmup < 0:
+        raise GemmIsaRunnerError(
+            f"CUDA-event timing warmup must be non-negative, got {warmup}"
+        )
+    return {
+        "name": symbol,
+        "cnt": int(iters),
+        "warmup": int(warmup),
+        "device_time_sum": avg_us * iters,
+        "device_time_avg": avg_us,
+        "device_type": "CUDA/HIP",
+        "device_index": int(device),
+        "source": CUDA_EVENT_TIMING_SOURCE,
+    }
+
+
+def _profiler_name_matches_symbol(name: str, symbol: str) -> bool:
+    return re.search(
+        rf"(?<![0-9A-Za-z_]){re.escape(symbol)}(?![0-9A-Za-z_])",
+        name,
+    ) is not None
+
+
+def _trace_records(trace_df: Any) -> list[dict[str, Any]]:
+    if trace_df is None:
+        raise GemmIsaRunnerError(
+            "run_perftest returned no trace_df; return_trace_df=True is required"
+        )
+    try:
+        records = trace_df.to_dict("records")
+    except Exception as exc:
+        raise GemmIsaRunnerError(
+            f"run_perftest trace_df cannot be converted to records: {exc}"
+        ) from exc
+    if not isinstance(records, list):
+        raise GemmIsaRunnerError(
+            "run_perftest trace_df.to_dict('records') did not return a list"
+        )
+    return [dict(record) for record in records]
+
+
+def _normalized_device_type(value: Any) -> str:
+    return str(value).rsplit(".", 1)[-1]
+
+
+def _profiler_candidate_summary(
+    records: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": str(record.get("name")),
+            "device_type": _normalized_device_type(record.get("device_type")),
+            "device_index": record.get("device_index"),
+            "cnt": record.get("cnt"),
+            "device_time_sum": record.get("device_time_sum"),
+            "device_time_avg": record.get("device_time_avg"),
+        }
+        for record in records
+        if _normalized_device_type(record.get("device_type")) == "CUDA"
+    ]
+
+
+def _select_target_profiler_timing(
+    trace_df: Any,
+    *,
+    symbol: str,
+    warmup: int,
+    requested_device: int,
+) -> dict[str, Any]:
+    if requested_device < 0:
+        raise GemmIsaRunnerError(
+            f"requested torch device ordinal must be non-negative, got "
+            f"{requested_device}"
+        )
+    records = _trace_records(trace_df)
+    matches = [
+        record
+        for record in records
+        if _normalized_device_type(record.get("device_type")) == "CUDA"
+        and _profiler_name_matches_symbol(str(record.get("name")), symbol)
+    ]
+    if len(matches) != 1:
+        raise GemmIsaRunnerError(
+            f"target kernel {symbol!r} expected exactly one CUDA profiler row, "
+            f"found {len(matches)}; CUDA candidates="
+            f"{_profiler_candidate_summary(records)}"
+        )
+    match = matches[0]
+    try:
+        count_float = float(match.get("cnt"))
+        count = int(count_float)
+        device_float = float(match.get("device_index"))
+        device_index = int(device_float)
+        device_time_sum = float(match.get("device_time_sum"))
+        device_time_avg = float(match.get("device_time_avg"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise GemmIsaRunnerError(
+            f"target kernel profiler row has invalid numeric fields: {match}"
+        ) from exc
+    if not math.isfinite(count_float) or count_float != count or count <= 0:
+        raise GemmIsaRunnerError(
+            f"target kernel profiler count must be a positive integer, got "
+            f"{match.get('cnt')!r}"
+        )
+    if (
+        not math.isfinite(device_float)
+        or device_float != device_index
+        or device_index < 0
+    ):
+        raise GemmIsaRunnerError(
+            "target kernel profiler device_index must be a non-negative "
+            f"integer, got {match.get('device_index')!r}"
+        )
+    if (
+        not math.isfinite(device_time_sum)
+        or not math.isfinite(device_time_avg)
+        or device_time_sum <= 0.0
+        or device_time_avg <= 0.0
+    ):
+        raise GemmIsaRunnerError(
+            "target kernel profiler device time must be positive, got "
+            f"sum={device_time_sum!r}, avg={device_time_avg!r}"
+        )
+    return {
+        "name": str(match.get("name")),
+        "cnt": count,
+        "warmup": int(warmup),
+        "device_time_sum": device_time_sum,
+        "device_time_avg": device_time_avg,
+        "device_type": "CUDA",
+        "device_index": device_index,
+        "source": RUN_PERFTEST_TIMING_SOURCE,
+    }
+
+
+def _make_profiler_visible_driver_launch(
+    torch_module: Any,
+    raw_launch: Callable[[], Any],
+    *,
+    anchor: Any,
+    output: Any,
+) -> Callable[[], Any]:
+    """Add dispatcher correlation around one unchanged HIP-driver launch."""
+
+    namespace = f"gemm_isa_runner_{os.getpid()}"
+    op_name = f"launch_{id(raw_launch):x}"
+    library = torch_module.library.Library(namespace, "FRAGMENT")
+    library.define(f"{op_name}(Tensor(a!) anchor) -> ()")
+
+    def implementation(_anchor: Any) -> None:
+        raw_launch()
+
+    library.impl(op_name, implementation, "CUDA")
+    operation = getattr(getattr(torch_module.ops, namespace), op_name)
+
+    def callable_() -> Any:
+        _ = library
+        operation(anchor)
+        return output
+
+    return callable_
+
+
+def _run_target_kernel_perftest(
+    callable_: Callable[[], Any],
+    *,
+    symbol: str,
+    warmup: int,
+    iters: int,
+    device: int,
+    synchronize: Callable[[], Any],
+    mark_stream_synchronized: Callable[[], Any] | None = None,
+    reported_warmup: int | None = None,
+    test_graph: bool = False,
+    timing_source: str | None = None,
+    run_perftest_impl: Callable[..., tuple[Any, float, Any]] | None = None,
+) -> tuple[Any, float, dict[str, Any], Any]:
+    if iters <= 1:
+        raise GemmIsaRunnerError(
+            "run_perftest profiler timing requires --iters greater than 1"
+        )
+    if warmup < 0:
+        raise GemmIsaRunnerError(
+            "run_perftest timing requires non-negative --warmup"
+        )
+    if run_perftest_impl is None:
+        from aiter.test_common import run_perftest
+    else:
+        run_perftest = run_perftest_impl
+    actual_timing_source = (
+        run_perftest_timing_source(test_graph)
+        if timing_source is None
+        else timing_source
+    )
+
+    saved_log_more = os.environ.get("AITER_LOG_MORE")
+    suppress_internal_event_pass = saved_log_more not in (None, "", "0")
+    if suppress_internal_event_pass:
+        print(
+            "[gemm_isa_runner] AITER_LOG_MORE trace remains explicit; "
+            "temporarily setting it to 0 inside run_perftest to avoid its "
+            "additional CUDA-event iteration pass"
+        )
+        os.environ["AITER_LOG_MORE"] = "0"
+    try:
+        output, full_us, trace_df = run_perftest(
+            callable_,
+            num_warmup=warmup,
+            num_iters=iters,
+            testGraph=test_graph,
+            return_trace_df=True,
+            num_rotate_args=1,
+        )
+    finally:
+        if suppress_internal_event_pass:
+            if saved_log_more is None:
+                os.environ.pop("AITER_LOG_MORE", None)
+            else:
+                os.environ["AITER_LOG_MORE"] = saved_log_more
+    synchronize()
+    if mark_stream_synchronized is not None:
+        mark_stream_synchronized()
+    full_us_value = float(full_us)
+    if not math.isfinite(full_us_value) or full_us_value <= 0.0:
+        raise GemmIsaRunnerError(
+            f"run_perftest returned invalid _us={full_us!r}"
+        )
+    timing = _select_target_profiler_timing(
+        trace_df,
+        symbol=symbol,
+        warmup=warmup if reported_warmup is None else reported_warmup,
+        requested_device=device,
+    )
+    timing["source"] = actual_timing_source
+    timing["test_graph"] = bool(test_graph)
+    try:
+        trace_text = trace_df.to_string(index=True)
+    except Exception:
+        trace_text = repr(_trace_records(trace_df))
+    print(f"\n[gemm_isa_runner run_perftest trace_df]\n{trace_text}")
+    print(f"[gemm_isa_runner] captured kernel name={timing['name']}")
+    print(
+        f"[gemm_isa_runner] profiler count={timing['cnt']}; "
+        f"device_time_sum={timing['device_time_sum']:.4f} us; "
+        f"device_time_avg={timing['device_time_avg']:.4f} us; "
+        f"profiler device_index={timing['device_index']}; "
+        f"requested torch device ordinal={device}"
+    )
+    print(
+        f"[gemm_isa_runner] timing source={actual_timing_source}; "
+        f"testGraph={test_graph}; "
+        f"run_perftest _us={full_us_value:.4f}"
+    )
+    return output, full_us_value, timing, trace_df
+
+
+MaxErrorInfo = tuple[float, float, float]
+
+
+def float32_error_metrics(
+    reference: Any,
+    result: Any,
+    *,
+    difference: Any | None = None,
+    clamp_rel_l2: bool = False,
+) -> tuple[MaxErrorInfo, float]:
+    """Return max-error values and rel-L2 outside kernel timing.
+
+    Ties use the first flattened index, matching ``argmax`` semantics.  A
+    supplied float32 ``difference`` is consumed in place after its sign is no
+    longer needed.
+    """
+
+    reference_f32 = reference.detach().float()
+    result_f32 = result.detach().float()
+    if reference_f32.shape != result_f32.shape:
+        raise GemmIsaRunnerError(
+            f"error metrics require matching shapes, got "
+            f"{tuple(reference_f32.shape)} and {tuple(result_f32.shape)}"
+        )
+    if reference_f32.numel() == 0:
+        raise GemmIsaRunnerError("error metrics require a non-empty tensor")
+
+    if difference is None:
+        absolute_error = result_f32.clone()
+        absolute_error.sub_(reference_f32).abs_()
+    else:
+        if difference.shape != reference_f32.shape:
+            raise GemmIsaRunnerError(
+                f"supplied difference shape {tuple(difference.shape)} does "
+                f"not match {tuple(reference_f32.shape)}"
+            )
+        absolute_error = difference
+        absolute_error.abs_()
+
+    flat_index = int(absolute_error.reshape(-1).argmax().item())
+    reference_flat = reference_f32.reshape(-1)
+    result_flat = result_f32.reshape(-1)
+    error_flat = absolute_error.reshape(-1)
+    max_error_info = (
+        float(reference_flat[flat_index].item()),
+        float(result_flat[flat_index].item()),
+        float(error_flat[flat_index].item()),
+    )
+    import torch  # type: ignore[import-not-found]
+
+    diff_norm_tensor = torch.linalg.vector_norm(absolute_error)
+    ref_norm_tensor = torch.linalg.vector_norm(reference_f32)
+    if clamp_rel_l2:
+        rel_l2 = float(
+            (
+                diff_norm_tensor
+                / torch.clamp(
+                    ref_norm_tensor,
+                    min=torch.finfo(torch.float32).tiny,
+                )
+            ).item()
+        )
+    else:
+        diff_norm = float(diff_norm_tensor.item())
+        ref_norm = float(ref_norm_tensor.item())
+        if ref_norm == 0.0:
+            rel_l2 = 0.0 if diff_norm == 0.0 else float("inf")
+        else:
+            rel_l2 = diff_norm / ref_norm
+    return max_error_info, rel_l2
+
+
+def format_max_error_info(value: MaxErrorInfo) -> str:
+    """Format one max-error tuple as a single Markdown cell."""
+
+    reference, result, absolute_error = value
+    return f"({reference}, {result}, {absolute_error})"
+
+
+def _markdown_cell(value: Any) -> str:
+    text = (
+        format_max_error_info(value)
+        if isinstance(value, tuple) and len(value) == 3
+        else str(value)
+    )
+    return text.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+
+
+def _plain_markdown(
+    row: Mapping[str, Any],
+    columns: Sequence[str] = SUMMARY_COLUMNS,
+) -> str:
+    values = [_markdown_cell(row[column]) for column in columns]
+    widths = [
+        max(len(column), len(value))
+        for column, value in zip(columns, values)
+    ]
+
+    def line(items: Sequence[str]) -> str:
+        return "| " + " | ".join(
+            item.ljust(width)
+            for item, width in zip(items, widths)
+        ) + " |"
+
+    separator = ["-" * width for width in widths]
+    return "\n".join((line(columns), line(separator), line(values)))
+
+
+def _print_cuda_event_timing(row: Mapping[str, Any]) -> None:
+    display = dict(row)
+    display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
+    display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
+    print(
+        "CUDA-event batched kernel timing "
+        "(microseconds; source=cuda.Event batched; name is the configured "
+        "symbol and cnt is the launch-loop count, neither is profiler-captured):"
+    )
+    print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
+
+
+def _print_profiler_timing(row: Mapping[str, Any]) -> None:
+    display = dict(row)
+    display["device_time_sum"] = f"{float(row['device_time_sum']):.4f}"
+    display["device_time_avg"] = f"{float(row['device_time_avg']):.4f}"
+    print(
+        "run_perftest kernel timing "
+        f"(microseconds; source={row['source']}; exact captured target row):"
+    )
+    print(_plain_markdown(display, EVENT_TIMING_COLUMNS))
+
+
+def print_summary(
+    row: Mapping[str, Any],
+    *,
+    symbol: str,
+    profile: KernelProfile,
+) -> None:
+    if tuple(row) != SUMMARY_COLUMNS:
+        raise GemmIsaRunnerError(
+            f"summary columns {tuple(row)} do not match {SUMMARY_COLUMNS}"
+        )
+    print(
+        "GEMM ISA runner summary "
+        f"(markdown; profile={profile.name}; symbol={symbol}):"
+    )
+    print(_plain_markdown(row))
+
+
+def _run_gemm(
+    args: argparse.Namespace,
+    code_object: Path,
+    symbol: str,
+    profile: KernelProfile,
+    geometry: LaunchGeometry,
+    store_detection: GlobalOutputStoreDetection,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    m, n, k = args.shape
+    dependencies = _load_dependencies(args.device)
+    torch = dependencies.torch
+
+    gfx = dependencies.get_gfx()
+    if gfx != ARCH:
+        raise GemmIsaRunnerError(
+            f"the supplied kernel targets {ARCH}, but the active device reports {gfx}"
+        )
+
+    dtype = torch.bfloat16
+    with _LoadedClusterKernel(
+        code_object,
+        symbol,
+        args.device,
+    ) as module:
+        # Re-seed every input preparation so results do not depend on run order.
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        inputs, reference = prepare_mxfp4_inputs_and_reference(
+            m,
+            n,
+            k,
+            args.apre,
+            dtype,
+            args.init,
+        )
+        # The digest forces reference/input preparation to finish before timing.
+        reference_hash = tensor_blake2b128(reference)
+        output = torch.empty((m, n), dtype=dtype, device=inputs["A"].device)
+        stream = torch.cuda.current_stream(args.device)
+        payload = pack_mxfp4_kernargs(
+            ptr_d=int(output.data_ptr()),
+            ptr_a=int(inputs["A"].data_ptr()),
+            ptr_b=int(inputs["B"].data_ptr()),
+            ptr_scale_a=int(inputs["sA"].data_ptr()),
+            ptr_scale_b=int(inputs["sB"].data_ptr()),
+            m=m,
+            n=n,
+            k=k,
+            geometry=geometry,
+            profile=profile,
+        )
+        module.configure(
+            payload,
+            geometry,
+            int(stream.cuda_stream),
+            profile.kernarg_size,
+        )
+
+        def launch() -> Any:
+            module.launch()
+            return output
+
+        if args.inmoe:
+            profiled_launch = _make_profiler_visible_driver_launch(
+                torch,
+                launch,
+                anchor=output,
+                output=output,
+            )
+            from my_code.isa_runner import moe_pipeline_timing_context
+
+            timing = moe_pipeline_timing_context.run_inmoe_context(
+                torch_module=torch,
+                device=args.device,
+                symbol=symbol,
+                target_shape=(m, n, k),
+                target_tensors={
+                    "A": inputs["A"],
+                    "B": inputs["B"],
+                    "sA": inputs["sA"],
+                    "sB": inputs["sB"],
+                    "out": output,
+                },
+                raw_target_launch=launch,
+                profiler_target_launch=profiled_launch,
+                target_warmup=args.warmup,
+                iters=args.iters,
+                backend_label="python",
+                synchronize=torch.cuda.synchronize,
+                mark_stream_synchronized=module.mark_stream_synchronized,
+                run_target_perftest=_run_target_kernel_perftest,
+                select_target_profiler_timing=_select_target_profiler_timing,
+                test_graph=args.cudagh,
+                timing_source=moe_pipeline_timing_source(args.cudagh),
+                error_type=GemmIsaRunnerError,
+            )
+            timed_output = output
+        elif args.timing_method == TIMING_METHOD_PROFILER:
+            profiled_launch = _make_profiler_visible_driver_launch(
+                torch,
+                launch,
+                anchor=output,
+                output=output,
+            )
+            timed_output, _, timing, _ = _run_target_kernel_perftest(
+                profiled_launch,
+                symbol=symbol,
+                warmup=args.warmup,
+                iters=args.iters,
+                device=args.device,
+                synchronize=torch.cuda.synchronize,
+                mark_stream_synchronized=module.mark_stream_synchronized,
+                test_graph=args.cudagh,
+            )
+        else:
+            timed_output, microseconds = _run_batched_cuda_event_timing(
+                torch,
+                launch,
+                stream,
+                num_warmup=args.warmup,
+                num_iters=args.iters,
+            )
+            # end.synchronize() completed every launch on this exact stream.
+            module.mark_stream_synchronized()
+            timing = make_cuda_event_timing_row(
+                symbol,
+                args.iters,
+                args.warmup,
+                microseconds,
+                args.device,
+            )
+        us = float(timing["device_time_avg"])
+
+    flops = 2 * m * n * k
+    logical_read_bytes = int(
+        inputs["A"].nbytes
+        + inputs["B"].nbytes
+        + inputs["sA"].nbytes
+        + inputs["sB"].nbytes
+    )
+    traffic = make_logical_traffic(
+        read_bytes=logical_read_bytes,
+        output_bytes_if_stored=m * n * dtype.itemsize,
+        store_detection=store_detection,
+    )
+    print_logical_traffic("[gemm_isa_runner]", traffic)
+    print(
+        "[gemm_isa_runner] tensor allocation footprint: "
+        f"A={inputs['A'].nbytes}; B={inputs['B'].nbytes}; "
+        f"sA={inputs['sA'].nbytes}; sB={inputs['sB'].nbytes}; "
+        f"D={output.nbytes}"
+    )
+
+    if store_detection.writes_output:
+        error = dependencies.check_allclose(
+            reference,
+            timed_output,
+            rtol=1e-1,
+            atol=1.0,
+            msg="mxfp4 gemm_a4w4 ISA runner",
+        )
+        output_hash = tensor_blake2b128(timed_output)
+        max_err_info, rel_l2 = float32_error_metrics(
+            reference,
+            timed_output,
+        )
+        flops_cell: Any = round(flops / us / 1e6, 1)
+        passed = bool(error == 0)
+    else:
+        not_validated = "n/a (no global output store)"
+        error = output_hash = max_err_info = rel_l2 = not_validated
+        flops_cell = "n/a (no store)"
+        passed = True
+    row = {
+        "intype": args.intype,
+        "batch": 1,
+        "M": m,
+        "N": n,
+        "K": k,
+        "apre": args.apre,
+        "init": args.init,
+        "seed": args.seed,
+        "dtype": args.dtype,
+        "gfx": gfx,
+        "logical cluster tasks/plane": geometry.logical_cluster_tasks,
+        "physical clusters/plane": geometry.cluster_grid[0] * geometry.cluster_grid[1],
+        "physical WGs/plane": geometry.grid[0] * geometry.grid[1],
+        "encoded recurrence stride/plane": geometry.persistent_stride,
+        "ref hash128": reference_hash,
+        "gemm_a4w4 us": round(us, 2),
+        "gemm_a4w4 TFLOPS": flops_cell,
+        "gemm_a4w4 bytes": traffic.total_bytes,
+        "gemm_a4w4 TB/s": round(
+            bytes_per_microsecond_to_tbps(traffic.total_bytes, us), 2
+        ),
+        "gemm_a4w4 err": error,
+        "gemm_a4w4 out hash128": output_hash,
+        "gemm_a4w4 max_err_info": max_err_info,
+        "gemm_a4w4 rel_l2": rel_l2,
+    }
+    return row, timing, passed
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--isa",
+        required=True,
+        help=(
+            "complete gfx1250 AMDGPU assembly source (.s); its symbol must "
+            "exactly match a registered 256x256_4x4, 128x128_4x4, or "
+            "64x256_1x4 profile"
+        ),
+    )
+    parser.add_argument(
+        "--clang",
+        help=(
+            "AMDGPU clang executable (explicit --clang path/name; otherwise "
+            f"fixed {DEFAULT_CLANG}; no ROCm/PATH fallback)"
+        ),
+    )
+    parser.add_argument(
+        "--symbol",
+        default=DEFAULT_SYMBOL,
+        help=(
+            "kernel symbol override (default: auto-detect from .amdhsa_kernel, "
+            "then safely fall back to metadata/.globl); an override must "
+            "exactly match both the source and a registered profile"
+        ),
+    )
+    parser.add_argument(
+        "--intype",
+        choices=("mxfp4", "nvfp4"),
+        default="mxfp4",
+        help="input format; this 80-byte runner rejects nvfp4 explicitly",
+    )
+    parser.add_argument(
+        "--apre",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="A-preshuffle mode (supported exact ISA profiles require 1)",
+    )
+    parser.add_argument(
+        "--init",
+        choices=("constant", "random"),
+        default="random",
+        help="input initialization mode",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="random input seed, reapplied before each input preparation (default: 0)",
+    )
+    parser.add_argument(
+        "-d",
+        "--dtype",
+        choices=("bf16",),
+        default="bf16",
+        help="output dtype (this kernel supports bf16 only)",
+    )
+    parser.add_argument(
+        "-mnk",
+        "--shape",
+        type=_parse_shape,
+        default=(18432, 2048, 7168),
+        metavar="M,N,K",
+        help="single GEMM shape (default: 18432,2048,7168)",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=5,
+        help="continuously enqueued untimed warmup launches (default: 5)",
+    )
+    parser.add_argument(
+        "--iters",
+        type=int,
+        default=100,
+        help="formal timing iterations (default: 100)",
+    )
+    parser.add_argument(
+        "--timing-method",
+        choices=TIMING_METHOD_CHOICES,
+        default=TIMING_METHOD_PROFILER,
+        help=(
+            "formal timing source: 'profiler' uses run_perftest with exact "
+            "target-row device_time_avg; 'cuda-event' uses one start/end "
+            "event pair around the continuously queued launch loop "
+            f"(default: {TIMING_METHOD_PROFILER})"
+        ),
+    )
+    parser.add_argument(
+        "--cudagh",
+        action="store_true",
+        help=(
+            "for profiler timing, pass testGraph=True to run_perftest: capture "
+            "one CUDA Graph containing --iters target/pipeline calls, profile "
+            "one replay, and normalize its returned trace by --iters. Without "
+            "this flag use testGraph=False; this is not batched CUDA Event"
+        ),
+    )
+    parser.add_argument(
+        "--inmoe",
+        action="store_true",
+        help=(
+            "place this runner's allocation-disjoint target launch inside the "
+            "fixed MoE pipeline execution context; target and pipeline tensors "
+            "have no data dependency, the context shape is independent of "
+            "the target shape, and this requires --timing-method profiler"
+        ),
+    )
+    parser.add_argument(
+        "--device",
+        type=int,
+        default=0,
+        help="PyTorch/HIP device ordinal (default: 0)",
+    )
+    parser.add_argument(
+        "--keep-co",
+        action="store_true",
+        help="copy the temporary code object beside the ISA as <symbol>.co",
+    )
+    parser.add_argument(
+        "--co-out",
+        help="copy the compiled code object to this path (implies --keep-co)",
+    )
+    return parser
+
+
+def validate_timing_method_context(
+    timing_method: str,
+    inmoe: bool,
+    cudagh: bool = False,
+) -> None:
+    if timing_method != TIMING_METHOD_PROFILER and cudagh:
+        raise GemmIsaRunnerError(
+            "--cudagh is only valid with --timing-method profiler; "
+            "CUDA Graph profiler timing is not batched CUDA Event timing"
+        )
+    if timing_method == TIMING_METHOD_CUDA_EVENT and inmoe:
+        raise GemmIsaRunnerError(
+            "--timing-method cuda-event is incompatible with --inmoe: "
+            "one event pair would measure the entire interleaved pipeline "
+            "and cannot isolate the target; use --timing-method profiler"
+        )
+
+
+def validate_single_cudagh_backend(cudagh: bool) -> None:
+    if cudagh:
+        raise GemmIsaRunnerError(
+            "--cudagh is unavailable in gemm_isa_runner.py: its Python "
+            "hipDrvLaunchKernelEx launcher produced an empty CUDA Graph in "
+            "runtime validation. Use gemm_batch_isa_runner.py with the "
+            "supported MoE --cpp backend"
+        )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.warmup < 0:
+        parser.error("--warmup must be non-negative")
+    if args.iters < 1:
+        parser.error("--iters must be at least 1")
+    if args.timing_method == TIMING_METHOD_PROFILER and args.iters <= 1:
+        parser.error("--timing-method profiler requires --iters greater than 1")
+    try:
+        validate_timing_method_context(
+            args.timing_method,
+            args.inmoe,
+            args.cudagh,
+        )
+    except GemmIsaRunnerError as exc:
+        parser.error(str(exc))
+    try:
+        validate_single_cudagh_backend(args.cudagh)
+    except GemmIsaRunnerError as exc:
+        parser.error(str(exc))
+    if args.device < 0:
+        parser.error("--device must be non-negative")
+
+    try:
+        isa = _resolve_isa(args.isa)
+        source = _read_isa_source(isa)
+        symbol = resolve_kernel_symbol_from_text(source, args.symbol)
+        profile = _validate_mode(args.intype, args.apre, args.dtype, symbol)
+        store_detection = detect_global_output_stores(source)
+        resources = parse_assembly_resources(source, symbol)
+        geometry = make_launch_geometry(*args.shape, profile=profile)
+        print_contract(
+            ContractReport(
+                runner=Path(__file__).stem,
+                profile=profile,
+                symbol=symbol,
+                shape=args.shape,
+                batch=1,
+                geometry=geometry,
+                resources=resources,
+                dynamic_lds_bytes=0,
+                stores_to_d=store_detection.writes_output,
+            )
+        )
+        clang = _resolve_clang(args.clang)
+        if _clang_uses_default_runtime_libraries(clang):
+            _prepend_default_clang_runtime_libraries()
+
+        with tempfile.TemporaryDirectory(prefix="gemm_isa_runner_") as temp:
+            result = compile_isa(isa, clang, Path(temp), symbol)
+            for command in result.commands:
+                print(f"[gemm_isa_runner] {_format_command(command)}")
+            for patch in result.patches:
+                print(f"[gemm_isa_runner] {patch}")
+            print(f"[gemm_isa_runner] loading kernel symbol: {symbol}")
+
+            if args.co_out or args.keep_co:
+                destination = (
+                    Path(os.path.expandvars(args.co_out)).expanduser().resolve()
+                    if args.co_out
+                    else isa.with_name(f"{symbol}.co")
+                )
+                if destination == isa:
+                    raise GemmIsaRunnerError(
+                        "--co-out must not overwrite the input ISA source"
+                    )
+                if destination.suffix.lower() != ".co":
+                    raise GemmIsaRunnerError(
+                        f"--co-out must use a .co suffix, got: {destination}"
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(result.code_object, destination)
+                print(f"[gemm_isa_runner] kept code object: {destination}")
+
+            row, timing, passed = _run_gemm(
+                args,
+                result.code_object,
+                symbol,
+                profile,
+                geometry,
+                store_detection,
+            )
+            if args.timing_method == TIMING_METHOD_PROFILER:
+                _print_profiler_timing(timing)
+            else:
+                _print_cuda_event_timing(timing)
+            print_summary(row, symbol=symbol, profile=profile)
+            return 0 if passed else 3
+    except CompileError as exc:
+        print(f"[gemm_isa_runner] compile failed:\n{exc}", file=sys.stderr)
+        return 2
+    except GemmIsaRunnerError as exc:
+        print(f"[gemm_isa_runner] error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
