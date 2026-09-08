@@ -39,18 +39,20 @@ _STALE_LOCK_SECONDS = 60 * 60
 PIPELINE_LAUNCH_BACKEND_ENV = "AITER_MOE_GEMM1_LAUNCH_BACKEND"
 PIPELINE_LAUNCH_BACKEND_CPP = "cpp"
 PIPELINE_TARGET_SYMBOL = (
-    "a8w4_tdm_fp4_t64x256x256_w1x4_b2_K7168_e96_act1_wpt4"
+    "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1"
 )
-PIPELINE_CONTIGUOUS_M = 9216
-PIPELINE_VALID_ROWS_PER_EXPERT = 32
+PIPELINE_CONTIGUOUS_M = 122880
+PIPELINE_ROWS_PER_EXPERT = 1024
+PIPELINE_VALID_ROWS_PER_EXPERT = 1024
 PIPELINE_EXPERTS = 96
 PIPELINE_N = 6144
 PIPELINE_K = 7168
-PIPELINE_TILE_M = 64
+PIPELINE_TILE_M = 256
 PIPELINE_TILE_N = 256
 PIPELINE_TILE_K = 256
+PIPELINE_A_SCALE_WMMA_REP = 8
 PIPELINE_BLOCK = (128, 1, 1)
-PIPELINE_CLUSTER = (1, 1, 1)
+PIPELINE_CLUSTER = (4, 4, 1)
 
 
 @dataclass(frozen=True)
@@ -913,7 +915,7 @@ def validate_pipeline_gemm1_case(
     }
     expected = {
         "experts": 96,
-        "tokens": 512,
+        "tokens": 16384,
         "topk": 6,
         "model_dim": 7168,
         "inter_dim": 3072,
@@ -922,7 +924,7 @@ def validate_pipeline_gemm1_case(
         "use_bias": False,
         "expert_balance": True,
         "num_expert_activated": 0,
-        "AITER_TDM_TILE_M": "64",
+        "AITER_TDM_TILE_M": None,
         "swiglu_limit": 7.0,
         "situ_beta": 4.0,
         "situ_linear_beta": 25.0,
@@ -1161,9 +1163,9 @@ class MoePipelineGemm1Adapter:
             (int(tile_m) == PIPELINE_TILE_M, f"tile_m={tile_m}"),
             (int(tile_n) == PIPELINE_TILE_N, f"tile_n={tile_n}"),
             (int(tile_k) == PIPELINE_TILE_K, f"tile_k={tile_k}"),
-            (int(m_warp) == 1, f"m_warp={m_warp}"),
-            (int(n_warp) == 4, f"n_warp={n_warp}"),
-            (effective_num_buffers == 2, f"num_buffers={effective_num_buffers}"),
+            (int(m_warp) == 2, f"m_warp={m_warp}"),
+            (int(n_warp) == 2, f"n_warp={n_warp}"),
+            (effective_num_buffers == 4, f"num_buffers={effective_num_buffers}"),
             (int(out_is_f16) == 0, f"out_is_f16={out_is_f16}"),
             (int(a_is_fp4) == 1, f"a_is_fp4={a_is_fp4}"),
             (int(stage1_act) == 1, f"stage1_act={stage1_act}"),
@@ -1171,10 +1173,10 @@ class MoePipelineGemm1Adapter:
             (int(stage1_quant_out) == 0, f"stage1_quant_out={stage1_quant_out}"),
             (quant_scale is None, "quant_scale must be None"),
             (int(quant_wmma_rep) == 1, f"quant_wmma_rep={quant_wmma_rep}"),
-            (effective_cluster_n == 1, f"cluster_n={effective_cluster_n}"),
-            (effective_waves == 4, f"waves_per_tensor_tdm={effective_waves}"),
+            (effective_cluster_n == 4, f"cluster_n={effective_cluster_n}"),
+            (effective_waves == 1, f"waves_per_tensor_tdm={effective_waves}"),
             (
-                next_stage_on == 0,
+                next_stage_on == 1,
                 "next_stage_on="
                 f"{next_stage_on} (requested={effective_prefetch}, "
                 f"num_buffers={effective_num_buffers})",
@@ -1206,8 +1208,8 @@ class MoePipelineGemm1Adapter:
                 tuple(a_scales.shape)
                 == (
                     1,
-                    PIPELINE_CONTIGUOUS_M // 4,
-                    (PIPELINE_K // 32) * 4,
+                    PIPELINE_CONTIGUOUS_M // PIPELINE_A_SCALE_WMMA_REP,
+                    (PIPELINE_K // 32) * PIPELINE_A_SCALE_WMMA_REP,
                 ),
                 f"a_scales.shape={tuple(a_scales.shape)}",
             ),
@@ -1270,10 +1272,12 @@ class MoePipelineGemm1Adapter:
             situ_beta=float(situ_beta),
             situ_linear_beta=float(situ_linear_beta),
         )
+        m_tiles = (int(contiguous_m) + int(tile_m) - 1) // int(tile_m)
+        n_tiles = (int(N) + int(tile_n) - 1) // int(tile_n)
+        cluster_m = PIPELINE_CLUSTER[1]
         grid = (
-            ((int(contiguous_m) + int(tile_m) - 1) // int(tile_m))
-            * ((int(N) + int(tile_n) - 1) // int(tile_n)),
-            1,
+            ((m_tiles + cluster_m - 1) // cluster_m) * n_tiles,
+            cluster_m,
             1,
         )
 
@@ -1315,13 +1319,13 @@ class MoePipelineGemm1Adapter:
                     dtype=self.torch.int32,
                     device=m_tile_map.device,
                 )
-                * PIPELINE_TILE_M
+                * PIPELINE_ROWS_PER_EXPERT
                 + PIPELINE_VALID_ROWS_PER_EXPERT
             )
             if not bool(self.torch.equal(m_tile_map, expected_psum)):
                 raise ValueError(
                     "C++ pipeline GEMM1 requires balanced psum "
-                    "[32, 96, ..., 6112]"
+                    "[1024, 2048, ..., 98304]"
                 )
             # This diagnostic call is run by run_perftest's untimed memory probe.
             # A zero sentinel proves that the ISA leaves every padding row intact.
@@ -1351,10 +1355,10 @@ class MoePipelineGemm1Adapter:
         if not self.debug_checked:
             current_stream.synchronize()
             out_rows = out.view(PIPELINE_CONTIGUOUS_M, PIPELINE_N // 2)
-            routed_rows = PIPELINE_EXPERTS * PIPELINE_TILE_M
+            routed_rows = PIPELINE_EXPERTS * PIPELINE_ROWS_PER_EXPERT
             aligned_padding = out_rows[:routed_rows].view(
                 PIPELINE_EXPERTS,
-                PIPELINE_TILE_M,
+                PIPELINE_ROWS_PER_EXPERT,
                 PIPELINE_N // 2,
             )[:, PIPELINE_VALID_ROWS_PER_EXPERT :, :]
             tail_padding = out_rows[routed_rows:]
@@ -1443,8 +1447,8 @@ def prepare_pipeline_gemm1_injection(
     isa = batch.moe_cpp_target_isa().resolve()
     batch.validate_cpp_backend_target(
         isa,
-        batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
-        "moe-gemm1",
+        batch.MOE_ACT1_256_KERNEL_SYMBOL,
+        "moe-act1-256",
     )
     # Resolve first to fail clearly, then preserve the configured path spelling
     # in the content-addressed manifest, matching the standalone runner.
@@ -1455,7 +1459,7 @@ def prepare_pipeline_gemm1_injection(
     artifacts = prepare_moe_cpp_backend(
         isa=isa,
         clang=clang,
-        symbol=batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
+        symbol=batch.MOE_ACT1_256_KERNEL_SYMBOL,
         single_module=batch.single,
         torch_module=torch_module,
     )

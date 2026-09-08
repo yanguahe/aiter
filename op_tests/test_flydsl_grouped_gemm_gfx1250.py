@@ -123,6 +123,9 @@ _TDM_KERNEL_RE = re.compile(
     r"(?:_prefetch)?"
     r"(?:_wpt\d+)?"
 )
+_MOE_GEMM1_ASM_SYMBOL = (
+    "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1"
+)
 
 VERIFY_TOL_A4W4 = 0.02
 VERIFY_TOL_A8W4 = 0.02
@@ -268,6 +271,24 @@ def _format_effective_stage_metrics(
 
 def _parse_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
     """Parse the exact generated TDM symbol inside an optional trace prefix."""
+    if _MOE_GEMM1_ASM_SYMBOL in name:
+        return {
+            "name": _MOE_GEMM1_ASM_SYMBOL,
+            "a_format": "fp4",
+            "tile_m": 256,
+            "tile_n": 256,
+            "tile_k": 256,
+            "m_warp": 2,
+            "n_warp": 2,
+            "num_buffers": 4,
+            "K": 7168,
+            "experts": 96,
+            "stage1_act": 1,
+            "quant_out": 0,
+            "quant_wmma_rep": 1,
+            "cluster_n": 4,
+            "has_bias": False,
+        }
     match = _TDM_KERNEL_RE.search(name)
     if match is None:
         return None

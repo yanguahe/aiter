@@ -2907,6 +2907,7 @@ def _get_compiled_fused_quant_preshuffle(
     wmma_rep: int,
     quant_mode: str = "fp4",
     skip_padding: bool = False,
+    a_preshuffle: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_fused_quant_preshuffle_module,
@@ -2917,6 +2918,7 @@ def _get_compiled_fused_quant_preshuffle(
         wmma_rep=wmma_rep,
         quant_mode=quant_mode,
         skip_padding=skip_padding,
+        a_preshuffle=a_preshuffle,
     )
 
 
@@ -2931,6 +2933,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
     source_topk: int = 0,
     remap_rows: bool = False,
     ksplit: bool = True,
+    a_preshuffle: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_fused_quant_preshuffle_route_ksplit_module,
@@ -2943,6 +2946,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
         source_topk=source_topk,
         remap_rows=remap_rows,
         ksplit=ksplit,
+        a_preshuffle=a_preshuffle,
     )
 
 
@@ -2963,6 +2967,7 @@ def flydsl_moe_fused_quant_preshuffle(
     num_valid_routes: (
         torch.Tensor | None
     ) = None,  # (1,) int32; route-branch only: skip routes >= this (EP dead-tail)
+    a_preshuffle: bool = False,
 ):
     """Fused grouped quant + e8m0 scale-preshuffle in one kernel pass.
 
@@ -3030,6 +3035,7 @@ def flydsl_moe_fused_quant_preshuffle(
             source_topk=source_topk,
             remap_rows=remap_rows,
             ksplit=use_ksplit,
+            a_preshuffle=a_preshuffle,
         )
         # Dead-tail skip (EP dynamic token count): routes >= num_valid_routes are
         # padding rows of the dispatch buffer and are not gathered/quantized. When
@@ -3062,6 +3068,7 @@ def flydsl_moe_fused_quant_preshuffle(
         wmma_rep=wmma_rep,
         quant_mode=quant_mode,
         skip_padding=skip_padding,
+        a_preshuffle=a_preshuffle,
     )
     launch(
         ptr_arg(grouped_in.contiguous().view(-1)),

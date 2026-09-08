@@ -81,6 +81,11 @@ class LogicalTrafficAccountingTest(unittest.TestCase):
                 False,
                 "none",
             ),
+            (
+                "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.s",
+                True,
+                "tensor_store_from_lds",
+            ),
             ("MAB/mab_tdm_gemm_full_batch.s", True, "buffer_store_b128"),
             (
                 "MAB/mab_tdm_gemm_full_batch_loadonly.s",
@@ -387,8 +392,8 @@ class MoeCppBackendTargetValidationTest(unittest.TestCase):
         target = batch.moe_cpp_target_isa()
         batch.validate_cpp_backend_target(
             target,
-            batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
-            "moe-gemm1",
+            batch.MOE_ACT1_256_KERNEL_SYMBOL,
+            "moe-act1-256",
         )
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -400,8 +405,8 @@ class MoeCppBackendTargetValidationTest(unittest.TestCase):
             ):
                 batch.validate_cpp_backend_target(
                     copied,
-                    batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
-                    "moe-gemm1",
+                    batch.MOE_ACT1_256_KERNEL_SYMBOL,
+                    "moe-act1-256",
                 )
 
         with self.assertRaisesRegex(
@@ -422,7 +427,7 @@ class MoeCppBackendKeyAndCacheTest(unittest.TestCase):
         base = {
             "isa_sha256": isa_digest,
             "cpp_sha256": cpp_digest,
-            "symbol": batch.MOE_GEMM1_WPT4_KERNEL_SYMBOL,
+            "symbol": batch.MOE_ACT1_256_KERNEL_SYMBOL,
             "arch": "gfx1250",
             "flags": ["-O3"],
         }
@@ -620,7 +625,7 @@ class MoeCppPipelineAdapterContractTest(unittest.TestCase):
     def _valid_case(self):
         return {
             "experts": 96,
-            "tokens": 512,
+            "tokens": 16384,
             "topk": 6,
             "model_dim": 7168,
             "inter_dim": 3072,
@@ -629,7 +634,7 @@ class MoeCppPipelineAdapterContractTest(unittest.TestCase):
             "use_bias": False,
             "expert_balance": True,
             "num_expert_activated": 0,
-            "tile_m_override": "64",
+            "tile_m_override": None,
             "swiglu_limit": 7.0,
             "situ_beta": 4.0,
             "situ_linear_beta": 25.0,
@@ -661,12 +666,12 @@ class MoeCppPipelineAdapterContractTest(unittest.TestCase):
 
         for field, value, message in (
             ("experts", 95, "experts"),
-            ("tokens", 511, "tokens"),
+            ("tokens", 512, "tokens"),
             ("data_format", "a8w4", "data_format"),
             ("activation", "swiglu", "activation"),
             ("use_bias", True, "use_bias"),
             ("expert_balance", False, "expert_balance"),
-            ("tile_m_override", None, "AITER_TDM_TILE_M"),
+            ("tile_m_override", "64", "AITER_TDM_TILE_M"),
             ("situ_beta", 1.0, "situ_beta"),
         ):
             changed = dict(valid)
@@ -684,12 +689,12 @@ class MoeCppPipelineAdapterContractTest(unittest.TestCase):
             ptr_scale_a=0x4000,
             ptr_scale_b=0x5000,
             ptr_m_tile_map=0x6000,
-            c_shape=(1, 9216, 3072),
-            c_strides=(9216 * 3072, 3072),
-            sa_shape=(1, 2304, 224),
-            sa_strides=(2304 * 224, 224),
+            c_shape=(1, 122880, 3072),
+            c_strides=(122880 * 3072, 3072),
+            sa_shape=(1, 15360, 448),
+            sa_strides=(15360 * 448, 448),
             sb_size0=33_030_144,
-            i32_m=9216,
+            i32_m=122880,
             i32_n=6144,
             swiglu_limit=7.0,
             situ_beta=4.0,
@@ -699,9 +704,9 @@ class MoeCppPipelineAdapterContractTest(unittest.TestCase):
         self.assertEqual(len(payload), batch.MOE_KERNARG_SIZE)
         self.assertEqual(struct.unpack_from("<Q", payload, 120)[0], 0x2000)
         self.assertEqual(struct.unpack_from("<Q", payload, 128)[0], 0x1000)
-        self.assertEqual(struct.unpack_from("<I", payload, 72)[0], 224)
+        self.assertEqual(struct.unpack_from("<I", payload, 72)[0], 448)
         self.assertEqual(struct.unpack_from("<I", payload, 104)[0], 33_030_144)
-        self.assertEqual(struct.unpack_from("<I", payload, 140)[0], 9216)
+        self.assertEqual(struct.unpack_from("<I", payload, 140)[0], 122880)
         self.assertEqual(struct.unpack_from("<I", payload, 144)[0], 3072)
         self.assertEqual(struct.unpack_from("<f", payload, 172)[0], 7.0)
         self.assertEqual(struct.unpack_from("<f", payload, 176)[0], 4.0)

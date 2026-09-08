@@ -247,6 +247,9 @@ MOE_V21_LOADONLY_KERNEL_SYMBOL = (
 MOE_DENSE_256_KERNEL_SYMBOL = (
     "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps"
 )
+MOE_ACT1_256_KERNEL_SYMBOL = (
+    "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1"
+)
 # Same launcher, same kernarg ABI and tile geometry; only
 # waves_per_tensor_tdm differs (4 instead of the default 2), which is what the
 # `_wpt4` suffix encodes.  This is the variant the production config actually
@@ -265,6 +268,7 @@ MOE_GEMM1_SYMBOLS = (
     MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
     MOE_V21_LOADONLY_KERNEL_SYMBOL,
     MOE_DENSE_256_KERNEL_SYMBOL,
+    MOE_ACT1_256_KERNEL_SYMBOL,
 )
 MOE_LOADONLY_SYMBOLS = (
     MOE_GEMM1_LOADONLY_KERNEL_SYMBOL,
@@ -275,14 +279,18 @@ MOE_MODES = (
     "moe-gemm1-loadonly",
     "moe-v21-loadonly",
     "moe-dense-256",
+    "moe-act1-256",
 )
 LAUNCH_BACKEND_PYTHON = "python"
 LAUNCH_BACKEND_CPP = "cpp"
 TIMING_CONTEXT_STANDALONE = "standalone"
 TIMING_CONTEXT_MOE_PIPELINE = "moe-pipeline"
-MOE_CPP_ISA_BASENAME = "moe_gemm1_a4w4_v0.s"
+MOE_CPP_ISA_BASENAME = (
+    "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.s"
+)
 MOE_V21_CONTRACT_MARKER = "__aiter_moe_v21_contract"
 MOE_DENSE_256_CONTRACT_MARKER = "__aiter_moe_dense_256_contract"
+MOE_ACT1_256_CONTRACT_MARKER = "__aiter_moe_act1_256_contract"
 TIMING_METHOD_PROFILER = single.TIMING_METHOD_PROFILER
 TIMING_METHOD_CUDA_EVENT = single.TIMING_METHOD_CUDA_EVENT
 TIMING_METHOD_CHOICES = single.TIMING_METHOD_CHOICES
@@ -362,16 +370,11 @@ MOE_CLI_FIELDS = (
     "inter_dim",
 )
 
-# The epilogue clamps gate to <= limit and up to [-limit, limit] before
-# silu(gate)*up.  With random fp4 operands accumulated over K=7168 the raw
-# values reach the hundreds, so the production limit of 7.0 saturates almost
-# every output to +-silu(7)*7 = +-48.955 -- which makes the comparison blind to
-# both scale tensors (e8m0 scales are positive, so rescaling a saturated value
-# changes nothing) and degrades it into a sign-agreement test.  Validation
-# therefore runs with the clamp effectively disabled so the full GEMM is
-# compared; the kernel reads this as an f32 kernarg, so it is a pure input.
+# Match the production MoE stage-1 activation contract.  The hand-written
+# epilogue currently specializes the same default limit in its instruction
+# stream, while the 184-byte ABI still carries the value at offset 172.
 MOE_VALIDATE_SWIGLU_LIMIT = float(
-    os.environ.get("AITER_MOE_SWIGLU_LIMIT", "3.0e38")
+    os.environ.get("AITER_MOE_SWIGLU_LIMIT", "7.0")
 )
 
 @dataclass(frozen=True)
@@ -755,6 +758,30 @@ MOE_DENSE_256_PROFILE = single.KernelProfile(
     kernarg_size=BATCH_KERNARG_SIZE,
     kernarg_layout=BATCH_KERNARG_LAYOUT,
 )
+MOE_ACT1_256_PROFILE = single.KernelProfile(
+    name="a4w4-moe-gemm1-abpre-t256x256x256-w2x2-e96-act1-cn4",
+    primary_symbol=MOE_ACT1_256_KERNEL_SYMBOL,
+    symbols=(MOE_ACT1_256_KERNEL_SYMBOL,),
+    wg_tile=(MOE_DENSE_256_TILE_M, MOE_DENSE_256_TILE_N),
+    wave_tile=(
+        MOE_DENSE_256_TILE_M // MOE_DENSE_256_M_WARP,
+        MOE_DENSE_256_TILE_N // MOE_DENSE_256_N_WARP,
+    ),
+    output_quadrants=(2, 2),
+    cluster=(MOE_DENSE_256_CLUSTER_N, 4, 1),
+    block=(
+        MOE_DENSE_256_M_WARP * MOE_DENSE_256_N_WARP * 32,
+        1,
+        1,
+    ),
+    k_multiple=MOE_DENSE_256_TILE_K,
+    persistent_tg=0,
+    persistent_grid_y=0,
+    apre=1,
+    abi_name="a4w4-moe-tdm-abpre-act1-v1",
+    kernarg_size=MOE_KERNARG_SIZE,
+    kernarg_layout=MOE_KERNARG_LAYOUT,
+)
 
 
 def make_moe_launch_geometry(
@@ -762,6 +789,8 @@ def make_moe_launch_geometry(
     n: int | None = None,
     k: int | None = None,
     batch: int | None = None,
+    *,
+    cluster_m: int = 1,
 ) -> single.LaunchGeometry:
     """Grid for the MoE stage-1 kernel.
 
@@ -769,10 +798,9 @@ def make_moe_launch_geometry(
     internal compatibility and is accepted only for the exact historical
     ``64,6144,7168``/96 specialization.
 
-    launch_gemm_a8w4_tdm uses
-        m_tiles = ceil(i32_m / tile_m);  n_tiles = ceil(N / tile_n)
-        grid    = (m_tiles * n_tiles, 1, 1)
-    with ``i32_m = contiguous_m`` from :func:`derive_moe_workload`.
+    The logical workload contains ``m_tiles * n_tiles`` workgroups.  A
+    ``cluster_m`` launch folds that many M peers into grid.y while preserving
+    the same total workgroup count and cluster-granular swizzle order.
     """
     if isinstance(m, MoeWorkload):
         if any(value is not None for value in (n, k, batch)):
@@ -794,16 +822,22 @@ def make_moe_launch_geometry(
             )
         workload = reference_moe_workload()
 
+    if cluster_m < 1 or workload.total_m_tiles % cluster_m:
+        raise single.GemmIsaRunnerError(
+            f"invalid MoE cluster_m={cluster_m} for {workload.total_m_tiles} M tiles"
+        )
+    grid = (workload.grid[0] // cluster_m, cluster_m, 1)
+    cluster_size = workload.cluster_n * cluster_m
     return single.LaunchGeometry(
-        grid=workload.grid,
+        grid=grid,
         block=(workload.m_warp * workload.n_warp * 32, 1, 1),
-        cluster=(workload.cluster_n, 1, 1),
+        cluster=(workload.cluster_n, cluster_m, 1),
         tiles=(workload.n_tiles, workload.total_m_tiles),
-        cluster_grid=(workload.grid[0] // workload.cluster_n, 1),
+        cluster_grid=(grid[0] // workload.cluster_n, grid[1] // cluster_m),
         log2_grid=(0, 0),
         logical_cluster_grid=(workload.n_tiles, workload.total_m_tiles),
         logical_wg_tasks=workload.grid[0],
-        logical_cluster_tasks=workload.grid[0] // workload.cluster_n,
+        logical_cluster_tasks=workload.grid[0] // cluster_size,
         persistent_stride=0,
         # The 96 experts are already inside contiguous_m -> m_tiles, so this
         # kernel launches once; --batch must not be applied a second time.
@@ -888,6 +922,8 @@ def build_moe_inputs(
     experts: int | None = None,
     device,
     seed: int,
+    const_init: float | None = None,
+    a_preshuffle: bool = False,
 ):
     """Build every tensor the MoE stage-1 kernel dereferences, plus a reference.
 
@@ -921,7 +957,12 @@ def build_moe_inputs(
     scale's *placement* is transformed for the kernel.
     """
     import torch.nn.functional as F
-    from aiter.ops.shuffle import moe_shuffle_weight, moe_shuffle_scale
+    from aiter.ops.shuffle import (
+        moe_shuffle_scale,
+        moe_shuffle_weight,
+        shuffle_scale_f4,
+        shuffle_weight_f4,
+    )
     from aiter.ops.quant import per_1x32_f4_quant
     from aiter.ops.flydsl.moe_kernels import flydsl_moe_fused_quant_preshuffle
     from aiter.utility import dtypes, fp4_utils
@@ -970,13 +1011,38 @@ def build_moe_inputs(
 
     # --- draw order, verbatim (same file, 1085-1108) -------------------------
     torch.manual_seed(seed)
-    w1_logical = _pattern_packed(experts, n, k // 2)
-    _w2_logical = _pattern_packed(experts, k, inter // 2)        # unused draw
-    w1_scale_raw = init_weight_scales(experts, n, k_scale)
-    _w2_scale_raw = init_weight_scales(experts, k, inter // 32)  # unused draw
-    _bias1 = (torch.randn((experts, n)) * 1e-3).float()          # unused draw
-    _bias2 = (torch.randn((experts, k)) * 1e-3).float()          # unused draw
-    hidden = (torch.randn((contiguous_m, k)) * 0.5).to(torch.bfloat16).to(device)
+    if const_init is None:
+        w1_logical = _pattern_packed(experts, n, k // 2)
+        _w2_logical = _pattern_packed(experts, k, inter // 2)        # unused draw
+        w1_scale_raw = init_weight_scales(experts, n, k_scale)
+        _w2_scale_raw = init_weight_scales(experts, k, inter // 32)  # unused draw
+        _bias1 = (torch.randn((experts, n)) * 1e-3).float()          # unused draw
+        _bias2 = (torch.randn((experts, k)) * 1e-3).float()          # unused draw
+        hidden = (torch.randn((contiguous_m, k)) * 0.5).to(
+            torch.bfloat16
+        ).to(device)
+    else:
+        raw = single._mxfp4_const_init_uint8_value(const_init)
+        w1_logical = torch.full(
+            (experts, n, k // 2), raw, dtype=torch.uint8
+        )
+        _w2_logical = torch.full(
+            (experts, k, inter // 2), raw, dtype=torch.uint8
+        )
+        w1_scale_raw = torch.full(
+            (experts, n, k_scale), raw, dtype=torch.uint8
+        )
+        _w2_scale_raw = torch.full(
+            (experts, k, inter // 32), raw, dtype=torch.uint8
+        )
+        _bias1 = torch.full((experts, n), float(const_init))
+        _bias2 = torch.full((experts, k), float(const_init))
+        hidden = torch.full(
+            (contiguous_m, k),
+            float(const_init),
+            dtype=torch.bfloat16,
+            device=device,
+        )
 
     # ---- kernel-layout weights: GGUU -> GUGU row interleave, then shuffle ----
     b = moe_shuffle_weight(
@@ -995,31 +1061,35 @@ def build_moe_inputs(
     )
     a_scale_logical = a_scale_logical.view(torch.uint8).contiguous()
 
-    # The kernel's A comes from the production preshuffle, not from a mapping
-    # rederived here: a hand-applied wmma_rep scatter was measurably wrong
-    # (cross-check below reported scale_match=False), and the placement is the
-    # kind of detail that must be taken from the code that owns it.
-    a_pre, scale_a = flydsl_moe_fused_quant_preshuffle(
-        hidden.reshape(1, contiguous_m, k),
-        1,
-        contiguous_m,
-        wmma_rep=rep_a,
-        quant_mode="fp4",
-        masked_m=None,
-        topids_to_rows=None,
-    )
-    a = a_pre.view(torch.uint8).contiguous()
-
-    # The reference keeps per_1x32_f4_quant's *logical* scale while the kernel
-    # gets the preshuffled one.  That is only sound if both quantisers produced
-    # the same fp4 payload -- payload equality pins the block scales, since the
-    # payload is round(x / scale).  Checked, not assumed.
-    if not torch.equal(a.reshape(-1), a_q.view(torch.uint8).reshape(-1)):
-        raise single.GemmIsaRunnerError(
-            "per_1x32_f4_quant and flydsl_moe_fused_quant_preshuffle disagree on "
-            "the fp4 payload; the reference's logical scale would not describe "
-            "the bytes the kernel reads"
+    if a_preshuffle:
+        # The hand-written 256x256 core consumes the same 16x16 FP4 payload and
+        # 32x4 E8M0 layouts as shuffle_weight_f4/shuffle_scale_f4.  Preserve the
+        # production tensor shapes; only their flattened physical order changes.
+        a = shuffle_weight_f4(a_q.view(torch.uint8)).reshape(
+            1, contiguous_m, k // 2
         )
+        scale_a = shuffle_scale_f4(a_scale_logical, 7).reshape(
+            1, contiguous_m // rep_a, k_scale * rep_a
+        )
+    else:
+        # The stock FlyDSL kernel consumes row-major payload plus its WMMA scale
+        # layout, generated by the production quant kernel itself.
+        a_pre, scale_a = flydsl_moe_fused_quant_preshuffle(
+            hidden.reshape(1, contiguous_m, k),
+            1,
+            contiguous_m,
+            wmma_rep=rep_a,
+            quant_mode="fp4",
+            masked_m=None,
+            topids_to_rows=None,
+        )
+        a = a_pre.view(torch.uint8).contiguous()
+        if not torch.equal(a.reshape(-1), a_q.view(torch.uint8).reshape(-1)):
+            raise single.GemmIsaRunnerError(
+                "per_1x32_f4_quant and flydsl_moe_fused_quant_preshuffle "
+                "disagree on the fp4 payload; the reference's logical scale "
+                "would not describe the bytes the kernel reads"
+            )
 
     # contiguous_psum(), copied from _psum_ref
     # (test_flydsl_grouped_gemm_gfx1250.py:1477-1486).  Each expert's rows are
@@ -1056,20 +1126,10 @@ def build_moe_inputs(
         (row_ids - block_start) < workload.valid_rows_per_expert
     )
 
-    # The C descriptor says N//2 columns, but allocate the full N width as
-    # slack: if that reading of stage1_act's gating were wrong the kernel would
-    # write N-wide rows, and on this bring-up machine an out-of-bounds store is
-    # a page fault, not a wrong number.  Only the first N//2 columns are
-    # compared; the rest must stay zero, which is itself a check on the stride.
-    # Exactly the production allocation (grouped_moe_gfx1250.py:632:
-    # y = torch.empty((1, contiguous_m, inter_dim))).  The earlier 2x-wide
-    # buffer was slack against mis-reading stage1_act's gating; the store-width
-    # check has confirmed the N//2 stride often enough that the slack now only
-    # doubles the output footprint relative to production.
+    # Match the production stage-1 allocation: activated output has N//2 BF16
+    # columns because adjacent gate/up columns are reduced to one value.
     out = torch.zeros((contiguous_m, inter), dtype=torch.bfloat16, device=device)
     out_view = out
-    # bias / quant_scale are unused by this build (has_bias=0, quant_out=0) but
-    # must still be valid addresses.
     bias = torch.zeros(n, dtype=torch.float32, device=device)
     quant_scale = torch.zeros(1, dtype=torch.float32, device=device)
 
@@ -1077,7 +1137,7 @@ def build_moe_inputs(
         torch,
         F,
         fp4_utils,
-        a_payload=a,
+        a_payload=a_q.view(torch.uint8),
         a_scale_logical=a_scale_logical,
         w1_logical=w1_logical.to(device),
         w1_scale_raw=w1_scale_raw.to(device),
@@ -1721,6 +1781,8 @@ def select_kernel_mode(
     """Select one exact, symbol-scoped ABI and execution path."""
 
     batch = _validate_batch(batch)
+    if symbol == MOE_ACT1_256_KERNEL_SYMBOL:
+        return "moe-act1-256", MOE_ACT1_256_PROFILE
     if symbol == MOE_DENSE_256_KERNEL_SYMBOL:
         return "moe-dense-256", MOE_DENSE_256_PROFILE
     if symbol == MOE_V21_LOADONLY_KERNEL_SYMBOL:
@@ -1795,13 +1857,13 @@ def validate_cpp_backend_target(
     if (
         not same_path
         or actual_isa.name != MOE_CPP_ISA_BASENAME
-        or symbol != MOE_GEMM1_WPT4_KERNEL_SYMBOL
-        or mode != "moe-gemm1"
+        or symbol != MOE_ACT1_256_KERNEL_SYMBOL
+        or mode != "moe-act1-256"
     ):
         raise single.GemmIsaRunnerError(
             "--cpp is restricted to the exact source "
             f"{expected_isa} and exact kernel symbol "
-            f"{MOE_GEMM1_WPT4_KERNEL_SYMBOL!r}; got source={actual_isa}, "
+            f"{MOE_ACT1_256_KERNEL_SYMBOL!r}; got source={actual_isa}, "
             f"symbol={symbol!r}, mode={mode!r}"
         )
 
@@ -1849,6 +1911,33 @@ def validate_moe_dense_256_source_contract(source: str, symbol: str) -> None:
     if missing:
         raise single.GemmIsaRunnerError(
             f"{symbol} is missing required MoE-grid contract fragments: {missing}"
+        )
+
+
+def validate_moe_act1_256_source_contract(source: str, symbol: str) -> None:
+    if symbol != MOE_ACT1_256_KERNEL_SYMBOL:
+        return
+    marker_lines = [
+        re.sub(r"\s+", " ", single._strip_asm_comment(line)).strip()
+        for line in source.splitlines()
+        if MOE_ACT1_256_CONTRACT_MARKER in single._strip_asm_comment(line)
+    ]
+    expected = f".set {MOE_ACT1_256_CONTRACT_MARKER}, 1"
+    if marker_lines != [expected]:
+        raise single.GemmIsaRunnerError(
+            f"{symbol} requires exactly one {expected!r} marker; "
+            f"found {marker_lines}"
+        )
+    required_fragments = (
+        "s_load_b64 s[4:5], s[0:1], 0x28 nv",
+        "s_mul_i32 s34, s32, 0x380000",
+        "v_exp_f32_e32",
+        ".amdhsa_kernarg_size 184",
+    )
+    missing = [fragment for fragment in required_fragments if fragment not in source]
+    if missing:
+        raise single.GemmIsaRunnerError(
+            f"{symbol} is missing required production-ABI/act1 fragments: {missing}"
         )
 
 
@@ -2370,7 +2459,11 @@ def _run_mab_gemm(
         "N": n,
         "K": k,
         "apre": args.apre,
-        "init": args.init,
+        "init": (
+            args.init
+            if args.const_init is None
+            else f"const({args.const_init:g})"
+        ),
         "seed": args.seed,
         "dtype": args.dtype,
         "gfx": gfx,
@@ -2476,10 +2569,19 @@ def _run_moe_gemm(
         workload=workload,
         device=device,
         seed=args.seed,
+        const_init=args.const_init,
+        a_preshuffle=(symbol == MOE_ACT1_256_KERNEL_SYMBOL),
     )
     contiguous_m = t["contiguous_m"]
-    sa_rows = int(t["scale_a"].shape[-2])
-    sa_cols = int(t["scale_a"].shape[-1])
+    scale_a_desc = t["scale_a"].view(torch.int32)
+    scale_b_desc = t["scale_b"].view(torch.int32)
+    c_shape = (1, contiguous_m, n // 2)
+    c_strides = (contiguous_m * (n // 2), n // 2)
+    is_act1 = symbol == MOE_ACT1_256_KERNEL_SYMBOL
+    bias_arg = t["a"] if is_act1 else t["bias"]
+    quant_scale_arg = t["out"] if is_act1 else t["quant_scale"]
+    qs_shape = c_shape if is_act1 else (1, 1, 1)
+    qs_strides = c_strides if is_act1 else (1, 1)
 
     payload = pack_moe_kernargs(
         ptr_c=int(t["out"].data_ptr()),
@@ -2488,18 +2590,18 @@ def _run_moe_gemm(
         ptr_scale_a=int(t["scale_a"].data_ptr()),
         ptr_scale_b=int(t["scale_b"].data_ptr()),
         ptr_m_tile_map=int(t["m_tile_map"].data_ptr()),
-        ptr_bias=int(t["bias"].data_ptr()),
-        ptr_quant_scale=int(t["quant_scale"].data_ptr()),
+        ptr_bias=int(bias_arg.data_ptr()),
+        ptr_quant_scale=int(quant_scale_arg.data_ptr()),
         # stage1_act=1 gates gate/up down to N//2 output columns
         # (grouped_moe_gfx1250.py allocates (1, contiguous_m, inter_dim)
         # while passing N=2*inter_dim), so the C descriptor is N//2 wide.
-        c_shape=(1, contiguous_m, n // 2),
-        c_strides=(contiguous_m * (n // 2), n // 2),
-        sa_shape=(1, sa_rows, sa_cols),
-        sa_strides=(sa_rows * sa_cols, sa_cols),
-        sb_size0=int(t["scale_b"].shape[0]),
-        qs_shape=(1, 1, 1),
-        qs_strides=(1, 1),
+        c_shape=c_shape,
+        c_strides=c_strides,
+        sa_shape=tuple(int(value) for value in scale_a_desc.shape),
+        sa_strides=tuple(int(value) for value in scale_a_desc.stride()[:2]),
+        sb_size0=int(scale_b_desc.shape[0]),
+        qs_shape=qs_shape,
+        qs_strides=qs_strides,
         i32_m=contiguous_m,
         i32_n=n,
     )
@@ -2552,8 +2654,8 @@ def _run_moe_gemm(
                 t["scale_a"],
                 t["scale_b"],
                 t["m_tile_map"],
-                t["bias"],
-                t["quant_scale"],
+                bias_arg,
+                quant_scale_arg,
                 payload,
                 list(geometry.grid),
                 list(geometry.block),
@@ -2634,7 +2736,8 @@ def _run_moe_gemm(
         f"{t['routed_m']} contiguous_m={contiguous_m} N={n} K={k}; "
         f"m_tiles={m_tiles} carry data x n_tiles={n_tiles} = "
         f"{m_tiles * n_tiles} working WGs of grid={geometry.grid} "
-        f"({geometry.grid[0] - m_tiles * n_tiles} exit at entry)"
+        f"({geometry.grid[0] * geometry.grid[1] * geometry.grid[2] - m_tiles * n_tiles} "
+        "exit at entry)"
     )
     print(
         "[gemm_batch_isa_runner] useful logical read components: "
@@ -2708,7 +2811,11 @@ def _run_moe_gemm(
         "N": n,
         "K": k,
         "apre": 1,
-        "init": args.init,
+        "init": (
+            args.init
+            if args.const_init is None
+            else f"const({args.const_init:g})"
+        ),
         "seed": args.seed,
         "dtype": "bf16",
         "gfx": gfx,
@@ -2720,9 +2827,11 @@ def _run_moe_gemm(
             if args.inmoe
             else TIMING_CONTEXT_STANDALONE
         ),
-        "logical cluster tasks/plane": (m_tiles * n_tiles) // workload.cluster_n,
-        "physical clusters/plane": geometry.grid[0] // workload.cluster_n,
-        "physical WGs/plane": geometry.grid[0],
+        "logical cluster tasks/plane": geometry.logical_cluster_tasks,
+        "physical clusters/plane": (
+            geometry.cluster_grid[0] * geometry.cluster_grid[1]
+        ),
+        "physical WGs/plane": geometry.grid[0] * geometry.grid[1],
         "encoded recurrence stride/plane": 0,
         "ref hash128": ref_hash,
         "gemm_a4w4 us": round(us, 3),
@@ -3904,13 +4013,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         symbol = single.resolve_kernel_symbol_from_text(source, args.symbol)
         validate_moe_v21_source_contract(source, symbol)
         validate_moe_dense_256_source_contract(source, symbol)
+        validate_moe_act1_256_source_contract(source, symbol)
         mode, profile = select_kernel_mode(symbol, args.batch)
         if args.const_init is not None:
             if _argv_has_option(raw_argv, "--init"):
                 raise single.GemmIsaRunnerError(
                     "--const-init cannot be combined with an explicit --init"
                 )
-            if mode not in ("batch-z", "moe-dense-256"):
+            if mode not in ("batch-z", "moe-dense-256", "moe-act1-256"):
                 raise single.GemmIsaRunnerError(
                     "--const-init is supported only by the batched MXFP4 "
                     "_batch_ps symbols and the dense 256x256 MoE-grid symbol"
@@ -3929,7 +4039,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "-mnk",
                 ),
                 batch_explicit=_argv_has_option(raw_argv, "--batch"),
-                dense_256=(mode == "moe-dense-256"),
+                dense_256=(mode in ("moe-dense-256", "moe-act1-256")),
             )
             args.shape = workload.shape
             args.batch = workload.experts
@@ -3965,12 +4075,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} load-only contract requires stores to D=False"
                 )
-            if mode == "moe-gemm1" and not writes_output:
+            if mode in ("moe-gemm1", "moe-act1-256") and not writes_output:
                 raise single.GemmIsaRunnerError(
                     f"{symbol} full-kernel contract requires Global D stores"
                 )
             assert workload is not None
-            geometry = make_moe_launch_geometry(workload)
+            geometry = make_moe_launch_geometry(
+                workload,
+                cluster_m=(4 if mode == "moe-act1-256" else 1),
+            )
         elif mode in (
             "mab",
             "mab-full",

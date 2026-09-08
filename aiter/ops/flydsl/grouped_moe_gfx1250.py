@@ -561,6 +561,10 @@ def _grouped_a8w4_tdm_moe(
     _is_fp4 = data_format == "fp4"
     _quant_mode = "fp4" if _is_fp4 else "fp8"
     _a_is_fp4 = 1 if _is_fp4 else 0
+    _gemm1_a_preshuffle = _is_fp4 and (
+        os.environ.get("AITER_MOE_GEMM1_LAUNCH_BACKEND", "").strip().lower()
+        == "cpp"
+    )
 
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
         hidden_states.reshape(1, token_num, model_dim),
@@ -572,6 +576,7 @@ def _grouped_a8w4_tdm_moe(
         topids_to_rows=topids_to_rows,
         source_topk=topk,
         num_valid_routes=_ep_nvr,
+        a_preshuffle=_gemm1_a_preshuffle,
     )
 
     # Fuse gemm1 silu/swiglu + fp8 quantization + scale preshuffle into the
