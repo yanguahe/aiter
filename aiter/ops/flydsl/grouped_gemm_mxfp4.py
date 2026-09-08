@@ -60,6 +60,37 @@ def _select_num_waves_per_tensor_tdm(csv_num_waves: int) -> int:
     return num_waves
 
 
+def _select_epilogue_batch_wn(default: int) -> int:
+    """Selects the target GEMM1 SiLU epilogue batch width."""
+    try:
+        batch_wn = int(
+            os.environ.get("AITER_FLYDSL_GEMM1_EPILOGUE_BATCH_WN", str(default))
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "AITER_FLYDSL_GEMM1_EPILOGUE_BATCH_WN must be 1, 2, 4, or 8"
+        ) from exc
+    if batch_wn not in (1, 2, 4, 8):
+        raise ValueError("AITER_FLYDSL_GEMM1_EPILOGUE_BATCH_WN must be 1, 2, 4, or 8")
+    return batch_wn
+
+
+def _select_schedule_hints(default: int) -> int:
+    value = os.environ.get("AITER_FLYDSL_GEMM1_SCHEDULE_HINTS", str(default)).strip()
+    if value not in ("0", "1"):
+        raise ValueError("AITER_FLYDSL_GEMM1_SCHEDULE_HINTS must be 0 or 1")
+    return int(value)
+
+
+def _select_relax_cluster_wrap_dscnt(default: int) -> int:
+    value = os.environ.get(
+        "AITER_FLYDSL_GEMM1_RELAX_CLUSTER_WRAP_DSCNT", str(default)
+    ).strip()
+    if value not in ("0", "1"):
+        raise ValueError("AITER_FLYDSL_GEMM1_RELAX_CLUSTER_WRAP_DSCNT must be 0 or 1")
+    return int(value)
+
+
 def flydsl_grouped_gemm_a8w4_masked(
     out,
     a,
@@ -92,6 +123,8 @@ def flydsl_grouped_gemm_a8w4_masked(
     next_stage_prefetch=0,
     situ_beta=1.0,
     situ_linear_beta=1.0,
+    a_preshuffle=0,
+    balanced_rows_per_expert=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
@@ -110,6 +143,27 @@ def flydsl_grouped_gemm_a8w4_masked(
     n_tiles = (N + tile_n - 1) // tile_n
     cluster_n = _select_cluster_n(n_tiles, cluster_n)
     waves_per_tensor_tdm = _select_num_waves_per_tensor_tdm(waves_per_tensor_tdm)
+    next_stage_prefetch = _select_next_stage_prefetch(next_stage_prefetch)
+    target_fp4_prefill = all(
+        (
+            a_is_fp4,
+            K == 7168,
+            tile_m == 256,
+            tile_n == 256,
+            tile_k == 256,
+            m_warp == 2,
+            n_warp == 2,
+            num_buffers == 4,
+            stage1_act == 1,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            cluster_n == 4,
+            waves_per_tensor_tdm == 1,
+            next_stage_prefetch == 1,
+            n_experts > 0,
+        )
+    )
     if cluster_n > 1 and n_tiles % cluster_n:
         raise ValueError(
             f"[grouped-moe tdm] cluster_n={cluster_n} needs n_tiles={n_tiles} "
@@ -143,9 +197,14 @@ def flydsl_grouped_gemm_a8w4_masked(
         quant_wmma_rep,
         quant_scale_tensor,
         cluster_n,
-        _select_next_stage_prefetch(next_stage_prefetch),
+        next_stage_prefetch,
         waves_per_tensor_tdm,
         float(situ_beta),
         float(situ_linear_beta),
+        _select_epilogue_batch_wn(8 if target_fp4_prefill else 1),
+        int(bool(a_preshuffle)),
+        _select_schedule_hints(1 if target_fp4_prefill else 0),
+        _select_relax_cluster_wrap_dscnt(1 if target_fp4_prefill else 0),
+        int(balanced_rows_per_expert),
     )
     return out

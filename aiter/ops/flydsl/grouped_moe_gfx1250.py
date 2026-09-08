@@ -561,9 +561,46 @@ def _grouped_a8w4_tdm_moe(
     _is_fp4 = data_format == "fp4"
     _quant_mode = "fp4" if _is_fp4 else "fp8"
     _a_is_fp4 = 1 if _is_fp4 else 0
+    _target_fp4_prefill = all(
+        (
+            _is_fp4,
+            model_dim == 7168,
+            two_inter == 6144,
+            tile_m == 256,
+            tile_n == 256,
+            tile_k == 256,
+            m_warp == 2,
+            n_warp == 2,
+            num_buffers == 4,
+            stage1_act == 1,
+            _b1 is None,
+            out_is_f16 == 0,
+            cluster_n == 4,
+            waves_per_tensor_tdm == 1,
+            next_stage_prefetch == 1,
+        )
+    )
+    _a_preshuffle_env = os.environ.get("AITER_FLYDSL_GEMM1_A_PRESHUFFLE")
     _gemm1_a_preshuffle = _is_fp4 and (
-        os.environ.get("AITER_MOE_GEMM1_LAUNCH_BACKEND", "").strip().lower()
-        == "cpp"
+        os.environ.get("AITER_MOE_GEMM1_LAUNCH_BACKEND", "").strip().lower() == "cpp"
+        or (
+            _target_fp4_prefill
+            if _a_preshuffle_env is None
+            else _a_preshuffle_env in _TRUTHY_ENV
+        )
+    )
+    _balanced_rows_per_expert = 0
+    if (
+        _target_fp4_prefill
+        and not _is_ep
+        and os.environ.get("AITER_MOE_EXPERT_BALANCE", "False").lower() == "true"
+        and (token_num * topk) % E == 0
+    ):
+        _rows_per_expert = (token_num * topk) // E
+        if _rows_per_expert % tile_m == 0:
+            _balanced_rows_per_expert = _rows_per_expert
+    _gemm1_launch_m = (
+        E * _balanced_rows_per_expert if _balanced_rows_per_expert > 0 else contiguous_m
     )
 
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
@@ -610,7 +647,7 @@ def _grouped_a8w4_tdm_moe(
             w1s_i32,
             psum,
             n_experts=E,
-            contiguous_m=contiguous_m,
+            contiguous_m=_gemm1_launch_m,
             N=two_inter,
             K=model_dim,
             tile_m=tile_m,
@@ -630,6 +667,8 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
+            a_preshuffle=_gemm1_a_preshuffle,
+            balanced_rows_per_expert=_balanced_rows_per_expert,
             **_situ_kw,
         )
     else:
@@ -643,7 +682,7 @@ def _grouped_a8w4_tdm_moe(
             w1s_i32,
             psum,
             n_experts=E,
-            contiguous_m=contiguous_m,
+            contiguous_m=_gemm1_launch_m,
             N=two_inter,
             K=model_dim,
             tile_m=tile_m,
@@ -660,6 +699,8 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
+            a_preshuffle=_gemm1_a_preshuffle,
+            balanced_rows_per_expert=_balanced_rows_per_expert,
             **_situ_kw,
         )
         # Route-indexed: quantize only the routed rows instead of sweeping the
