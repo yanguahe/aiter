@@ -1,0 +1,113 @@
+Running advanced-thread-trace-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps-simd3: rocprofv3 -i my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/input_kernel.yaml -- env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.s --shape 1024,6144,7168 --batch 96 --iters 4 --const-init 0 --clang ./my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh
+W20260907 10:58:30.622521 140058162617920 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030926 sec
+W20260907 10:58:30.622715 140058162617920 simple_timer.cpp:55] [rocprofv3] 'env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.s --shape 1024,6144,7168 --batch 96 --iters 4 --const-init 0 --clang ./my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh' ::     0.000000 sec
+W20260907 10:58:30.683314 127383476989504 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.031209 sec
+W20260907 10:58:30.683504 127383476989504 simple_timer.cpp:55] [rocprofv3] 'python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.s --shape 1024,6144,7168 --batch 96 --iters 4 --const-init 0 --clang ./my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh' ::     0.000000 sec
+W20260907 10:58:31.218721 128490712751680 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030529 sec
+W20260907 10:58:31.218903 128490712751680 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/offload-arch' ::     0.000000 sec
+W20260907 10:58:31.298037 140229863485056 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.029711 sec
+W20260907 10:58:31.298215 140229863485056 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000000 sec
+W20260907 10:58:31.298428 140229863485056 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000213 sec
+W20260907 10:58:31.298459 140229863485056 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260907 10:58:31.298556 140229863485056 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260907 10:58:31.298611 140229863485056 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3
+W20260907 10:58:31.298613 140229863485056 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260907 10:58:31.298646 140229863485056 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000192 sec
+W20260907 10:58:31.298708 140229863485056 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000258 sec
+W20260907 10:58:32.127475 127383476989504 tool.cpp:2476] HSA version 1.18.0 initialized (instance=0)
+W20260907 10:58:32.881879 138095080668736 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.031040 sec
+W20260907 10:58:32.882102 138095080668736 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/hipconfig --version' ::     0.000000 sec
+W20260907 10:58:32.955011 133094004334144 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.031258 sec
+W20260907 10:58:32.955201 133094004334144 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000000 sec
+W20260907 10:58:32.955274 133094004334144 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000073 sec
+W20260907 10:58:32.955307 133094004334144 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260907 10:58:32.955424 133094004334144 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260907 10:58:32.955478 133094004334144 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3
+W20260907 10:58:32.955481 133094004334144 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260907 10:58:32.955514 133094004334144 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000212 sec
+W20260907 10:58:32.955600 133094004334144 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000301 sec
+W20260907 10:58:33.023149 133259427958336 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030902 sec
+W20260907 10:58:33.023341 133259427958336 simple_timer.cpp:55] [rocprofv3] '/bin/sh -c cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260907 10:58:33.080723 134568386072128 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030282 sec
+W20260907 10:58:33.080913 134568386072128 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260907 10:58:33.081074 134568386072128 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000161 sec
+W20260907 10:58:33.081105 134568386072128 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260907 10:58:33.081212 134568386072128 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260907 10:58:33.081276 134568386072128 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3
+W20260907 10:58:33.081278 134568386072128 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260907 10:58:33.081310 134568386072128 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000210 sec
+W20260907 10:58:33.081435 134568386072128 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000338 sec
+[aiter WARNING] 2026-09-07 10:58:33.085 - MainProcess:3995 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:615 - check_numa_custom_op
+WARNING: NUMA balancing is enabled, which may cause errors. It is recommended to disable NUMA balancing by running "sudo sh -c 'echo 0 > /proc/sys/kernel/numa_balancing'" for more details: https://rocm.docs.amd.com/en/latest/how-to/system-optimization/mi300x.html#disable-numa-auto-balancing
+[aiter INFO] 2026-09-07 10:58:33.289 - MainProcess:3995 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+W20260907 10:58:33.568013 124747105521216 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030854 sec
+W20260907 10:58:33.568205 124747105521216 simple_timer.cpp:55] [rocprofv3] '/bin/sh /sbin/ldconfig -p' ::     0.000000 sec
+E20260907 10:58:36.369890 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_1.out
+E20260907 10:58:36.376978 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_2.out
+E20260907 10:58:36.405958 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_3.out
+/data/yanguahe/code/wk_sp1/aiter/my_code/isa_runner/gemm_isa_runner.py:684: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rocm-npi-dev/rocm-npi-dev/_therock/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  x = torch.full(
+E20260907 10:58:36.928831 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_4.out
+E20260907 10:58:36.944017 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_5.out
+E20260907 10:58:36.976937 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_6.out
+E20260907 10:58:36.999133 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_7.out
+E20260907 10:58:37.025883 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_8.out
+E20260907 10:58:37.061717 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_9.out
+E20260907 10:58:37.135677 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_10.out
+E20260907 10:58:37.204699 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_11.out
+E20260907 10:58:37.225775 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_12.out
+E20260907 10:58:37.229374 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_13.out
+E20260907 10:58:38.483428 127323623913152 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_23084_shader_engine_0_524.att
+E20260907 10:58:38.484111 127323623913152 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_23084_shader_engine_1_524.att
+E20260907 10:58:38.484646 127323623913152 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_23084_shader_engine_2_524.att
+E20260907 10:58:38.485229 127323623913152 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_23084_shader_engine_3_524.att
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W907 10:58:38.523332202 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 6 (function operator())
+E20260907 10:58:38.513909 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_14.out
+E20260907 10:58:38.528827 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_15.out
+E20260907 10:58:38.547167 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_16.out
+E20260907 10:58:38.559628 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_17.out
+[aiter INFO] 2026-09-07 10:58:38.564 - MainProcess:3995 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:512 - checkAllclose
+mxfp4 batched GEMM ISA runner[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+E20260907 10:58:38.567812 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_18.out
+E20260907 10:58:38.580135 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_19.out
+[gemm_batch_isa_runner] selected profile: bf16-mxfp4-wg256-wave128-4x4-persistent-batch-z; symbol=f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps; shape=(1024, 6144, 7168); WG tile=(256, 256); wave tile=(128, 128); batch=96
+[gemm_batch_isa_runner] logical WG grid=(24, 4, 96); WG tasks total=9216; logical cluster grid=(6, 1, 96); cluster tasks/plane=6; cluster tasks total=576
+[gemm_batch_isa_runner] physical launch=(24, 4, 96); block=(128, 1, 1); cluster=(4, 4, 1); physical cluster grid=(6, 1, 96); clusters/plane=6; clusters total=576; physical WGs/plane=96; physical WGs total=9216; encoded recurrence stride/plane=8; log2 X/Y grid=(3, 0)
+[gemm_batch_isa_runner] ABI=bf16-mxfp4-preload-batch-z-v1; kernarg=120 bytes; static LDS=320 KB; dynamic LDS=0 KB; WGs/WGP by LDS=1 (LDS budget=320 KB); VGPR/SGPR metadata=1024/106; stores to D=True
+[gemm_batch_isa_runner] selected clang: /data/yanguahe/code/wk_sp1/aiter/my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh
+[gemm_batch_isa_runner] /data/yanguahe/code/wk_sp1/aiter/my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.s -o /tmp/gemm_batch_isa_runner_0hg_7z9t/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.o
+[gemm_batch_isa_runner] /data/yanguahe/code/wk_sp1/aiter/my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -nostdlib -Wl,--no-undefined -shared /tmp/gemm_batch_isa_runner_0hg_7z9t/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.o -o /tmp/gemm_batch_isa_runner_0hg_7z9t/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.co
+[gemm_isa_runner] AITER_LOG_MORE trace remains explicit; temporarily setting it to 0 inside run_perftest to avoid its additional CUDA-event iteration pass
+
+[gemm_isa_runner run_perftest trace_df]
+                                                              name  cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps  3.0          0.000            4.524            1.508        CUDA            2
+1                        gemm_isa_runner_3995::launch_73bc61ad76a0  3.0          4.524            0.000            0.000         CPU         3995
+[avg us/iter]                                                  NaN  NaN          1.508            1.508              NaN         NaN          NaN
+[gemm_isa_runner] captured kernel name=f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps
+[gemm_isa_runner] profiler count=3; device_time_sum=4.5240 us; device_time_avg=1.5080 us; profiler device_index=2; requested torch device ordinal=0
+[gemm_isa_runner] timing source=run_perftest testGraph=False torch-profiler; testGraph=False; run_perftest _us=1.5080
+[gemm_batch_isa_runner] logical_read_bytes=2620391424; logical_write_bytes=1207959552 (stores output=True; detected mnemonic=tensor_store_from_lds); logical_bytes=read+write=3828350976
+[gemm_batch_isa_runner] logical_bytes=3828350976 = A+B+sA+sB (2620391424) + D (1207959552)
+run_perftest kernel timing (microseconds; source=run_perftest testGraph=False torch-profiler; summary uses the captured target-row device_time_avg):
+| name                                                | cnt | warmup | device_time_sum | device_time_avg | device_type | device_index | source                                      |
+| --------------------------------------------------- | --- | ------ | --------------- | --------------- | ----------- | ------------ | ------------------------------------------- |
+| f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps | 3   | 5      | 4.5240          | 1.5080          | CUDA        | 2            | run_perftest testGraph=False torch-profiler |
+GEMM ISA runner summary (markdown; profile=bf16-mxfp4-wg256-wave128-4x4-persistent-batch-z; symbol=f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps):
+| intype | batch | M    | N    | K    | apre | init     | seed | dtype | gfx     | logical cluster tasks/plane | physical clusters/plane | physical WGs/plane | encoded recurrence stride/plane | ref hash128                      | gemm_a4w4 us | gemm_a4w4 TFLOPS | gemm_a4w4 bytes | gemm_a4w4 TB/s | gemm_a4w4 err | gemm_a4w4 out hash128            | gemm_a4w4 max_err_info | gemm_a4w4 rel_l2 |
+| ------ | ----- | ---- | ---- | ---- | ---- | -------- | ---- | ----- | ------- | --------------------------- | ----------------------- | ------------------ | ------------------------------- | -------------------------------- | ------------ | ---------------- | --------------- | -------------- | ------------- | -------------------------------- | ---------------------- | ---------------- |
+| mxfp4  | 96    | 1024 | 6144 | 7168 | 1    | const(0) | 0    | bf16  | gfx1250 | 6                           | 6                       | 96                 | 8                               | 3d98ed518d3823956230736f6e7e50cd | 1.51         | 5741813.0        | 3828350976      | 2308.93        | 0.0           | 3d98ed518d3823956230736f6e7e50cd | (0.0, 0.0, 0.0)        | 0.0              |
+E20260907 10:58:40.238614 127383476989504 output_stream.cpp:111] Opened result file: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_agent_info.csv
+W20260907 10:58:40.238671 127383476989504 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260907 10:58:40.238917 127383476989504 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260907 10:58:40.238961 127383476989504 tool.cpp:2859] [ATT-DEBUG] codeobj count=20 att_filenames count=1 output_path=my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3
+W20260907 10:58:40.238964 127383476989504 tool.cpp:2885] [ATT-DEBUG] parse() begin dispatch_id=524 shader_files=4 out_path=my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/ui_output_agent_23084_dispatch_524
+W20260907 10:58:41.513758 127383476989504 tool.cpp:2892] [ATT-DEBUG] parse() OK dispatch_id=524
+W20260907 10:58:41.513773 127383476989504 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260907 10:58:41.514112 127383476989504 simple_timer.cpp:55] [rocprofv3] output generation ::     1.277056 sec
+W20260907 10:58:41.515417 127383476989504 simple_timer.cpp:55] [rocprofv3] tool finalization ::     1.278367 sec
+advanced-thread-trace-f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps-simd3 exit status: 0
+ATT artifact found: my_code/.get_isa_runner_att_gemm1opt_e96_t16384_ref_v2.d01-3.att_3540/thread_trace/kernel/rpf_v3/out_23084_shader_engine_2_524.att

@@ -1,0 +1,14 @@
+requested_kernel=a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1
+kernel_regex=a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1
+kernel_name_validation=trusted_without_database_lookup
+all_simd=0
+simd_ids=3
+output_dir_name=gemm1opt_e96_t16384_baseline.d01-3.att
+test_command=python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario bench --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --warmup 1 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0
+kernel_trace_status=0
+att_status=0
+kernel_trace_state=success
+att_state=success
+simd3_att_status=0
+final_output_dir=my_code/gemm1opt_e96_t16384_baseline.d01-3.att
+final_archive=my_code/gemm1opt_e96_t16384_baseline.d01-3.att.tar.gz

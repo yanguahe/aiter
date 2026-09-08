@@ -1,3 +1,0 @@
-llvm-objdump --show-raw-insn supported: 0
-llvm-objdump --symbolize-operands supported: 1
-llvm-readobj --amdgpu-metadata supported: 0

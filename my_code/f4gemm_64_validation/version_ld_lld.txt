@@ -1,1 +1,0 @@
-LLD 23.0.0 (git@github.com:yanguahe/llvm-project.git 864d053a6ddbcff7c5816384626332d40d0eb399) (compatible with GNU linkers)

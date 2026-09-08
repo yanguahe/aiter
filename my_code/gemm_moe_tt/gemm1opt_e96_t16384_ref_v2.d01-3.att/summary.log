@@ -1,0 +1,14 @@
+requested_kernel=f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps
+kernel_regex=f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps
+kernel_name_validation=trusted_without_database_lookup
+all_simd=0
+simd_ids=3
+output_dir_name=gemm1opt_e96_t16384_ref_v2.d01-3.att
+test_command=python my_code/isa_runner/gemm_batch_isa_runner.py --isa ./my_code/f4gemm_bf16_mxfp4_ABpreShuffle_256x256_4x4_batch_ps.s --shape 1024,6144,7168 --batch 96 --iters 4 --const-init 0 --clang ./my_code/gemm1_opt_e96_t16384_20260907/clang_unprofiled.sh
+kernel_trace_status=0
+att_status=0
+kernel_trace_state=success
+att_state=success
+simd3_att_status=0
+final_output_dir=my_code/gemm1opt_e96_t16384_ref_v2.d01-3.att
+final_archive=my_code/gemm1opt_e96_t16384_ref_v2.d01-3.att.tar.gz

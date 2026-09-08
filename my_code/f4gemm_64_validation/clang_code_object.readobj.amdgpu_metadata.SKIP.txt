@@ -1,1 +1,0 @@
-SKIP: llvm-readobj --amdgpu-metadata is unsupported; generic --notes/readelf decoding was retained for clang_code_object.

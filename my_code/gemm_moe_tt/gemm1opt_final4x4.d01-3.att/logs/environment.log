@@ -1,0 +1,23 @@
+date: 2026-09-07T12:47:22+00:00
+host: heliosr-1b114-d01-3
+pwd: /data/yanguahe/code/wk_sp1/aiter
+HIP_VISIBLE_DEVICES: 0
+requested kernel: a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1
+capture all SIMDs: 0
+output directory name: gemm1opt_final4x4.d01-3.att
+output directory: my_code/gemm1opt_final4x4.d01-3.att
+output archive: my_code/gemm1opt_final4x4.d01-3.att.tar.gz
+python: /opt/venv/bin/python
+Python 3.12.3
+rocprofv3: /data/yanguahe/code/wk_sp1/rocprof-install/bin/rocprofv3
+             version: 1.1.0
+        git_revision: 3f3cbc315f8764cde8565a1cb29cf9673426d93c
+        library_arch: x86_64-linux-gnu
+         system_name: Linux
+    system_processor: x86_64
+      system_version: 6.14.0-37-generic
+         compiler_id: GNU
+    compiler_version: 13.3.0
+        rocm_version: 7.12.0
+
+test command: python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0

@@ -1,0 +1,61 @@
+Running kernel-trace-stats: rocprofv3 --kernel-trace --stats -d my_code/.get_isa_runner_att_gemm1opt_final4x4.d01-3.att_24648/kernel_trace -- env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0
+W20260907 12:47:22.576272 125538199690816 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000528 sec
+W20260907 12:47:22.576342 125538199690816 simple_timer.cpp:55] [rocprofv3] 'env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0' ::     0.000000 sec
+W20260907 12:47:22.605999 140409471884864 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000605 sec
+W20260907 12:47:22.606058 140409471884864 simple_timer.cpp:55] [rocprofv3] 'python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0' ::     0.000000 sec
+W20260907 12:47:22.716751 140616282578496 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000618 sec
+W20260907 12:47:22.716806 140616282578496 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/offload-arch' ::     0.000000 sec
+W20260907 12:47:22.766931 135202178227840 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000411 sec
+W20260907 12:47:22.766985 135202178227840 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000000 sec
+W20260907 12:47:22.767193 135202178227840 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000208 sec
+W20260907 12:47:22.767648 135202178227840 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000346 sec
+W20260907 12:47:22.767732 135202178227840 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000510 sec
+W20260907 12:47:24.073363 134852989546048 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000606 sec
+W20260907 12:47:24.073424 134852989546048 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/hipconfig --version' ::     0.000000 sec
+W20260907 12:47:24.115528 127766296501824 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000543 sec
+W20260907 12:47:24.115585 127766296501824 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000000 sec
+W20260907 12:47:24.115648 127766296501824 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000063 sec
+W20260907 12:47:24.116073 127766296501824 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000324 sec
+W20260907 12:47:24.116177 127766296501824 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000500 sec
+W20260907 12:47:24.154366 140588149571136 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000609 sec
+W20260907 12:47:24.154428 140588149571136 simple_timer.cpp:55] [rocprofv3] '/bin/sh -c cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260907 12:47:24.180662 130437845712448 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000554 sec
+W20260907 12:47:24.180713 130437845712448 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260907 12:47:24.180837 130437845712448 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000124 sec
+W20260907 12:47:24.181264 130437845712448 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000331 sec
+W20260907 12:47:24.181322 130437845712448 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000462 sec
+[aiter] WARNING: NUMA balancing is enabled, which may cause errors. It is recommended to disable NUMA balancing by running "sudo sh -c 'echo 0 > /proc/sys/kernel/numa_balancing'" for more details: https://rocm.docs.amd.com/en/latest/how-to/system-optimization/mi300x.html#disable-numa-auto-balancing
+[aiter] import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+W20260907 12:47:24.460777 140409471884864 tool.cpp:2476] HSA version 1.18.0 initialized (instance=0)
+W20260907 12:47:24.511973 130321614970432 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.000552 sec
+W20260907 12:47:24.512022 130321614970432 simple_timer.cpp:55] [rocprofv3] '/bin/sh /sbin/ldconfig -p' ::     0.000000 sec
+[aiter] grouped GEMM data format: a4w4
+/opt/venv/lib/python3.12/site-packages/torch/utils/_device.py:109: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rocm-npi-dev/rocm-npi-dev/_therock/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  return func(*args, **kwargs)
+[aiter] import [module_moe_asm] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_moe_asm.so
+[sanity a4w4 silu] eager: logits_diff=0.0000e+00 rel_l2=0.0000e+00 (gate<0.01, ref_norm=0.0000e+00)
+[sanity a4w4 silu] output_sha256=bc3404a6147c932d6ff7c322658fc3258b7a0ca1b81adf2a381f73ed1348020e
+
+[precision summary]
+| data_format   | act   | init   |   experts |   tokens |   topk |   model_dim |   inter_dim |   logits_diff |   rel_l2 | pass   | us   | gemm1_us   | gemm2_us   | gemm1 executed   | gemm1 effective read   | gemm1 output write   | gemm1 effective R+W   | gemm2 executed   | gemm2 effective read   | gemm2 output write   | gemm2 effective R+W   |
+|:--------------|:------|:-------|----------:|---------:|-------:|------------:|------------:|--------------:|---------:|:-------|:-----|:-----------|:-----------|:-----------------|:-----------------------|:---------------------|:----------------------|:-----------------|:-----------------------|:---------------------|:----------------------|
+| a4w4          | silu  | const  |        96 |    16384 |      6 |        7168 |        3072 |             0 |        0 | True   |      |            |            | N/A              | N/A                    | N/A                  | N/A                   | N/A              | N/A                    | N/A                  | N/A                   |
+W20260907 12:47:29.497355 140409471884864 simple_timer.cpp:55] [rocprofv3] 'python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify --data-format a4w4 --experts 96 --tokens 16384 --topk 6 --iters 4 --model-dim 7168 --inter-dim 3072 --act silu --no-bias --no-check-aot-cache --const-init 0' ::     6.891297 sec
+W20260907 12:47:29.534910 140409471884864 generateRocpd.cpp:583] writing SQL database for process 24675 on node 2161002656
+E20260907 12:47:29.535428 140409471884864 generateRocpd.cpp:606] Opened result file: my_code/.get_isa_runner_att_gemm1opt_final4x4.d01-3.att_24648/kernel_trace/heliosr-1b114-d01-3/24675_results.db (UUID=000000e0-c973-7973-9afe-4e9d10a5e45a)
+W20260907 12:47:29.869042 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_string             ::     0.287492 sec
+W20260907 12:47:29.869401 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_node          ::     0.000337 sec
+W20260907 12:47:29.870019 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_process       ::     0.000612 sec
+W20260907 12:47:29.871700 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_agent         ::     0.001299 sec
+W20260907 12:47:29.871708 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_info_pmc           ::     0.000003 sec
+W20260907 12:47:30.185287 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd kernel info        ::     0.313576 sec
+W20260907 12:47:30.185300 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_region             ::     0.000002 sec
+W20260907 12:47:30.473998 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_kernel_dispatch    ::     0.288695 sec
+W20260907 12:47:30.474007 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_pmc_event          ::     0.000000 sec
+W20260907 12:47:30.474009 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_memory_copy        ::     0.000000 sec
+W20260907 12:47:30.474011 140409471884864 simple_timer.cpp:55] SQLite3 generation :: rocpd_memory_allocate    ::     0.000001 sec
+W20260907 12:47:30.474103 140409471884864 simple_timer.cpp:55] SQLite3 generation :: SQL indexing             ::     0.000091 sec
+W20260907 12:47:30.483822 140409471884864 simple_timer.cpp:55] SQLite3 generation :: total                    ::     0.948912 sec
+W20260907 12:47:30.485038 140409471884864 simple_timer.cpp:55] [rocprofv3] output generation ::     0.962623 sec
+W20260907 12:47:30.487670 140409471884864 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.965292 sec
+kernel-trace-stats exit status: 0

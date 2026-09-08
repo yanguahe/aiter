@@ -1,0 +1,4 @@
+Checking rocprof trace decoder:
+ROCPROF_ATT_LIBRARY_PATH=/data/yanguahe/code/wk_sp1/decoder_new
+-rw-r--r-- 1 root root 224K Mar 13 16:03 /data/yanguahe/code/wk_sp1/decoder_new/librocprof-trace-decoder.so
+lrwxrwxrwx 1 root root 52 Mar  8 21:30 /opt/rocm/lib/librocprof-trace-decoder.so -> ../../_rocm_sdk_core/lib/librocprof-trace-decoder.so
