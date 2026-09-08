@@ -19,6 +19,10 @@ in progress.
   `get_isa_runner_att.sh --ana-att`; trace output stays under this directory.
 - `att_launch_opt.py`: minimal one-launch ATT target that loads the precompiled
   `act1_opt.co`, avoiding clang/COMGR execution inside rocprof.
+- `HARDWARE_CYCLE_LIMIT.md`: derives the MXFP4 compute, memory/TDM/LDS, and
+  exact-kernel instruction/occupancy cycle ceilings for the const0 workload.
+- `att_const0_analyze.log`: preserved `--ana-att` output used by the cycle-limit
+  analysis.
 
 ## Regenerate
 
