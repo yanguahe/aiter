@@ -12,9 +12,21 @@ in progress.
 - `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`: generated
   optimized assembly. It deliberately retains the canonical kernel symbol so
   the isolated runner can use the audited 184-byte ABI/profile.
+- `build_double_output_lds_variant.py`: derives the retained double-output-LDS
+  implementation from the optimized-v1 assembly.
+- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`:
+  current optimized candidate with disjoint output LDS staging.
 - `gemm_batch_isa_runner.py`, `gemm_isa_runner.py`: isolated copies of the
   validated runner used for testing older remote checkouts.
+- `compare_asm_variants.py`, `run_e2e_candidate.py`: standalone comparison and
+  full grouped-MoE e2e adapters for the three retained ISA versions.
 - `test_optimized.sh`: quick correctness and formal benchmark commands.
+- `benchmark_history.sh`: one-command, same-process comparison of the known-safe
+  baseline, the first optimized kernel, and the current double-buffered-output
+  candidate.  It records the host, Git HEAD, clocks, SHA256 values, validation,
+  and timings under `history_runs/`.
+- `benchmark_att_history.sh`: builds the same history set and collects/analyzes
+  one ATT capture for each version under a timestamped `att_history/` directory.
 - `run_att_const0.sh`: collect and analyze one const0 ATT capture with
   `get_isa_runner_att.sh --ana-att`; trace output stays under this directory.
 - `att_launch_opt.py`: minimal one-launch ATT target that loads the precompiled
@@ -38,6 +50,54 @@ bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-random
 bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-const0
 bash my_code/moe_gemm1_act1_optimized/run_att_const0.sh
 ```
+
+After reconnecting to a machine or after any system reconfiguration, recreate
+the local performance baseline before judging a new candidate:
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-const0
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-random
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+```
+
+The canonical performance number for this task is the `gemm1` profiler row
+from the full MoE const0 flow:
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
+```
+
+This is also the script's default mode when no mode argument is supplied.
+Standalone timing is retained only as a faster diagnostic and tuning signal.
+
+The directory intentionally retains only these three assembly versions:
+
+1. `baseline_act1_independent.s`
+2. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`
+3. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`
+
+`perf-const0` first reproduces the exact historical command against
+`moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s` (the version that
+measured `515.603 us` on the earlier b8-3 configuration), then runs the
+same-input interleaved comparison.  Set
+`AITER_HISTORY_RUN_REFERENCE_COMMAND=0` to skip this duplicate measurement.
+
+Add one experimental ISA to the same interleaved comparison without editing
+the script:
+
+```bash
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/candidate.s \
+  bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-const0
+```
+
+Collect comparable GFXCLK-cycle traces for the stable history set:
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+```
+
+`test_optimized.sh` also accepts `AITER_OPT_ISA=/path/to/candidate.s`, so its
+standalone and e2e modes can be reused without replacing the default kernel.
 
 The optimized epilogue swaps each `G0,U0,G1,U1` accumulator group into
 contiguous gate/up pairs, uses `v_pk_mul_f32` and `v_dual_*`, and pipelines the

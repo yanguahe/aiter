@@ -924,6 +924,7 @@ def build_moe_inputs(
     seed: int,
     const_init: float | None = None,
     a_preshuffle: bool = False,
+    a_scale_shuffle_log2: int = 7,
 ):
     """Build every tensor the MoE stage-1 kernel dereferences, plus a reference.
 
@@ -1068,7 +1069,9 @@ def build_moe_inputs(
         a = shuffle_weight_f4(a_q.view(torch.uint8)).reshape(
             1, contiguous_m, k // 2
         )
-        scale_a = shuffle_scale_f4(a_scale_logical, 7).reshape(
+        scale_a = shuffle_scale_f4(
+            a_scale_logical, int(a_scale_shuffle_log2)
+        ).reshape(
             1, contiguous_m // rep_a, k_scale * rep_a
         )
     else:

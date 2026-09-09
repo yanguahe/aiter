@@ -1,0 +1,244 @@
+timestamp_utc=2026-09-09T10:03:35+00:00
+host=heliosr-2b805-b8-3
+mode=e2e-random
+seed=0 warmup=5 rounds=9 launches_per_sample=5
+git_head=c9d7cc7937679f80b96e33b180f7e6c97eabd244
+3f40709bc179544c163b2fd80e8cffc253c261646caf659340ecaad5cfb0d681  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/baseline_act1_independent.s
+c90bbe6221b03ae6e05d1d5570b16be25217133e4105860eac901043f316feae  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s
+33034bb76ada72f9fbc895c1edbf56ee339d0ed6eb28d496196b68323ceed331  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s
+
+
+============================ ROCm System Management Interface ============================
+=============================== Current clock frequencies ================================
+GPU[0]		: fclk clock level: 1: (1950Mhz)
+GPU[0]		: mclk clock level: 0: (1900Mhz)
+GPU[0]		: sclk clock level: 1: (2351Mhz)
+GPU[0]		: socclk clock level: 0: (1350Mhz)
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 100
+==========================================================================================
+=================================== Current Memory Use ===================================
+GPU[0]		: GPU Memory Allocated (VRAM%): 1
+GPU[0]		: GPU Memory Read/Write Activity (%): 0
+GPU[0]		: Memory Activity: N/A
+GPU[0]		: Not supported on the given system
+==========================================================================================
+====================================== Product Info ======================================
+GPU[0]		: Card Series: 		AMD Radeon Graphics
+GPU[0]		: Card Model: 		0x75c1
+GPU[0]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[0]		: Card SKU: 		N/A
+GPU[0]		: Subsystem ID: 	0x75c1
+GPU[0]		: Device Rev: 		0x00
+GPU[0]		: Node ID: 		1
+GPU[0]		: GUID: 		56179
+GPU[0]		: GFX Version: 		gfx1250
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+===== e2e baseline_act1_independent.s data=random =====
+[run_e2e_candidate] GEMM1 ISA override: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/baseline_act1_independent.s
+[aiter INFO] 2026-09-09 10:03:37.176 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+[aiter INFO] 2026-09-09 10:03:40.697 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/op_tests/test_flydsl_grouped_gemm_gfx1250.py:1720 - set_data_format
+grouped GEMM data format: a4w4
+[moe_cpp_backend] cache root: /root/.cache/aiter/moe_gemm1_cpp_launcher
+[moe_cpp_backend] code object cache miss: key=11840637999bbe08fe6167fa72d00f5fdc74189cf5a5b9f817cc5fe980dd0167; reason=build inputs changed: isa.basename, isa.sha256, isa.size
+[moe_cpp_backend] code object build command: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/baseline_act1_independent.s -o /root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/co-11840637999b-k0tpl13f/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.o
+[moe_cpp_backend] code object build command: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -nostdlib -Wl,--no-undefined -shared /root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/co-11840637999b-k0tpl13f/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.o -o /root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/co-11840637999b-k0tpl13f/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co
+[moe_cpp_backend] code object build complete: key=11840637999bbe08fe6167fa72d00f5fdc74189cf5a5b9f817cc5fe980dd0167; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/11840637999bbe08fe6167fa72d00f5fdc74189cf5a5b9f817cc5fe980dd0167/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co
+[moe_cpp_backend] C++ extension cache miss: key=b8f5bdab1a55c1a3041bfc5827406c3b7cbd6b7af93b1c17422454d6a487c684; reason=build inputs changed: code_object.build_key, code_object.sha256
+[moe_cpp_backend] building C++ extension: module=aiter_moe_gemm1_cpp_b8f5bdab1a55c1a3041b; source=/root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/ext-b8f5bdab1a55-892azztp/moe_gemm1_cpp_launcher.generated.cpp; cflags=['-O3', '-std=c++17']; ldflags=['-Wl,--no-as-needed']; with_cuda=True
+/root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/ext-b8f5bdab1a55-892azztp/moe_gemm1_cpp_launcher.generated.cpp -> /root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/ext-b8f5bdab1a55-892azztp/moe_gemm1_cpp_launcher.generated_hip.cpp [ok]
+[92mSuccessfully preprocessed all matching files.[0m
+Total number of unsupported CUDA function calls: 0
+
+
+Total number of replaced kernel launches: 0
+[1/2] c++ -MMD -MF moe_gemm1_cpp_launcher.generated_hip.o.d -DTORCH_EXTENSION_NAME=aiter_moe_gemm1_cpp_b8f5bdab1a55c1a3041b -DTORCH_API_INCLUDE_EXTENSION_H -isystem /opt/venv/lib/python3.12/site-packages/torch/include -isystem /opt/venv/lib/python3.12/site-packages/torch/include/torch/csrc/api/include -isystem /opt/venv/lib/python3.12/site-packages/torch/include/THH -isystem /opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/include -isystem /usr/include/python3.12 -fPIC -std=c++17 -O3 -std=c++17 -c /root/.cache/aiter/moe_gemm1_cpp_launcher/tmp/ext-b8f5bdab1a55-892azztp/moe_gemm1_cpp_launcher.generated_hip.cpp -o moe_gemm1_cpp_launcher.generated_hip.o -D__HIP_PLATFORM_AMD__=1 -DUSE_ROCM=1 -DHIPBLAS_V2 -fPIC
+[2/2] c++ moe_gemm1_cpp_launcher.generated_hip.o -shared -Wl,--no-as-needed -L/opt/venv/lib/python3.12/site-packages/torch/lib -lc10 -lc10_hip -ltorch_cpu -ltorch_hip -ltorch -ltorch_python -L/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib -lamdhip64 -o aiter_moe_gemm1_cpp_b8f5bdab1a55c1a3041b.so
+[moe_cpp_backend] C++ extension build complete: key=b8f5bdab1a55c1a3041bfc5827406c3b7cbd6b7af93b1c17422454d6a487c684; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/extensions/b8f5bdab1a55c1a3041bfc5827406c3b7cbd6b7af93b1c17422454d6a487c684/aiter_moe_gemm1_cpp_b8f5bdab1a55c1a3041b.so
+[moe_cpp_backend] pipeline backend ready before timed callable: co_key=11840637999bbe08fe6167fa72d00f5fdc74189cf5a5b9f817cc5fe980dd0167; extension_key=b8f5bdab1a55c1a3041bfc5827406c3b7cbd6b7af93b1c17422454d6a487c684; co_cache_hit=False; extension_cache_hit=False; co_sha256=27b8077338f1a9a158ed8f286f26a9edc85817b5612d1b85d6038c78bd617d16
+[aiter INFO] 2026-09-09 10:03:54.467 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_moe_asm] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_moe_asm.so
+[moe_cpp_backend] pipeline GEMM1 contract: symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1; grid=(2880, 4, 1); block=(128, 1, 1); cluster=(4, 4, 1); stream=0; code_object=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/11840637999bbe08fe6167fa72d00f5fdc74189cf5a5b9f817cc5fe980dd0167/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co; kernarg_size=184; kernarg_sha256=f509abfdd4c65e058792a02b20ce7c7544c9551aa8faca1ac64d52cef5acb664
+[moe_cpp_backend] pipeline tensors: out=ptr:0x7fa420e00000,shape:(1, 122880, 3072),stride:(377487360, 3072, 1),dtype:torch.bfloat16; a=ptr:0x7fa48d000000,shape:(1, 122880, 3584),stride:(440401920, 3584, 1),dtype:torch.uint8; b=ptr:0x7fa363c00000,shape:(96, 6144, 3584),stride:(22020096, 3584, 1),dtype:torch.uint8; scale_a_u8=ptr:0x7fa4a7400000,shape:(1, 15360, 1792),stride:(27525120, 1792, 1),dtype:torch.uint8; scale_a_i32_desc=ptr:0x7fa4a7400000,shape:(1, 15360, 448),stride:(6881280, 448, 1),dtype:torch.int32; scale_b_i32_desc=ptr:0x7fa470e00000,shape:(33030144,),stride:(1,),dtype:torch.int32; m_tile_map=ptr:0x7fa470290400,shape:(96,),stride:(1,),dtype:torch.int32
+[moe_cpp_backend] pipeline kernarg fields: {'ptr_c': 140342902915072, 'c_size0': 1, 'c_size1': 122880, 'c_size2': 3072, 'c_stride0': 377487360, 'c_stride1': 3072, 'ptr_a': 140344716951552, 'ptr_b': 140339729924096, 'ptr_scale_a': 140345157353472, 'sa_size0': 1, 'sa_size1': 15360, 'sa_size2': 448, 'sa_stride0': 6881280, 'sa_stride1': 448, 'ptr_scale_b': 140344245092352, 'sb_size0': 33030144, 'ptr_m_tile_map': 140344233100288, 'ptr_bias': 140344716951552, 'ptr_quant_scale': 140342902915072, 'qs_size0': 1, 'qs_size1': 122880, 'qs_size2': 3072, 'qs_stride0': 377487360, 'qs_stride1': 3072, 'i32_m': 122880, 'i32_n': 6144, 'f32_swiglu_limit': 1088421888, 'f32_situ_beta': 1082130432, 'f32_situ_linear_beta': 1103626240}
+[moe_cpp_backend] pipeline preflight: balanced psum matched; padding_nonzero=0; module loaded on the current PyTorch stream
+[aiter INFO] 2026-09-09 10:03:55.199 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:93 - wrapper
+avg: 2699.6609330177307 us/iter from cuda.Event
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W909 10:03:55.463265777 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 1 (function operator())
+[aiter INFO] 2026-09-09 10:03:55.298 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:335 - post_process_data
+abnormal data indices: {101, 8, 40, 13, 114, 146, 55, 25}
+[aiter INFO] 2026-09-09 10:03:55.298 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 69.34299999999985
+[aiter INFO] 2026-09-09 10:03:55.298 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 3.4850000000000136
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 213.47899999999993
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 22.953000000000088
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 583.594
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 148.54199999999992
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 997.3340000000001
+[aiter INFO] 2026-09-09 10:03:55.299 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 96.78399999999999
+[aiter INFO] 2026-09-09 10:03:55.353 - MainProcess:1296 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:420 - get_trace_perf
+                                                                                                    name  cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::a... 19.0            0.0             27.9              1.5        CUDA            1
+1                                                                                              moe_route 19.0            0.0            434.4             22.9        CUDA            1
+2                                       moe_fused_quant_preshuffle_routeks_fd3072_r8_fp4_pk8_srcrow_noKS 19.0            0.0          1,327.4             69.9        CUDA            1
+3                                                                              moe_contiguous_psum_remap 19.0            0.0          1,809.8             95.3        CUDA            1
+4                                                          moe_gather_reduce_bf16_d7168_tk6_sk1_v4_wbf16 19.0            0.0          2,804.9            147.6        CUDA            1
+5                                  moe_fused_quant_preshuffle_routeks_fd7168_r8_fp4_pk8_srctk6_noKS_apre 19.0            0.0          3,840.1            202.1        CUDA            1
+6                                          a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1 19.0            0.0         11,224.9            590.8        CUDA            1
+7                                                 moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1 19.0            0.0         19,349.6          1,018.4        CUDA            1
+8                                                                                            aten::fill_ 19.0           27.9              0.0              0.0         CPU         1296
+9                                                                         moe_gemm1_cpp_launcher::launch 19.0       19,349.6              0.0              0.0         CPU         1296
+10                                                                                     aiter::fused_moe_ 19.0       21,441.5              0.0              0.0         CPU         1296
+[avg us/iter]                                                                                        NaN  NaN        2,148.4          2,148.4              NaN         NaN          NaN
+[moe_cpp_backend] pipeline adapter summary: gemm1_cpp_calls=46; gemm2_flydsl_calls=46; padding_nonzero=0
+[sanity a4w4 silu] eager-profile: logits_diff=3.3980e-06 rel_l2=2.6069e-03 (gate<0.01, ref_norm=3.1556e+07)
+[sanity a4w4 silu] output_sha256=aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2
+[bench a4w4 silu] fused_moe end-to-end us = 2148.37 (testGraph=False)
+[bench kernel timing] gemm1: device_time_avg=1018.402 us count=19 symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+[bench kernel timing] gemm2: device_time_avg=590.784 us count=19 symbol=a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1
+
+[precision summary]
+| data_format   | act   | init   |   experts |   tokens |   topk |   model_dim |   inter_dim |   logits_diff |     rel_l2 | pass   |      us |   gemm1_us |   gemm2_us | gemm1 executed                           | gemm1 effective read         | gemm1 output write                | gemm1 effective R+W          | gemm2 executed                           | gemm2 effective read         | gemm2 output write                  | gemm2 effective R+W          |
+|:--------------|:------|:-------|----------:|---------:|-------:|------------:|------------:|--------------:|-----------:|:-------|--------:|-----------:|-----------:|:-----------------------------------------|:-----------------------------|:----------------------------------|:-----------------------------|:-----------------------------------------|:-----------------------------|:------------------------------------|:-----------------------------|
+| a4w4          | silu  | random |        96 |    16384 |      6 |        7168 |        3072 |   3.39799e-06 | 0.00260689 | True   | 2148.37 |     1018.4 |    590.784 | 8,658,654,068,736 FLOP → 8,502.2 TFLOP/s | 2,620,391,424 B → 2.340 TB/s | 603,979,776 B (BF16) → 0.539 TB/s | 3,224,371,200 B → 2.880 TB/s | 4,329,327,034,368 FLOP → 7,328.1 TFLOP/s | 1,283,457,024 B → 1.976 TB/s | 1,409,286,144 B (BF16) → 2.170 TB/s | 2,692,743,168 B → 4.145 TB/s |
+===== e2e moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s data=random =====
+[run_e2e_candidate] GEMM1 ISA override: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s
+[aiter INFO] 2026-09-09 10:03:58.943 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+[aiter INFO] 2026-09-09 10:04:02.490 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/op_tests/test_flydsl_grouped_gemm_gfx1250.py:1720 - set_data_format
+grouped GEMM data format: a4w4
+[moe_cpp_backend] cache root: /root/.cache/aiter/moe_gemm1_cpp_launcher
+[moe_cpp_backend] code object cache hit: key=57ef748788b3ab408006a0cfb3e1f00d78c81c13b9bae24869adbabc2f73b45a; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/57ef748788b3ab408006a0cfb3e1f00d78c81c13b9bae24869adbabc2f73b45a/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co
+[moe_cpp_backend] C++ extension cache hit: key=120b48fa6293a6ffb732a62435f50d366a4348ed785b04c8d1c8c02fde4fcdba; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/extensions/120b48fa6293a6ffb732a62435f50d366a4348ed785b04c8d1c8c02fde4fcdba/aiter_moe_gemm1_cpp_120b48fa6293a6ffb732.so
+[moe_cpp_backend] pipeline backend ready before timed callable: co_key=57ef748788b3ab408006a0cfb3e1f00d78c81c13b9bae24869adbabc2f73b45a; extension_key=120b48fa6293a6ffb732a62435f50d366a4348ed785b04c8d1c8c02fde4fcdba; co_cache_hit=True; extension_cache_hit=True; co_sha256=68cb984df17eb99b15d96945aebed39577a6d71b20945bb01644fadcccd9c1b6
+[aiter INFO] 2026-09-09 10:04:02.721 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_moe_asm] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_moe_asm.so
+[moe_cpp_backend] pipeline GEMM1 contract: symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1; grid=(2880, 4, 1); block=(128, 1, 1); cluster=(4, 4, 1); stream=0; code_object=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/57ef748788b3ab408006a0cfb3e1f00d78c81c13b9bae24869adbabc2f73b45a/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co; kernarg_size=184; kernarg_sha256=d854e43565516d0d99343198c8befa7b8668c1ab2aaa297a2ef93bb7f485de65
+[moe_cpp_backend] pipeline tensors: out=ptr:0x741a9ce00000,shape:(1, 122880, 3072),stride:(377487360, 3072, 1),dtype:torch.bfloat16; a=ptr:0x741b09400000,shape:(1, 122880, 3584),stride:(440401920, 3584, 1),dtype:torch.uint8; b=ptr:0x7419dfc00000,shape:(96, 6144, 3584),stride:(22020096, 3584, 1),dtype:torch.uint8; scale_a_u8=ptr:0x741b23800000,shape:(1, 15360, 1792),stride:(27525120, 1792, 1),dtype:torch.uint8; scale_a_i32_desc=ptr:0x741b23800000,shape:(1, 15360, 448),stride:(6881280, 448, 1),dtype:torch.int32; scale_b_i32_desc=ptr:0x741aed200000,shape:(33030144,),stride:(1,),dtype:torch.int32; m_tile_map=ptr:0x741aec690400,shape:(96,),stride:(1,),dtype:torch.int32
+[moe_cpp_backend] pipeline kernarg fields: {'ptr_c': 127657649897472, 'c_size0': 1, 'c_size1': 122880, 'c_size2': 3072, 'c_stride0': 377487360, 'c_stride1': 3072, 'ptr_a': 127659468128256, 'ptr_b': 127654476906496, 'ptr_scale_a': 127659908530176, 'sa_size0': 1, 'sa_size1': 15360, 'sa_size2': 448, 'sa_stride0': 6881280, 'sa_stride1': 448, 'ptr_scale_b': 127658996269056, 'sb_size0': 33030144, 'ptr_m_tile_map': 127658984276992, 'ptr_bias': 127659468128256, 'ptr_quant_scale': 127657649897472, 'qs_size0': 1, 'qs_size1': 122880, 'qs_size2': 3072, 'qs_stride0': 377487360, 'qs_stride1': 3072, 'i32_m': 122880, 'i32_n': 6144, 'f32_swiglu_limit': 1088421888, 'f32_situ_beta': 1082130432, 'f32_situ_linear_beta': 1103626240}
+[moe_cpp_backend] pipeline preflight: balanced psum matched; padding_nonzero=0; module loaded on the current PyTorch stream
+[aiter INFO] 2026-09-09 10:04:03.431 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:93 - wrapper
+avg: 2597.0242738723755 us/iter from cuda.Event
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W909 10:04:03.692529954 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 1 (function operator())
+[aiter INFO] 2026-09-09 10:04:03.527 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:335 - post_process_data
+abnormal data indices: {99, 100, 8, 40, 13, 142, 55, 25}
+[aiter INFO] 2026-09-09 10:04:03.527 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 70.10399999999981
+[aiter INFO] 2026-09-09 10:04:03.527 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 581.9919999999997
+[aiter INFO] 2026-09-09 10:04:03.527 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 3.0430000000000064
+[aiter INFO] 2026-09-09 10:04:03.528 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 212.35699999999997
+[aiter INFO] 2026-09-09 10:04:03.528 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 22.994000000000028
+[aiter INFO] 2026-09-09 10:04:03.528 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 148.62199999999984
+[aiter INFO] 2026-09-09 10:04:03.528 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 897.825
+[aiter INFO] 2026-09-09 10:04:03.528 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 94.82100000000003
+[aiter INFO] 2026-09-09 10:04:03.582 - MainProcess:1556 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:420 - get_trace_perf
+                                                                                                    name  cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::a... 19.0            0.0             30.6              1.6        CUDA            1
+1                                                                                              moe_route 19.0            0.0            441.6             23.2        CUDA            1
+2                                       moe_fused_quant_preshuffle_routeks_fd3072_r8_fp4_pk8_srcrow_noKS 19.0            0.0          1,336.9             70.4        CUDA            1
+3                                                                              moe_contiguous_psum_remap 19.0            0.0          1,807.3             95.1        CUDA            1
+4                                                          moe_gather_reduce_bf16_d7168_tk6_sk1_v4_wbf16 19.0            0.0          2,828.1            148.8        CUDA            1
+5                                  moe_fused_quant_preshuffle_routeks_fd7168_r8_fp4_pk8_srctk6_noKS_apre 19.0            0.0          3,871.2            203.7        CUDA            1
+6                                          a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1 19.0            0.0         11,343.3            597.0        CUDA            1
+7                                                 moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1 19.0            0.0         16,789.7            883.7        CUDA            1
+8                                                                                            aten::fill_ 19.0           30.6              0.0              0.0         CPU         1556
+9                                                                         moe_gemm1_cpp_launcher::launch 19.0       16,789.7              0.0              0.0         CPU         1556
+10                                                                                     aiter::fused_moe_ 19.0       21,628.5              0.0              0.0         CPU         1556
+[avg us/iter]                                                                                        NaN  NaN        2,023.6          2,023.6              NaN         NaN          NaN
+[moe_cpp_backend] pipeline adapter summary: gemm1_cpp_calls=46; gemm2_flydsl_calls=46; padding_nonzero=0
+[sanity a4w4 silu] eager-profile: logits_diff=3.3980e-06 rel_l2=2.6069e-03 (gate<0.01, ref_norm=3.1556e+07)
+[sanity a4w4 silu] output_sha256=aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2
+[bench a4w4 silu] fused_moe end-to-end us = 2023.62 (testGraph=False)
+[bench kernel timing] gemm1: device_time_avg=883.667 us count=19 symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+[bench kernel timing] gemm2: device_time_avg=597.018 us count=19 symbol=a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1
+
+[precision summary]
+| data_format   | act   | init   |   experts |   tokens |   topk |   model_dim |   inter_dim |   logits_diff |     rel_l2 | pass   |      us |   gemm1_us |   gemm2_us | gemm1 executed                           | gemm1 effective read         | gemm1 output write                | gemm1 effective R+W          | gemm2 executed                           | gemm2 effective read         | gemm2 output write                  | gemm2 effective R+W          |
+|:--------------|:------|:-------|----------:|---------:|-------:|------------:|------------:|--------------:|-----------:|:-------|--------:|-----------:|-----------:|:-----------------------------------------|:-----------------------------|:----------------------------------|:-----------------------------|:-----------------------------------------|:-----------------------------|:------------------------------------|:-----------------------------|
+| a4w4          | silu  | random |        96 |    16384 |      6 |        7168 |        3072 |   3.39799e-06 | 0.00260689 | True   | 2023.62 |    883.667 |    597.018 | 8,658,654,068,736 FLOP → 9,798.6 TFLOP/s | 2,620,391,424 B → 2.697 TB/s | 603,979,776 B (BF16) → 0.622 TB/s | 3,224,371,200 B → 3.319 TB/s | 4,329,327,034,368 FLOP → 7,251.6 TFLOP/s | 1,283,457,024 B → 1.955 TB/s | 1,409,286,144 B (BF16) → 2.147 TB/s | 2,692,743,168 B → 4.102 TB/s |
+===== e2e moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s data=random =====
+[run_e2e_candidate] GEMM1 ISA override: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s
+[aiter INFO] 2026-09-09 10:04:07.132 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+[aiter INFO] 2026-09-09 10:04:10.640 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/op_tests/test_flydsl_grouped_gemm_gfx1250.py:1720 - set_data_format
+grouped GEMM data format: a4w4
+[moe_cpp_backend] cache root: /root/.cache/aiter/moe_gemm1_cpp_launcher
+[moe_cpp_backend] code object cache hit: key=6f11fa9022236a59f7bf7618cc8c2a74a23c1a76ddf31cbf44c184107e9851d2; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/6f11fa9022236a59f7bf7618cc8c2a74a23c1a76ddf31cbf44c184107e9851d2/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co
+[moe_cpp_backend] C++ extension cache hit: key=61a94856174e6429917679ac958574e513a59a447f0a5ea2c3ad8b4cf86bba03; path=/root/.cache/aiter/moe_gemm1_cpp_launcher/extensions/61a94856174e6429917679ac958574e513a59a447f0a5ea2c3ad8b4cf86bba03/aiter_moe_gemm1_cpp_61a94856174e64299176.so
+[moe_cpp_backend] pipeline backend ready before timed callable: co_key=6f11fa9022236a59f7bf7618cc8c2a74a23c1a76ddf31cbf44c184107e9851d2; extension_key=61a94856174e6429917679ac958574e513a59a447f0a5ea2c3ad8b4cf86bba03; co_cache_hit=True; extension_cache_hit=True; co_sha256=1ed04b8f7361c5ea96f9d654be36e26629aa045057691759a2d7fa3c6d2ba983
+[aiter INFO] 2026-09-09 10:04:10.871 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_moe_asm] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_moe_asm.so
+[moe_cpp_backend] pipeline GEMM1 contract: symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1; grid=(2880, 4, 1); block=(128, 1, 1); cluster=(4, 4, 1); stream=0; code_object=/root/.cache/aiter/moe_gemm1_cpp_launcher/code_objects/6f11fa9022236a59f7bf7618cc8c2a74a23c1a76ddf31cbf44c184107e9851d2/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co; kernarg_size=184; kernarg_sha256=fbd0d5e54992f3b5678f1b83c913e61a50bbd393e23f3601af6b873b85f0e8e8
+[moe_cpp_backend] pipeline tensors: out=ptr:0x7cc644e00000,shape:(1, 122880, 3072),stride:(377487360, 3072, 1),dtype:torch.bfloat16; a=ptr:0x7cc6afa00000,shape:(1, 122880, 3584),stride:(440401920, 3584, 1),dtype:torch.uint8; b=ptr:0x7cc587c00000,shape:(96, 6144, 3584),stride:(22020096, 3584, 1),dtype:torch.uint8; scale_a_u8=ptr:0x7cc6c9e00000,shape:(1, 15360, 1792),stride:(27525120, 1792, 1),dtype:torch.uint8; scale_a_i32_desc=ptr:0x7cc6c9e00000,shape:(1, 15360, 448),stride:(6881280, 448, 1),dtype:torch.int32; scale_b_i32_desc=ptr:0x7cc693800000,shape:(33030144,),stride:(1,),dtype:torch.int32; m_tile_map=ptr:0x7cc692c90400,shape:(96,),stride:(1,),dtype:torch.int32
+[moe_cpp_backend] pipeline kernarg fields: {'ptr_c': 137191000899584, 'c_size0': 1, 'c_size1': 122880, 'c_size2': 3072, 'c_stride0': 377487360, 'c_stride1': 3072, 'ptr_a': 137192791867392, 'ptr_b': 137187827908608, 'ptr_scale_a': 137193232269312, 'sa_size0': 1, 'sa_size1': 15360, 'sa_size2': 448, 'sa_stride0': 6881280, 'sa_stride1': 448, 'ptr_scale_b': 137192320008192, 'sb_size0': 33030144, 'ptr_m_tile_map': 137192308016128, 'ptr_bias': 137192791867392, 'ptr_quant_scale': 137191000899584, 'qs_size0': 1, 'qs_size1': 122880, 'qs_size2': 3072, 'qs_stride0': 377487360, 'qs_stride1': 3072, 'i32_m': 122880, 'i32_n': 6144, 'f32_swiglu_limit': 1088421888, 'f32_situ_beta': 1082130432, 'f32_situ_linear_beta': 1103626240}
+[moe_cpp_backend] pipeline preflight: balanced psum matched; padding_nonzero=0; module loaded on the current PyTorch stream
+[aiter INFO] 2026-09-09 10:04:11.583 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:93 - wrapper
+avg: 2583.806014060974 us/iter from cuda.Event
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W909 10:04:11.844011820 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 1 (function operator())
+[aiter INFO] 2026-09-09 10:04:11.678 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:335 - post_process_data
+abnormal data indices: {100, 8, 40, 13, 142, 52, 25, 92}
+[aiter INFO] 2026-09-09 10:04:11.678 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 586.5180000000003
+[aiter INFO] 2026-09-09 10:04:11.678 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 4.846000000000004
+[aiter INFO] 2026-09-09 10:04:11.678 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 207.31000000000006
+[aiter INFO] 2026-09-09 10:04:11.678 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 25.317000000000007
+[aiter INFO] 2026-09-09 10:04:11.679 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 153.58899999999994
+[aiter INFO] 2026-09-09 10:04:11.679 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 863.213
+[aiter INFO] 2026-09-09 10:04:11.679 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 96.904
+[aiter INFO] 2026-09-09 10:04:11.679 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:337 - post_process_data
+abnormal data: 74.15000000000009
+[aiter INFO] 2026-09-09 10:04:11.733 - MainProcess:1786 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:420 - get_trace_perf
+                                                                                                    name  cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<int>, std::a... 19.0            0.0             28.3              1.5        CUDA            1
+1                                                                                              moe_route 19.0            0.0            440.4             23.2        CUDA            1
+2                                       moe_fused_quant_preshuffle_routeks_fd3072_r8_fp4_pk8_srcrow_noKS 19.0            0.0          1,334.7             70.2        CUDA            1
+3                                                                              moe_contiguous_psum_remap 19.0            0.0          1,802.2             94.9        CUDA            1
+4                                                          moe_gather_reduce_bf16_d7168_tk6_sk1_v4_wbf16 19.0            0.0          2,881.1            151.6        CUDA            1
+5                                  moe_fused_quant_preshuffle_routeks_fd7168_r8_fp4_pk8_srctk6_noKS_apre 19.0            0.0          3,816.8            200.9        CUDA            1
+6                                          a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1 19.0            0.0         11,303.6            594.9        CUDA            1
+7                                                 moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1 19.0            0.0         16,543.0            870.7        CUDA            1
+8                                                                                            aten::fill_ 19.0           28.3              0.0              0.0         CPU         1786
+9                                                                         moe_gemm1_cpp_launcher::launch 19.0       16,543.0              0.0              0.0         CPU         1786
+10                                                                                     aiter::fused_moe_ 19.0       21,579.0              0.0              0.0         CPU         1786
+[avg us/iter]                                                                                        NaN  NaN        2,007.9          2,007.9              NaN         NaN          NaN
+[moe_cpp_backend] pipeline adapter summary: gemm1_cpp_calls=46; gemm2_flydsl_calls=46; padding_nonzero=0
+[sanity a4w4 silu] eager-profile: logits_diff=3.3980e-06 rel_l2=2.6069e-03 (gate<0.01, ref_norm=3.1556e+07)
+[sanity a4w4 silu] output_sha256=aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2
+[bench a4w4 silu] fused_moe end-to-end us = 2007.91 (testGraph=False)
+[bench kernel timing] gemm1: device_time_avg=870.683 us count=19 symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+[bench kernel timing] gemm2: device_time_avg=594.928 us count=19 symbol=a8w4_tdm_fp4_t256x256x256_w2x2_b4_K3072_e96_cn4_prefetch_wpt1
+
+[precision summary]
+| data_format   | act   | init   |   experts |   tokens |   topk |   model_dim |   inter_dim |   logits_diff |     rel_l2 | pass   |      us |   gemm1_us |   gemm2_us | gemm1 executed                           | gemm1 effective read         | gemm1 output write                | gemm1 effective R+W          | gemm2 executed                           | gemm2 effective read         | gemm2 output write                  | gemm2 effective R+W          |
+|:--------------|:------|:-------|----------:|---------:|-------:|------------:|------------:|--------------:|-----------:|:-------|--------:|-----------:|-----------:|:-----------------------------------------|:-----------------------------|:----------------------------------|:-----------------------------|:-----------------------------------------|:-----------------------------|:------------------------------------|:-----------------------------|
+| a4w4          | silu  | random |        96 |    16384 |      6 |        7168 |        3072 |   3.39799e-06 | 0.00260689 | True   | 2007.91 |    870.683 |    594.928 | 8,658,654,068,736 FLOP → 9,944.7 TFLOP/s | 2,620,391,424 B → 2.737 TB/s | 603,979,776 B (BF16) → 0.631 TB/s | 3,224,371,200 B → 3.368 TB/s | 4,329,327,034,368 FLOP → 7,277.1 TFLOP/s | 1,283,457,024 B → 1.962 TB/s | 1,409,286,144 B (BF16) → 2.154 TB/s | 2,692,743,168 B → 4.117 TB/s |
+history log: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/history_runs/20260909_100335_e2e-random.log

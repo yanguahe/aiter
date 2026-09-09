@@ -1,0 +1,38 @@
+timestamp_utc=2026-09-09T15:38:55+00:00
+host=heliosr-1b114-d01-3
+git_head=465cc1d60d1c1dd9edbb1df7b8c740d537927b32
+command=bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
+canonical_metric=e2e const0 profiler gemm1 device_time_avg
+sclk_at_script_start=2358 MHz
+remote_history_log=/data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/history_runs/20260909_153855_e2e-const0.log
+
+safe baseline:
+  gemm1 device_time_avg=765.878 us
+  gemm2 device_time_avg=447.342 us
+  fused_moe end-to-end=2029.95 us
+  logits_diff=0
+  rel_l2=0
+
+optimized v1:
+  gemm1 device_time_avg=580.872 us
+  gemm2 device_time_avg=444.505 us
+  fused_moe end-to-end=1819.18 us
+  logits_diff=0
+  rel_l2=0
+
+double-output-LDS:
+  gemm1 device_time_avg=554.139 us
+  gemm2 device_time_avg=444.356 us
+  fused_moe end-to-end=1798.40 us
+  logits_diff=0
+  rel_l2=0
+
+double-output-LDS versus optimized v1:
+  gemm1=-26.733 us (-4.602%)
+  fused_moe=-20.78 us (-1.142%)
+
+double-output-LDS versus safe baseline:
+  gemm1=-211.739 us (-27.647%)
+
+The user requested exactly one benchmark invocation after the d01-3 reboot.
+No separate remote status, GPU check, reverse-order run, or repeat was executed.

@@ -1,0 +1,117 @@
+timestamp_utc=2026-09-09T12:52:50+00:00
+host=heliosr-1b114-a07-3
+mode=perf-const0
+seed=0 warmup=5 rounds=9 launches_per_sample=5
+git_head=1ac3a46ed1359994d4bd73de29bcb566d45e07ce
+safe_baseline=/data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/baseline_act1_independent.s
+historical_515us_reference=/data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s
+current_candidate=/data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s
+3f40709bc179544c163b2fd80e8cffc253c261646caf659340ecaad5cfb0d681  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/baseline_act1_independent.s
+c90bbe6221b03ae6e05d1d5570b16be25217133e4105860eac901043f316feae  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s
+33034bb76ada72f9fbc895c1edbf56ee339d0ed6eb28d496196b68323ceed331  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s
+
+
+============================ ROCm System Management Interface ============================
+=============================== Current clock frequencies ================================
+GPU[0]		: fclk clock level: 1: (1950Mhz)
+GPU[0]		: mclk clock level: 0: (1900Mhz)
+GPU[0]		: sclk clock level: 1: (2366Mhz)
+GPU[0]		: socclk clock level: 0: (1350Mhz)
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 0
+==========================================================================================
+=================================== Current Memory Use ===================================
+GPU[0]		: GPU Memory Allocated (VRAM%): 0
+GPU[0]		: GPU Memory Read/Write Activity (%): 0
+GPU[0]		: Memory Activity: N/A
+GPU[0]		: Not supported on the given system
+==========================================================================================
+====================================== Product Info ======================================
+GPU[0]		: Card Series: 		AMD Radeon Graphics
+GPU[0]		: Card Model: 		0x75c1
+GPU[0]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+GPU[0]		: Card SKU: 		N/A
+GPU[0]		: Subsystem ID: 	0x75c1
+GPU[0]		: Device Rev: 		0x00
+GPU[0]		: Node ID: 		2
+GPU[0]		: GUID: 		56179
+GPU[0]		: GFX Version: 		gfx1250
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+===== exact historical command: test_optimized.sh perf-const0 =====
+[aiter INFO] 2026-09-09 12:52:52.665 - MainProcess:3149 - /data/yanguahe/code/wk_sp1/aiter/aiter/jit/core.py:637 - get_module_custom_op
+import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+/opt/venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W909 12:52:55.682735090 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 22 (function operator())
+[aiter INFO] 2026-09-09 12:52:58.710 - MainProcess:3149 - /data/yanguahe/code/wk_sp1/aiter/aiter/test_common.py:512 - checkAllclose
+a8w4 MoE stage-1 ISA runner[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+[gemm_batch_isa_runner] MoE user parameters: experts=96; tokens=16384; topk=6; model_dim=7168; inter_dim=3072
+[gemm_batch_isa_runner] MoE derived contract: valid_routes=98304; valid_rows/expert=1024; raw GEMM shape=(1024, 6144, 7168); contiguous_m=122880; logical WG grid=(24,480,1); physical grid=(11520, 1, 1); block=(128,1,1); cluster=(4,1,1); working WGs=9216; tail WGs=2304; expert tile padding rows=0; tail capacity rows=24576
+[gemm_batch_isa_runner] selected profile: a4w4-moe-gemm1-abpre-t256x256x256-w2x2-e96-act1-cn4; symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1; shape=(1024, 6144, 7168); WG tile=(256, 256); wave tile=(128, 128); batch=96
+[gemm_batch_isa_runner] logical WG grid=(24, 480, 1); WG tasks total=11520; logical cluster grid=(24, 480, 1); cluster tasks/plane=720; cluster tasks total=720
+[gemm_batch_isa_runner] physical launch=(2880, 4, 1); block=(128, 1, 1); cluster=(4, 4, 1); physical cluster grid=(720, 1, 1); clusters/plane=720; clusters total=720; physical WGs/plane=11520; physical WGs total=11520; encoded recurrence stride/plane=0; log2 X/Y grid=(0, 0)
+[gemm_batch_isa_runner] ABI=a4w4-moe-tdm-abpre-act1-v1; kernarg=184 bytes; static LDS=320 KB; dynamic LDS=0 KB; WGs/WGP by LDS=1 (LDS budget=320 KB); VGPR/SGPR metadata=1024/106; stores to D=True
+[gemm_batch_isa_runner] selected clang: /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang-23
+[gemm_batch_isa_runner] /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang-23 -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -c /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s -o /tmp/gemm_batch_isa_runner_3qw5psam/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.o
+[gemm_batch_isa_runner] /data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang-23 -target amdgcn-amd-amdhsa -mcpu=gfx1250 -mcode-object-version=6 -nostdlib -Wl,--no-undefined -shared /tmp/gemm_batch_isa_runner_3qw5psam/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.o -o /tmp/gemm_batch_isa_runner_3qw5psam/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1.co
+[gemm_isa_runner] AITER_LOG_MORE trace remains explicit; temporarily setting it to 0 inside run_perftest to avoid its additional CUDA-event iteration pass
+
+[gemm_isa_runner run_perftest trace_df]
+                                                                 name   cnt  host_time_sum  device_time_sum  device_time_avg device_type device_index
+0              moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1  19.0       0.000000      9928.936000       522.575579        CUDA            2
+1                           gemm_isa_runner_3149::launch_753b58bea980  19.0    9928.936000         0.000000         0.000000         CPU         3149
+[avg us/iter]                                                     NaN   NaN     522.575579       522.575579              NaN         NaN          NaN
+[gemm_isa_runner] captured kernel name=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+[gemm_isa_runner] profiler count=19; device_time_sum=9928.9360 us; device_time_avg=522.5756 us; profiler device_index=2; requested torch device ordinal=0
+[gemm_isa_runner] timing source=run_perftest testGraph=False torch-profiler; testGraph=False; run_perftest _us=522.5756
+[gemm_batch_isa_runner] useful logical logical_read_bytes=2620391424; logical_write_bytes=603979776 (stores output=True; detected mnemonic=tensor_store_from_lds); logical_bytes=read+write=3224371200
+[gemm_batch_isa_runner] MoE stage-1 a4w4: experts=96 rows/expert=1024 (1024 valid) routed_m=98304 contiguous_m=122880 N=6144 K=7168; m_tiles=384 carry data x n_tiles=24 = 9216 working WGs of grid=(2880, 4, 1) (2304 exit at entry)
+[gemm_batch_isa_runner] useful logical read components: A MXFP4=352321536; ScaleA E8M0=22020096; B MXFP4=2113929216; ScaleB E8M0=132120576; read total=2620391424
+[gemm_batch_isa_runner] useful logical output formula: 98304 valid routed rows x 3072 BF16 columns x 2 bytes = 603979776; output allocation footprint=754974720 (122880 capacity rows); logical_write_bytes=603979776
+[gemm_batch_isa_runner] scheduled/padding context (excluded from useful bytes): rows/expert=1024; valid/expert=1024; active m_tiles=384; working WGs=9216; tail capacity rows=24576; tensor footprints A=440401920 B=2113929216 sA=27525120 sB=132120576
+[gemm_batch_isa_runner] MoE padding-row check: 98304 of 122880 rows valid (1024/1024 per expert); padding rows have 0 nonzero of 75497472 (expect 0)
+run_perftest kernel timing (microseconds; source=run_perftest testGraph=False torch-profiler; summary uses the captured target-row device_time_avg):
+| name                                                   | cnt | warmup | device_time_sum | device_time_avg | device_type | device_index | source                                      |
+| ------------------------------------------------------ | --- | ------ | --------------- | --------------- | ----------- | ------------ | ------------------------------------------- |
+| moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1 | 19  | 5      | 9928.9360       | 522.5756        | CUDA        | 2            | run_perftest testGraph=False torch-profiler |
+GEMM ISA runner summary (markdown; profile=a4w4-moe-gemm1-abpre-t256x256x256-w2x2-e96-act1-cn4; symbol=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1):
+| intype | batch | M    | N    | K    | apre | init     | seed | dtype | gfx     | logical cluster tasks/plane | physical clusters/plane | physical WGs/plane | encoded recurrence stride/plane | ref hash128                      | gemm_a4w4 us | gemm_a4w4 TFLOPS | gemm_a4w4 bytes | gemm_a4w4 TB/s | gemm_a4w4 err | gemm_a4w4 out hash128            | gemm_a4w4 max_err_info | gemm_a4w4 rel_l2 |
+| ------ | ----- | ---- | ---- | ---- | ---- | -------- | ---- | ----- | ------- | --------------------------- | ----------------------- | ------------------ | ------------------------------- | -------------------------------- | ------------ | ---------------- | --------------- | -------------- | ------------- | -------------------------------- | ---------------------- | ---------------- |
+| a4w4   | 96    | 1024 | 6144 | 7168 | 1    | const(0) | 0    | bf16  | gfx1250 | 720                         | 720                     | 11520              | 0                               | 3d98ed518d3823956230736f6e7e50cd | 522.576      | 16569.2          | 3224371200      | 5.612          | 0             | 3d98ed518d3823956230736f6e7e50cd | (0.0, 0.0, 0.0)        | 0.0              |
+===== interleaved history comparison: const0 =====
+[aiter] import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/aiter/jit/module_aiter_core.so
+loaded baseline_act1_independent
+loaded moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt
+loaded moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds
+[aiter] baseline_act1_independent[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation baseline_act1_independent [1/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] baseline_act1_independent[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation baseline_act1_independent [2/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] baseline_act1_independent[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation baseline_act1_independent [3/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt [1/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt [2/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt [3/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds [1/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds [2/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+[aiter] moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds[checkAllclose atol=1.0 rtol=0.1 [32mpassed~[0m]
+validation moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds [3/3]: err=0 exact_mismatch=0 zero_count=301989888/301989888 rel_l2=0.0 max_err_info=(0.0, 0.0, 0.0)
+round 1/9 complete
+round 2/9 complete
+round 3/9 complete
+round 4/9 complete
+round 5/9 complete
+round 6/9 complete
+round 7/9 complete
+round 8/9 complete
+round 9/9 complete
+RESULT baseline_act1_independent: median=704.784 us mean=704.389 us min=698.839 us max=708.237 us samples=704.784,708.237,698.839,706.146,701.619,707.861,702.292,706.467,703.254
+RESULT moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt: median=528.216 us mean=528.033 us min=524.802 us max=531.268 us samples=528.312,530.667,531.268,529.481,526.092,526.541,526.918,528.216,524.802
+RESULT moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds: median=514.138 us mean=513.700 us min=507.641 us max=519.362 us samples=514.972,507.641,517.776,514.138,519.362,509.411,514.571,512.400,513.025

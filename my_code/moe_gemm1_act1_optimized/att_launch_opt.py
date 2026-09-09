@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -56,7 +57,12 @@ def main() -> None:
         i32_n=n,
     )
     geometry = batch.make_moe_launch_geometry(workload, cluster_m=4)
-    code_object = HERE / "act1_opt.co"
+    code_object = Path(
+        os.environ.get("AITER_ATT_CODE_OBJECT", str(HERE / "act1_opt.co"))
+    ).resolve()
+    if not code_object.is_file():
+        raise SystemExit(f"ATT code object does not exist: {code_object}")
+    print(f"[att_launch_opt] code object: {code_object}", flush=True)
     symbol = batch.MOE_ACT1_256_KERNEL_SYMBOL
 
     torch.cuda.synchronize(device)
