@@ -33,6 +33,8 @@ in progress.
   `act1_opt.co`, avoiding clang/COMGR execution inside rocprof.
 - `HARDWARE_CYCLE_LIMIT.md`: derives the MXFP4 compute, memory/TDM/LDS, and
   exact-kernel instruction/occupancy cycle ceilings for the const0 workload.
+- `PERSISTENT_MODE_THREAD_TRACE_ANALYSIS.md`: d01-3 all-SIMD ATT phase/stall
+  breakdown and persistent-mode performance upper-bound estimate.
 - `att_const0_analyze.log`: preserved `--ana-att` output used by the cycle-limit
   analysis.
 

@@ -1,0 +1,196 @@
+Selected SIMD-select capture files (strict kernel/rpf_v3 realtime + same-UI occupancy pairing):
+  SIMD0-select capture:
+    realtime:  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd0/kernel/rpf_v3/ui_output_agent_13455_dispatch_3541/realtime.json
+    occupancy: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd0/kernel/rpf_v3/ui_output_agent_13455_dispatch_3541/occupancy.json
+    UI dispatch ID (from directory path): 3541
+    occupancy kernel-PC label index(es): 1=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+  SIMD1-select capture:
+    realtime:  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd1/kernel/rpf_v3/ui_output_agent_17482_dispatch_3541/realtime.json
+    occupancy: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd1/kernel/rpf_v3/ui_output_agent_17482_dispatch_3541/occupancy.json
+    UI dispatch ID (from directory path): 3541
+    occupancy kernel-PC label index(es): 1=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+  SIMD2-select capture:
+    realtime:  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd2/kernel/rpf_v3/ui_output_agent_43835_dispatch_3541/realtime.json
+    occupancy: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd2/kernel/rpf_v3/ui_output_agent_43835_dispatch_3541/occupancy.json
+    UI dispatch ID (from directory path): 3541
+    occupancy kernel-PC label index(es): 1=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+  SIMD3-select capture:
+    realtime:  /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd3/kernel/rpf_v3/ui_output_agent_44993_dispatch_3541/realtime.json
+    occupancy: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_threadtrace/d01_double_lds_20260910/thread_trace/simd3/kernel/rpf_v3/ui_output_agent_44993_dispatch_3541/occupancy.json
+    UI dispatch ID (from directory path): 3541
+    occupancy kernel-PC label index(es): 1=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+
+Clock-domain interpretation:
+  SIMDn names an ATT SIMD-select capture, not an independent hardware clock domain.
+  SIMD-select captures are independent; maxima below are observations across captures, not simultaneous GPU state.
+  A WGP contains four SIMD32s. Shader-cycle counters are not synchronized across SIMDs.
+  Every raw shader span below is a delta within its own capture x SE series.
+  Cross-SE maxima compare numeric span only; occupancy spans are not wall durations.
+  REALTIME is the fixed-frequency counter that permits wall-time alignment.
+
+Reference clocks by SIMD-select ATT capture:
+  SIMD0-select: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD1-select: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD2-select: 100.000 MHz (metadata; metadata=100.000 MHz)
+  SIMD3-select: 100.000 MHz (metadata; metadata=100.000 MHz)
+
+SIMD-select capture x SE frequency series (delta_realtime<=0 pairs are filtered):
+Capture      SE    Samples   Valid  Dropped    Ref MHz    Mean MHz    Min MHz    Max MHz
+---------------------------------------------------------------------------------------------------
+SIMD0-select SE0      4040    4039        0    100.000    2073.789   1600.000   2466.667
+SIMD0-select SE1      4038    4037        0    100.000    2073.752   1600.000   2466.667
+SIMD0-select SE2      3995    3994        0    100.000    2040.840   1520.000   2466.667
+SIMD0-select SE3      3997    3996        0    100.000    2040.815   1520.000   2466.667
+SIMD1-select SE0      4060    4059        0    100.000    2075.123   1600.000   2466.667
+SIMD1-select SE1      4059    4058        0    100.000    2075.123   1600.000   2466.667
+SIMD1-select SE2      4042    4041        0    100.000    2047.996   1520.000   2466.667
+SIMD1-select SE3      4043    4042        0    100.000    2048.059   1520.000   2466.667
+SIMD2-select SE0      3976    3975        0    100.000    2078.312   1600.000   2466.667
+SIMD2-select SE1      3968    3967        0    100.000    2077.833   1600.000   2466.667
+SIMD2-select SE2      3923    3922        0    100.000    2046.208   1520.000   2466.667
+SIMD2-select SE3      3921    3920        0    100.000    2046.233   1520.000   2466.667
+SIMD3-select SE0      4088    4087        0    100.000    2080.053   1600.000   2466.667
+SIMD3-select SE1      4083    4082        0    100.000    2079.763   1600.000   2466.667
+SIMD3-select SE2      4061    4060        0    100.000    2049.047   1520.000   2466.667
+SIMD3-select SE3      4056    4055        0    100.000    2048.862   1520.000   2466.667
+
+Per-SE raw shader-cycle spans from occupancy.json event shader_timestamp:
+Capture      SE           Events     per_se_cycle
+--------------------------------------------------
+SIMD0-select SE0            5760          1180425
+SIMD0-select SE1            5760          1180382
+SIMD0-select SE2            5760          1161917
+SIMD0-select SE3            5760          1161927
+SIMD1-select SE0            5760          1184580
+SIMD1-select SE1            5760          1184587
+SIMD1-select SE2            5760          1175189
+SIMD1-select SE3            5760          1175451
+SIMD2-select SE0            5760          1168518
+SIMD2-select SE1            5760          1166264
+SIMD2-select SE2            5760          1146203
+SIMD2-select SE3            5760          1146541
+SIMD3-select SE0            5760          1195699
+SIMD3-select SE1            5760          1194473
+SIMD3-select SE2            5760          1178706
+SIMD3-select SE3            5760          1178067
+Per-capture maximum per_se_cycle:
+  SIMD0-select: 1180425 at SE0
+  SIMD1-select: 1184587 at SE1
+  SIMD2-select: 1168518 at SE0
+  SIMD3-select: 1195699 at SE0
+
+Per-SE raw shader-cycle spans from realtime.json gfx_clock:
+Capture      SE    Clock samples     per_se_cycle
+--------------------------------------------------
+SIMD0-select SE0            4040          1180152
+SIMD0-select SE1            4038          1180048
+SIMD0-select SE2            3995          1161728
+SIMD0-select SE3            3997          1161632
+SIMD1-select SE0            4060          1183816
+SIMD1-select SE1            4059          1183816
+SIMD1-select SE2            4042          1174976
+SIMD1-select SE3            4043          1175176
+SIMD2-select SE0            3976          1167928
+SIMD2-select SE1            3968          1166080
+SIMD2-select SE2            3923          1146040
+SIMD2-select SE3            3921          1146136
+SIMD3-select SE0            4088          1195448
+SIMD3-select SE1            4083          1194200
+SIMD3-select SE2            4061          1178448
+SIMD3-select SE3            4056          1177768
+Per-capture maximum per_se_cycle:
+  SIMD0-select: 1180152 at SE0
+  SIMD1-select: 1183816 at SE0, SE1
+  SIMD2-select: 1167928 at SE0
+  SIMD3-select: 1195448 at SE0
+
+Occupancy wave lifetimes and sequential reuse per physical slot:
+  Key = capture/SE/packed-SA-WGP/hwSIMD/slot/kernel-PC-label; kernel-PC labels are never merged.
+  Histogram: wave-lifetimes-per-slot -> physical-slot-key count.
+  This is sequential slot reuse, not concurrent occupancy; concurrent slot peaks are reported separately below.
+  A WGP has four hwSIMDs; this histogram remains keyed by each observed physical slot and is not divided by four.
+  SIMD0-select: wave lifetimes=11520, observed physical slot keys=256, max sequential wave lifetimes per slot=45 at SE0/packed=0(SA0/WGP0)/hwSIMD0/slot0/kernel-label=1 (+255 tied); histogram={45:256}
+  SIMD1-select: wave lifetimes=11520, observed physical slot keys=256, max sequential wave lifetimes per slot=45 at SE0/packed=0(SA0/WGP0)/hwSIMD0/slot0/kernel-label=1 (+255 tied); histogram={45:256}
+  SIMD2-select: wave lifetimes=11520, observed physical slot keys=256, max sequential wave lifetimes per slot=45 at SE0/packed=0(SA0/WGP0)/hwSIMD0/slot0/kernel-label=1 (+255 tied); histogram={45:256}
+  SIMD3-select: wave lifetimes=11520, observed physical slot keys=256, max sequential wave lifetimes per slot=45 at SE0/packed=0(SA0/WGP0)/hwSIMD0/slot0/kernel-label=1 (+255 tied); histogram={45:256}
+
+Occupancy slot-count maxima per (capture, SE, packed-SA-WGP, hwSIMD, kernel-PC-label):
+Capture      Physical-SIMD keys     Max distinct slot IDs per physical-SIMD key Coordinate                                                            Max simultaneously active slot IDs per physical-SIMD key Coordinate
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SIMD0-select                256                                               1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)                                                                    1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)
+SIMD1-select                256                                               1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)                                                                    1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)
+SIMD2-select                256                                               1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)                                                                    1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)
+SIMD3-select                256                                               1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)                                                                    1 SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+255 tied)
+
+Distinct physical WGPs per independent capture x SE x kernel-PC label (packed ID keeps SA distinct):
+  Decode: SA=(packed>>7)&1; WGP=packed&0x7f.
+Capture      SE   Kernel label  WGP count  Observed packed SA/WGP IDs
+---------------------------------------------------------------------------------------------------------
+SIMD0-select SE0             1         16  SA0/WGP0-7; SA1/WGP0-7
+SIMD0-select SE1             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD0-select SE2             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD0-select SE3             1         16  SA0/WGP0-8; SA1/WGP0,2-7
+SIMD1-select SE0             1         16  SA0/WGP0-7; SA1/WGP0-7
+SIMD1-select SE1             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD1-select SE2             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD1-select SE3             1         16  SA0/WGP0-8; SA1/WGP0,2-7
+SIMD2-select SE0             1         16  SA0/WGP0-7; SA1/WGP0-7
+SIMD2-select SE1             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD2-select SE2             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD2-select SE3             1         16  SA0/WGP0-8; SA1/WGP0,2-7
+SIMD3-select SE0             1         16  SA0/WGP0-7; SA1/WGP0-7
+SIMD3-select SE1             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD3-select SE2             1         16  SA0/WGP0-8; SA1/WGP0-6
+SIMD3-select SE3             1         16  SA0/WGP0-8; SA1/WGP0,2-7
+Max distinct packed SA/WGP count observed across independent captures: 16 at SIMD0-select/SE0/kernel-label=1 (+15 tied)
+
+Physical-WGP completion imbalance per independent capture x SE x kernel-PC label:
+  Occupancy tuple field 6 is a kernel-PC label/index, not the UI directory's dispatch ID.
+  Episode = aggregate active-wave count 0 -> 1 through 1 -> 0 for one (SE, packed-SA-WGP, kernel-PC-label).
+  Episode count only diagnoses occupancy gaps; it is not the load-balance sample count.
+  All episodes for one physical WGP are merged first: envelope = last end - first start; active = sum(episode durations); idle-gap = envelope - active.
+  Episodes use raw profiler shader timestamps across a WGP's hwSIMDs; they are not REALTIME-aligned wall durations.
+  occupancy.json has no logical WG ID. A physical WGP may host multiple logical WGs, so its envelope is not a single-WG duration.
+  Formula: final-end span=max(WGP_end)-min(WGP_end); completion imbalance=final-end span/median(WGP envelope duration).
+Capture      SE   Kernel label  WGPs Episodes/WGP Envelope min Envelope median Envelope max Active median Idle-gap median Final-end min Final-end max Final-end span Completion imbalance
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SIMD0-select SE0             1    16           45      1180263     1180369.000      1180415   1172430.000        7956.500       1394926       1395031            105             0.000089
+SIMD0-select SE1             1    16           45      1180212     1180315.000      1180363   1172647.000        7676.500       1391767       1391876            109             0.000092
+SIMD0-select SE2             1    16           45      1161774     1161842.500      1161904   1153468.000        8325.000       1368006       1368115            109             0.000094
+SIMD0-select SE3             1    16           45      1161762     1161855.500      1161887   1154079.000        7758.000       1364775       1364884            109             0.000094
+SIMD1-select SE0             1    16           45      1184415     1184512.000      1184580   1176266.500        8217.000       1400516       1400620            104             0.000088
+SIMD1-select SE1             1    16           45      1184415     1184523.000      1184572   1177004.000        7493.000       1397191       1397302            111             0.000094
+SIMD1-select SE2             1    16           45      1175042     1175113.000      1175184   1167077.500        8049.500       1383083       1383189            106             0.000090
+SIMD1-select SE3             1    16           45      1175293     1175373.000      1175435   1167783.000        7583.500       1380376       1380485            109             0.000093
+SIMD2-select SE0             1    16           45      1168354     1168439.500      1168493   1161236.000        7217.500       1394317       1394428            111             0.000095
+SIMD2-select SE1             1    16           45      1166122     1166189.000      1166262   1159261.500        6935.500       1388886       1388990            104             0.000089
+SIMD2-select SE2             1    16           45      1146045     1146138.000      1146182   1138697.000        7473.500       1365146       1365251            105             0.000092
+SIMD2-select SE3             1    16           45      1146387     1146479.000      1146515   1138298.000        8149.000       1362125       1362234            109             0.000095
+SIMD3-select SE0             1    16           45      1195532     1195630.000      1195681   1186582.500        8972.000       1407790       1407900            110             0.000092
+SIMD3-select SE1             1    16           45      1194311     1194408.000      1194441   1186530.000        7822.000       1403383       1403484            101             0.000085
+SIMD3-select SE2             1    16           45      1178552     1178639.000      1178681   1170437.500        8180.000       1383726       1383837            111             0.000094
+SIMD3-select SE3             1    16           45      1177921     1178001.500      1178062   1169340.000        8597.500       1379824       1379929            105             0.000089
+
+End-of-report summary:
+Max observed across independent SIMD-select captures: 45 sequential wave lifetimes per slot at SIMD0-select/SE0/packed=0(SA0/WGP0)/hwSIMD0/slot0/kernel-label=1 (+1023 tied)
+
+Max distinct slot IDs per physical-SIMD key observed across independent captures: 1 at SIMD0-select/SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+1023 tied)
+Max simultaneously active slot IDs per physical-SIMD key observed across independent captures: 1 at SIMD0-select/SE0/packed=0(SA0/WGP0)/hwSIMD0/kernel-label=1 (+1023 tied)
+
+Completion imbalance arithmetic mean (16 independent capture x SE x kernel-PC-label rows): 0.000092
+Completion imbalance median: 0.000092; max observed 0.000095 at SIMD2-select/SE3/kernel-label=1
+
+Per-SIMD-select capture means (REALTIME-tick weighted across SE series):
+  SIMD0-select: 2057.297 MHz across 4 SE series; 16066 valid intervals; 0 dropped
+  SIMD1-select: 2061.536 MHz across 4 SE series; 16200 valid intervals; 0 dropped
+  SIMD2-select: 2062.167 MHz across 4 SE series; 15784 valid intervals; 0 dropped
+  SIMD3-select: 2064.424 MHz across 4 SE series; 16284 valid intervals; 0 dropped
+
+Combined mean across 16 independent SIMD-select capture x SE series (REALTIME-tick weighted): 2061.361 MHz
+Spread of the 16 series means: 39.238 MHz (min SIMD0-select SE3 2040.815; max SIMD3-select SE0 2080.053)
+
+Max observed across independent SIMD-select captures: per_se_cycle=1195699 at SIMD3-select/SE0 (source: occupancy.json event shader_timestamp)
+Max observed across independent SIMD-select captures: per_se_cycle=1195448 at SIMD3-select/SE0 (source: realtime.json gfx_clock)
+
+Derived frequency from occupancy.json event shader_timestamp max per_se_cycle: 2079.043 MHz (1195699 cycles / 575.120 us at SIMD3-select/SE0; matching realtime.json all-SE REALTIME earliest=537164251465, latest=537164308977, span=57512 ticks)
+Derived frequency from realtime.json gfx_clock max per_se_cycle: 2078.606 MHz (1195448 cycles / 575.120 us at SIMD3-select/SE0; matching realtime.json all-SE REALTIME earliest=537164251465, latest=537164308977, span=57512 ticks)
