@@ -17,6 +17,20 @@ fi
 
 cd "${REPO_ROOT}"
 
+BASELINE_KERNEL_REL="aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_93665e.py"
+BASELINE_KERNEL_SHA256="c8b02647cacf457b772e5e38f9d08999e995e6f221917a45846e32a22c8927fe"
+BASELINE_KERNEL_PATH="${REPO_ROOT}/${BASELINE_KERNEL_REL}"
+if [[ ! -f "${BASELINE_KERNEL_PATH}" ]]; then
+    echo "Missing baseline kernel source: ${BASELINE_KERNEL_PATH}" >&2
+    exit 2
+fi
+actual_baseline_sha256="$(sha256sum "${BASELINE_KERNEL_PATH}" | awk '{print $1}')"
+if [[ "${actual_baseline_sha256}" != "${BASELINE_KERNEL_SHA256}" ]]; then
+    echo "Baseline kernel source checksum mismatch: ${BASELINE_KERNEL_PATH}" >&2
+    echo "expected ${BASELINE_KERNEL_SHA256}, got ${actual_baseline_sha256}" >&2
+    exit 2
+fi
+
 read_git_head_without_git() {
     local head ref ref_file
     if [[ ! -f "${REPO_ROOT}/.git/HEAD" ]]; then
@@ -89,7 +103,7 @@ declare -a TEST_SHAPE=(
 )
 
 declare -a CASES=(
-    baseline
+    baseline_93665e
     sync_mg4_fc8
     sync_mg2_fc12
     sync_mg4_fc28
@@ -98,7 +112,7 @@ declare -a CASES=(
 )
 
 # Optional comma-separated subset, preserving the caller's requested order.
-# Example: CASE_LIST=baseline,sync_mg4_fc28,sync_mg4_fc28_hard
+# Example: CASE_LIST=baseline_93665e,sync_mg4_fc28,sync_mg4_fc28_hard
 if [[ -n "${CASE_LIST:-}" ]]; then
     IFS=',' read -r -a CASES <<<"${CASE_LIST}"
 fi
@@ -106,13 +120,8 @@ fi
 declare -a CASE_ENV=()
 case_env() {
     case "$1" in
-        baseline)
-            CASE_ENV=(
-                AITER_FLYDSL_GEMM1_MMA_GROUP=4
-                AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=8
-                AITER_FLYDSL_GEMM1_SILU_HARD=0
-                AITER_FLYDSL_GEMM1_SILU_RELU=0
-            )
+        baseline_93665e)
+            CASE_ENV=()
             ;;
         sync_mg4_fc8)
             CASE_ENV=(
@@ -161,10 +170,26 @@ case_env() {
     esac
 }
 
+case_test_script() {
+    case "$1" in
+        baseline_93665e)
+            printf '%s\n' \
+                'my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py'
+            ;;
+        *)
+            printf '%s\n' 'op_tests/test_flydsl_grouped_gemm_gfx1250.py'
+            ;;
+    esac
+}
+
 case_kernel() {
     local suffix=""
     case "$1" in
-        baseline) ;;
+        baseline_93665e)
+            printf '%s\n' \
+                'a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1'
+            return
+            ;;
         sync_mg4_fc8) ;;
         sync_mg2_fc12) suffix="_mg2_fc12" ;;
         sync_mg4_fc28) suffix="_mg4_fc28" ;;
@@ -185,16 +210,25 @@ case_kernel() {
     echo "rounds=${ROUNDS}"
     echo "run_verify=${RUN_VERIFY}"
     echo "run_att=${RUN_ATT}"
+    echo "baseline_commit=93665e8417afe1f07cb9bbe1c4902c38da8e3fa3"
+    echo "baseline_entry=my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py"
     echo "execution=inside-container"
     echo "moe_e2e_metric=fused_moe end-to-end us"
-    echo "command=python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
+    echo "baseline_command=python3 -u my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
+    echo "current_command=python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
     echo
     echo "task source hashes:"
     sha256sum \
         my_code/reproduce_compare.sh \
+        my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py \
         aiter/ops/flydsl/grouped_gemm_mxfp4.py \
         aiter/ops/flydsl/grouped_moe_gfx1250.py \
-        aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm.py
+        aiter/ops/flydsl/moe_kernels.py \
+        aiter/ops/flydsl/kernels/gemm_common_gfx1250.py \
+        aiter/ops/flydsl/kernels/moe_fused_route_quant_scatter.py \
+        aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_93665e.py \
+        aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm.py \
+        op_tests/test_flydsl_grouped_gemm_gfx1250.py
 } | tee "${out_dir}/environment.log"
 
 verify_tsv="${out_dir}/verify.tsv"
@@ -205,11 +239,12 @@ printf 'round\torder\tcase\treturn_code\tgemm1_us\tgemm2_us\tmoe_e2e_us\toutput_
 run_verify_case() {
     local name="$1"
     local log="${out_dir}/verify_${name}.log"
-    local rc logits rel pass hash
+    local rc logits rel pass hash test_script
     case_env "${name}"
+    test_script="$(case_test_script "${name}")"
     set +e
     env "${COMMON_ENV[@]}" "${CASE_ENV[@]}" \
-        python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py \
+        python3 -u "${test_script}" \
         --scenario verify "${TEST_SHAPE[@]}" --iters 1 \
         2>&1 | tee "${log}"
     rc=${PIPESTATUS[0]}
@@ -232,11 +267,12 @@ run_bench_case() {
     local order="$2"
     local name="$3"
     local log="${out_dir}/bench_r${round}_${order}_${name}.log"
-    local rc gemm1 gemm2 moe_e2e hash
+    local rc gemm1 gemm2 moe_e2e hash test_script
     case_env "${name}"
+    test_script="$(case_test_script "${name}")"
     set +e
     env "${COMMON_ENV[@]}" "${CASE_ENV[@]}" \
-        python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py \
+        python3 -u "${test_script}" \
         --scenario bench "${TEST_SHAPE[@]}" --iters 20 --const-init 0 \
         2>&1 | tee "${log}"
     rc=${PIPESTATUS[0]}
@@ -296,11 +332,12 @@ with open(verify_path, newline="", encoding="utf-8") as f:
     for row in csv.DictReader(f, delimiter="\t"):
         verify[row["case"]] = row
 
-gemm1_baseline = statistics.median(gemm1_samples["baseline"])
-moe_e2e_baseline = statistics.median(moe_e2e_samples["baseline"])
+baseline_case = "baseline_93665e"
+gemm1_baseline = statistics.median(gemm1_samples[baseline_case])
+moe_e2e_baseline = statistics.median(moe_e2e_samples[baseline_case])
 print(
-    "| case | GEMM1 samples (us) | GEMM1 median us | GEMM1 vs baseline | "
-    "MOE e2e samples (us) | MOE e2e median us | MOE e2e vs baseline | random pass | hash |"
+    "| case | GEMM1 samples (us) | GEMM1 median us | GEMM1 vs 93665e | "
+    "MOE e2e samples (us) | MOE e2e median us | MOE e2e vs 93665e | random pass | hash |"
 )
 print("|---|---|---:|---:|---|---:|---:|:---:|---|")
 for name, gemm1_values in gemm1_samples.items():
@@ -325,7 +362,8 @@ if [[ "${RUN_ATT}" == "1" ]]; then
     for name in "${CASES[@]}"; do
         case_env "${name}"
         kernel="$(case_kernel "${name}")"
-        test_cmd="${COMMON_ENV[*]} ${CASE_ENV[*]} python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario verify ${TEST_SHAPE[*]} --iters 2 --const-init 0"
+        test_script="$(case_test_script "${name}")"
+        test_cmd="${COMMON_ENV[*]} ${CASE_ENV[*]} python3 -u ${test_script} --scenario verify ${TEST_SHAPE[*]} --iters 2 --const-init 0"
         env TRACE_ROOT="${out_rel}/att" HIP_VISIBLE_DEVICES=0 \
             bash my_code/get_isa_runner_att.sh \
             "${kernel}" "${host}_${name}" "${test_cmd}" --ana-att \

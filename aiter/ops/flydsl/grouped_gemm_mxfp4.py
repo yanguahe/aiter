@@ -12,6 +12,13 @@ import torch
 from .kernels.tensor_shim import ptr_arg
 
 _SUPPORTED_CLUSTER_N = (4, 3, 2)
+_USE_GEMM1_BASELINE_93665E = False
+
+
+def use_gemm1_baseline_93665e() -> None:
+    """Select the in-tree 93665e GEMM1 implementation for this process."""
+    global _USE_GEMM1_BASELINE_93665E
+    _USE_GEMM1_BASELINE_93665E = True
 
 
 def _select_next_stage_prefetch(csv_next_stage_prefetch: int) -> int:
@@ -162,7 +169,14 @@ def flydsl_grouped_gemm_a8w4_masked(
     situ_linear_beta=1.0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
-    from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
+    # Keep the historical kernel available in the current tree so performance
+    # comparisons do not need to change Git state inside the ROCm container.
+    if _USE_GEMM1_BASELINE_93665E:
+        from .kernels.mxfp4_preshuffle_gfx1250_tdm_93665e import (
+            launch_gemm_a8w4_tdm,
+        )
+    else:
+        from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
 
     if stream is None:
         stream = torch.cuda.current_stream()
@@ -179,6 +193,47 @@ def flydsl_grouped_gemm_a8w4_masked(
     cluster_n = _select_cluster_n(n_tiles, cluster_n)
     waves_per_tensor_tdm = _select_num_waves_per_tensor_tdm(waves_per_tensor_tdm)
     next_stage_prefetch = _select_next_stage_prefetch(next_stage_prefetch)
+    if cluster_n > 1 and n_tiles % cluster_n:
+        raise ValueError(
+            f"[grouped-moe tdm] cluster_n={cluster_n} needs n_tiles={n_tiles} "
+            f"(N={N}, tile_n={tile_n}) to be an exact multiple"
+        )
+    if _USE_GEMM1_BASELINE_93665E:
+        launch_gemm_a8w4_tdm(
+            out,
+            ptr_arg(a),
+            ptr_arg(w),
+            a_scales.view(torch.int32),
+            w_scales.view(torch.int32),
+            contiguous_m,
+            stream,
+            N,
+            K,
+            tile_m,
+            tile_n,
+            tile_k,
+            m_warp,
+            n_warp,
+            out_is_f16,
+            num_buffers,
+            a_is_fp4,
+            ptr_arg(m_tile_map),
+            n_experts,
+            stage1_act,
+            has_bias,
+            bias_ptr,
+            float(swiglu_limit),
+            stage1_quant_out,
+            quant_wmma_rep,
+            quant_scale_tensor,
+            cluster_n,
+            next_stage_prefetch,
+            waves_per_tensor_tdm,
+            float(situ_beta),
+            float(situ_linear_beta),
+        )
+        return out
+
     target_fp4_prefill_common = all(
         (
             a_is_fp4,
@@ -211,11 +266,6 @@ def flydsl_grouped_gemm_a8w4_masked(
             (512, 2, 1),
         )
     )
-    if cluster_n > 1 and n_tiles % cluster_n:
-        raise ValueError(
-            f"[grouped-moe tdm] cluster_n={cluster_n} needs n_tiles={n_tiles} "
-            f"(N={N}, tile_n={tile_n}) to be an exact multiple"
-        )
     launch_gemm_a8w4_tdm(
         out,
         ptr_arg(a),

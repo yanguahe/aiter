@@ -561,37 +561,6 @@ def _grouped_a8w4_tdm_moe(
     _is_fp4 = data_format == "fp4"
     _quant_mode = "fp4" if _is_fp4 else "fp8"
     _a_is_fp4 = 1 if _is_fp4 else 0
-    _target_fp4_prefill_common = all(
-        (
-            _is_fp4,
-            model_dim == 7168,
-            two_inter == 6144,
-            tile_m in (128, 256),
-            tile_n in (128, 256),
-            (m_warp, n_warp) in ((2, 2), (4, 2), (4, 4), (8, 2)),
-            stage1_act == 1,
-            _b1 is None,
-            out_is_f16 == 0,
-            cluster_n == 4,
-            next_stage_prefetch == 1,
-        )
-    )
-    _target_fp4_prefill = _target_fp4_prefill_common and (
-        (tile_k, num_buffers, waves_per_tensor_tdm)
-        in (
-            (128, 4, 1),
-            (128, 4, 2),
-            (128, 4, 4),
-            (256, 4, 1),
-            (256, 4, 2),
-            (256, 4, 4),
-            (256, 3, 1),
-            (256, 3, 2),
-            (256, 3, 4),
-            (256, 2, 1),
-            (512, 2, 1),
-        )
-    )
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
         hidden_states.reshape(1, token_num, model_dim),
         1,
