@@ -1,0 +1,11 @@
+source_log=my_code/moe_gemm1_act1_optimized/history_runs/20260910_085520_e2e-const0.log
+snapshot_commit=23c2caaafa5f1c6e6d5d9f756980fe004af4202c
+snapshot_payload_tree_sha256=a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a
+snapshot_aiter_path_mentions=90
+snapshot_test_path_mentions=5
+repository_module_audit=pass files_under_my_code=151
+baseline_act1_independent.s	gemm1_us=767.669	fused_moe_us=2038.32	logits_diff=0	rel_l2=0	pass=True
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s	gemm1_us=576.022	fused_moe_us=1858.74	logits_diff=0	rel_l2=0	pass=True
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s	gemm1_us=549.502	fused_moe_us=1846.72	logits_diff=0	rel_l2=0	pass=True
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s	gemm1_us=537.283	fused_moe_us=1781.66	logits_diff=0	rel_l2=0	pass=True
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s	gemm1_us=525.386	fused_moe_us=1843.35	logits_diff=0	rel_l2=0	pass=True

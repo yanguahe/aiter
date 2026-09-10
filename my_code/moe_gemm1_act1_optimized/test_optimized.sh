@@ -3,8 +3,16 @@ set -euo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd -- "$HERE/../.." && pwd)"
+SNAPSHOT_ROOT="$HERE/repo_snapshot"
 RUNNER="$HERE/gemm_batch_isa_runner.py"
 ISA="${AITER_OPT_ISA:-$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s}"
+
+if [[ ! -f "$SNAPSHOT_ROOT/aiter/__init__.py" ]]; then
+  echo "self-contained HEAD snapshot is incomplete: $SNAPSHOT_ROOT" >&2
+  exit 2
+fi
+export PYTHONPATH="$SNAPSHOT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export AITER_META_DIR="$SNAPSHOT_ROOT"
 
 COMMON=(
   --isa "$ISA"

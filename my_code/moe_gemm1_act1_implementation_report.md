@@ -832,3 +832,251 @@ benchmark 脚本生成的远端原始日志：
 ```text
 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/history_runs/20260909_153855_e2e-const0.log
 ```
+
+## 16. Persistent task loop 与跨 task output TDM overlap
+
+本轮新增内容仍全部位于独立目录：
+
+```text
+my_code/moe_gemm1_act1_optimized/
+```
+
+没有修改 `aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm.py`。GPU 编译、正确性和性能测试只在 d01-3 执行，最终测试前后 `/data/yanguahe/code/gpu_users.sh` 均报告没有 GPU/KFD 使用者。
+
+### 16.1 实现文件
+
+```text
+build_persistent_variants.py
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s
+moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s
+moe_gemm1_cpp_launcher_persistent.cpp
+benchmark_persistent.sh
+```
+
+`build_persistent_variants.py` 以已验证的 double-output-LDS kernel 为输入，生成两级实现：
+
+1. `persistent.s`：物理 `grid=(16,16,1)`、`cluster=(4,4,1)`、`block=(128,1,1)`。16 个物理 cluster 以 stride 16 遍历 576 个有效 logical cluster task。
+2. `persistent_overlap.s`：在同一 persistent task loop 上，将上一 task 的 output TDM drain 延迟到下一 task 的第一条 input TDM 路径之前。
+
+每个 task 都从 184-byte kernarg 重新加载 C/A/B/ScaleA/ScaleB 基址，重建 local workitem ID，并重新执行 production DeepGEMM 16-M-tile swizzle。task ID 保存在 `s28`，每轮增加 16。
+
+完整 4x4 cluster 的 task 边界协议为：
+
+```asm
+s_cmp_eq_u32 s22, 0
+s_cbranch_scc0 .Lmoe_persistent_overlap_boundary_wait
+s_barrier_signal -3
+.Lmoe_persistent_overlap_boundary_wait:
+s_barrier_wait 0xfffd
+```
+
+因此每个 WG 只有 wave 0 对 cluster barrier signal，所有 wave 都 wait。下一 task 可以先执行 task/expert/N/M 映射、kernarg reload、地址重定位和 descriptor setup；在四条 wave-specific 首次 input TDM 路径上执行：
+
+```asm
+s_wait_tensorcnt 0x0
+s_barrier_signal -1
+```
+
+该 wait 保证上一 task 的 `tensor_store_from_lds` 已读取完 output LDS，之后才允许新 task 的 input TDM 覆盖同一份 320 KiB LDS。最终 task 仍执行完整 `s_wait_idle`。这同时满足 TDM in-order、LDS 生命周期和完整 4x4 cluster barrier 约束。
+
+### 16.2 正确性
+
+standalone random 的 seed 0、1、2 分别重复 3 次，全部为 `err=0`：
+
+| Seed | `rel_l2` |
+|---:|---:|
+| 0 | `9.367674611323901e-4` |
+| 1 | `9.3677390526811e-4` |
+| 2 | `9.367715837032677e-4` |
+
+standalone const0 重复 3 次均为：
+
+```text
+exact_mismatch=0
+rel_l2=0
+```
+
+将最终汇编接入完整 grouped-MoE 测试后的结果：
+
+| 数据 | `logits_diff` | `rel_l2` | 结果 |
+|---|---:|---:|---|
+| random | `3.3980e-06` | `2.6069e-03` | 通过 `<0.01` gate |
+| const0 | `0` | `0` | 完全一致 |
+
+### 16.3 同轮 e2e const0 性能
+
+以下数据来自同一次 `benchmark_persistent.sh e2e-const0`，性能口径为完整 MoE 流程中的 GEMM1 profiler 行：
+
+| 版本 | GEMM1 | fused MoE | 正确性 |
+|---|---:|---:|---|
+| double-output-LDS | `557.354 us` | `1790.60 us` | `logits_diff=0`，`rel_l2=0` |
+| persistent/full-drain | `557.287 us` | `1791.00 us` | `logits_diff=0`，`rel_l2=0` |
+| persistent/output-drain-overlap | **`542.360 us`** | **`1771.22 us`** | `logits_diff=0`，`rel_l2=0` |
+
+单独增加 persistent scheduler 基本持平，只降低 `0.067 us`（`0.012%`）。将 output drain 与下一 task 的独立 setup 重叠后，相对 double-output-LDS 的 GEMM1 降低 `14.994 us`（`2.690%`），fused MoE 降低 `19.38 us`（`1.082%`）。这与 thread trace 的判断一致：scheduler-only 收益很小，实际收益来自跨 task 隐藏部分 output TDM stall。
+
+最终 SHA 的独立复测为：
+
+| 数据 | GEMM1 | fused MoE | 正确性 |
+|---|---:|---:|---|
+| random | `664.132 us` | `2082.19 us` | `logits_diff=3.3980e-06`，`rel_l2=2.6069e-03` |
+| const0 | `544.386 us` | `1777.75 us` | `logits_diff=0`，`rel_l2=0` |
+
+### 16.4 复现命令
+
+重新生成两份 persistent ISA：
+
+```bash
+python my_code/moe_gemm1_act1_optimized/build_persistent_variants.py
+```
+
+功能：从固定的 double-output-LDS 基线生成 safe persistent 和 output-drain-overlap 两份汇编；脚本使用精确文本匹配，基线结构发生意外变化时会直接报错，不会静默生成错误 ISA。
+
+同一进程依次测试 double-output-LDS、persistent 和 persistent-overlap 的 MoE e2e const0：
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-const0
+```
+
+功能：记录 host、clocks、三份 ISA与 launcher 的 SHA256，然后依次注入三份 kernel；对每份 kernel 检查完整 MoE 输出并记录 GEMM1 和 fused MoE profiler 时间。
+
+对应 random 输入：
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-random
+```
+
+功能：使用 random 输入执行相同的三版本 e2e 对比，并以 `logits_diff`、`rel_l2` 和 production gate 判定正确性。
+
+最终 persistent-overlap 的 standalone 多 seed 检查示例：
+
+```bash
+python3 -u my_code/moe_gemm1_act1_optimized/compare_asm_variants.py \
+  my_code/moe_gemm1_act1_optimized/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s \
+  --grid-x 16 --grid-y 16 --seed 0 --warmup 1 --rounds 1 \
+  --launches-per-sample 1 --validation-repeats 3
+```
+
+功能：以 persistent `grid=(16,16,1)` 编译并 launch 指定 ISA，对同一输入重复做 3 次输出检查，并给出一次 CUDA-event 诊断时间。将 `--seed` 改成 1 或 2 可复现另外两组 random 验证；增加 `--const-init 0` 可复现 const0 精确一致性检查。
+
+完整日志：
+
+```text
+my_code/moe_gemm1_act1_optimized/history_runs/20260910_050017_persistent_e2e_const0.log
+my_code/moe_gemm1_act1_optimized/history_runs/20260910_051214_persistent_overlap_final_validation.log
+```
+
+最终汇编 SHA256：
+
+```text
+ec3af906acebfdef77db5f734d01fbef45035dfcfdd799f557693aa73dd0d601
+```
+
+### 16.5 合并到统一历史 benchmark
+
+`benchmark_history.sh` 已扩展为默认包含五个版本：
+
+1. safe baseline；
+2. optimized v1；
+3. double-output-LDS；
+4. persistent/full-drain；
+5. persistent/output-drain-overlap。
+
+e2e 模式中，前三个版本使用原 production grid，后两个版本自动使用 `grid=(16,16,1)`。standalone 模式先完成原三版本的 interleaved 对比，再单独对两个 persistent-grid 版本做 interleaved 对比，避免把不同 launch geometry 错误地混入同一次 `compare_asm_variants.py` 调用。
+
+d01-3 上执行统一命令：
+
+```bash
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
+```
+
+五个版本均为 `logits_diff=0`、`rel_l2=0`：
+
+| 版本 | Grid | GEMM1 | fused MoE |
+|---|---|---:|---:|
+| safe baseline | standard | `763.723 us` | `2002.29 us` |
+| optimized v1 | standard | `582.398 us` | `1822.34 us` |
+| double-output-LDS | standard | `558.538 us` | `1797.58 us` |
+| persistent/full-drain | `16x16` | `558.569 us` | `1801.95 us` |
+| persistent/output-drain-overlap | `16x16` | **`543.821 us`** | **`1780.20 us`** |
+
+同轮比较中，persistent/output-drain-overlap 相对 double-output-LDS 的 GEMM1 时间降低 `14.717 us`，即 `2.635%`。
+
+完整日志：
+
+```text
+my_code/moe_gemm1_act1_optimized/history_runs/20260910_070433_e2e-const0.log
+```
+
+## 17. 自包含的固定 commit 依赖快照
+
+为了保证 `benchmark_history.sh` 和 `benchmark_att_history.sh` 不读取仓库根目录下可能被其他 agent 修改的 `aiter/`、`op_tests/` 或 JIT source，本轮新增：
+
+```text
+my_code/moe_gemm1_act1_optimized/repo_snapshot/
+my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
+```
+
+快照通过 `git archive` 从固定 commit 生成，不会复制未提交的 working-tree 修改，也不会因为其他 agent 推进 HEAD 而自动变化。为覆盖 Python import、动态 import、配置查询以及 cold-cache JIT，快照包含：
+
+```text
+repo_snapshot/aiter/
+repo_snapshot/csrc/
+repo_snapshot/op_tests/test_flydsl_grouped_gemm_gfx1250.py
+```
+
+当前快照身份：
+
+```text
+source commit       = 23c2caaafa5f1c6e6d5d9f756980fe004af4202c
+payload files       = 1855
+payload bytes       = 32368502
+payload tree SHA256 = a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a
+```
+
+生成和验证命令：
+
+```bash
+python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
+python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py --verify
+```
+
+不带 `--commit` 时，生成脚本复用现有 `SOURCE_COMMIT`，因此当前固定在 `23c2caaafa5f1c6e6d5d9f756980fe004af4202c`。只有显式传入 `--commit <revision>` 才会切换版本。生成命令需要在本地主机或远端 host 执行，不能在 `hyg_fyd1` 容器内执行 Git。两个 benchmark 脚本只读取已经生成好的快照，本身不会执行 Git。
+
+`benchmark_history.sh` 和 `benchmark_att_history.sh` 都会设置：
+
+```bash
+PYTHONPATH=my_code/moe_gemm1_act1_optimized/repo_snapshot
+AITER_META_DIR=my_code/moe_gemm1_act1_optimized/repo_snapshot
+```
+
+`run_e2e_candidate.py`、`compare_asm_variants.py` 和 `att_launch_opt.py` 还会检查实际导入的 `aiter.__file__` 是否位于 `repo_snapshot/` 内；如果 Python 意外解析到仓库根目录的 `aiter/`，测试会立即失败。
+
+`benchmark_att_history.sh` 现在与 `benchmark_history.sh` 支持相同的五个固定版本：safe baseline、optimized v1、double-output-LDS、persistent/full-drain 和 persistent/output-drain-overlap。前三个版本使用 standard grid，后两个版本的 ATT launch 自动使用 `grid=(16,16,1)`。
+
+可以先用下面的快速模式编译并各 launch 一次五个版本，而不采集 rocprof ATT：
+
+```bash
+AITER_ATT_VALIDATE_ONLY=1 \
+  bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+```
+
+该模式用于检查五版本列表、code object 编译、standard/persistent grid 选择和自包含依赖导入。去掉 `AITER_ATT_VALIDATE_ONLY=1` 才会执行正式的五版本 ATT 采集和 `--ana-att` 分析。
+
+外部系统工具仍由机器环境提供，包括 PyTorch、FlyDSL、ROCm、clang、rocprof、trace decoder 和 GPU runtime；这些不属于 aiter 仓库文件。
+
+d01-3 上的自包含路径验证结果：
+
+- 首次运行从 `repo_snapshot/csrc/` 构建 `module_aiter_core.so`，生成文件也位于 `repo_snapshot/aiter/jit/`。
+- 五版本 e2e const0 均为 `logits_diff=0`、`rel_l2=0`、`pass=True`。
+- 完整输出中有 90 处模块路径指向 `repo_snapshot/aiter/`，5 处测试路径指向 `repo_snapshot/op_tests/`。
+- 最终 e2e 进程检查了所有已加载且真实存在的仓库模块，共 151 个，全部位于 `my_code/` 下。
+- `AITER_ATT_VALIDATE_ONLY=1` 模式成功编译并 launch 五份 code object；前三份报告 `grid=(2880,4,1)`，两个 persistent 版本报告 `grid=(16,16,1)`。
+- ATT launch helper 的仓库模块路径审计通过。
+
+验证摘要：
+
+```text
+my_code/moe_gemm1_act1_optimized/history_runs/20260910_085520_snapshot_e2e_const0_summary.log
+my_code/moe_gemm1_act1_optimized/history_runs/20260910_090211_att_validate_summary.log
+```

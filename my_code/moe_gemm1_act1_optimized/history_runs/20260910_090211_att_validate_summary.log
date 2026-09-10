@@ -1,0 +1,9 @@
+command=AITER_ATT_VALIDATE_ONLY=1 bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+snapshot_commit=23c2caaafa5f1c6e6d5d9f756980fe004af4202c
+snapshot_payload_tree_sha256=a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a
+repository_module_audit=pass
+baseline sha256=3f40709bc179544c163b2fd80e8cffc253c261646caf659340ecaad5cfb0d681 grid=(2880,4,1) launch=pass
+optimized_v1 sha256=c90bbe6221b03ae6e05d1d5570b16be25217133e4105860eac901043f316feae grid=(2880,4,1) launch=pass
+double_lds sha256=33034bb76ada72f9fbc895c1edbf56ee339d0ed6eb28d496196b68323ceed331 grid=(2880,4,1) launch=pass
+persistent sha256=cc6bd7d137d93da7c5f59cb79d071106c37ecdc4c0aca9627c99f80ab2bc4335 grid=(16,16,1) launch=pass
+persistent_overlap sha256=ec3af906acebfdef77db5f734d01fbef45035dfcfdd799f557693aa73dd0d601 grid=(16,16,1) launch=pass

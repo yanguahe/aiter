@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import os
 import statistics
 import sys
 import tempfile
@@ -14,7 +15,30 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
+SNAPSHOT_ROOT = HERE / "repo_snapshot"
 SYMBOL = "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1"
+
+
+def _audit_repository_module_paths() -> None:
+    repo = REPO.resolve()
+    allowed = (REPO / "my_code").resolve()
+    violations: list[Path] = []
+    for module in tuple(sys.modules.values()):
+        raw = getattr(module, "__file__", None)
+        if not raw:
+            continue
+        path = Path(raw).resolve()
+        if not path.exists():
+            continue
+        if (path == repo or repo in path.parents) and not (
+            path == allowed or allowed in path.parents
+        ):
+            violations.append(path)
+    if violations:
+        rendered = "\n".join(f"  {path}" for path in sorted(set(violations)))
+        raise RuntimeError(
+            "repository modules resolved outside my_code:\n" + rendered
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,10 +60,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if not (SNAPSHOT_ROOT / "aiter" / "__init__.py").is_file():
+        raise SystemExit(
+            "self-contained HEAD snapshot is missing; run on the host/local checkout: "
+            f"{HERE / 'sync_head_repo_snapshot.py'}"
+        )
     sys.path.insert(0, str(HERE))
+    sys.path.insert(0, str(SNAPSHOT_ROOT))
+    os.environ["AITER_META_DIR"] = str(SNAPSHOT_ROOT)
     import torch
+    import aiter
 
     import gemm_batch_isa_runner as runner
+
+    aiter_path = Path(aiter.__file__).resolve()
+    if SNAPSHOT_ROOT.resolve() not in aiter_path.parents:
+        raise RuntimeError(
+            f"aiter resolved outside the self-contained snapshot: {aiter_path}"
+        )
 
     workload = runner.reference_moe_workload(dense_256=True)
     device = torch.device(f"cuda:{args.device}")
@@ -218,6 +256,8 @@ def main() -> None:
             f"min={min(values):.3f} us max={max(values):.3f} us "
             f"samples={','.join(f'{v:.3f}' for v in values)}"
         )
+    _audit_repository_module_paths()
+    print("repository module audit passed", flush=True)
 
 
 if __name__ == "__main__":

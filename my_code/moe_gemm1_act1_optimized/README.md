@@ -15,16 +15,35 @@ in progress.
 - `build_double_output_lds_variant.py`: derives the retained double-output-LDS
   implementation from the optimized-v1 assembly.
 - `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`:
-  current optimized candidate with disjoint output LDS staging.
+  retained output-LDS baseline with disjoint output staging.
+- `build_persistent_variants.py`: derives the persistent and cross-task
+  output-drain-overlap variants from the validated double-output-LDS kernel.
+- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s`:
+  cluster-granular persistent task loop with a safe full drain at every task
+  boundary.
+- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`:
+  final candidate; overlaps the prior output TDM drain with independent setup
+  for the next logical tile and waits before the first input TDM/LDS reuse.
+- `moe_gemm1_cpp_launcher_persistent.cpp`: isolated C++ launch adapter that
+  accepts the persistent physical `grid=(16,16,1)` with `cluster=(4,4,1)`.
+- `benchmark_persistent.sh`: one-command, same-machine e2e comparison of
+  double-LDS, persistent, and persistent-overlap.
+- `sync_head_repo_snapshot.py`: copies the complete tracked `aiter/` package,
+  `csrc/` JIT sources, and the grouped-MoE e2e test from one committed revision
+  into `repo_snapshot/`, with an aggregate tree digest and source commit
+  manifest. An existing snapshot remains pinned unless `--commit` is given.
+- `repo_snapshot/`: self-contained pinned-commit repository dependencies used
+  by both history scripts. No Python source under the top-level `aiter/` or
+  `op_tests/` trees is imported by these benchmark runs.
 - `gemm_batch_isa_runner.py`, `gemm_isa_runner.py`: isolated copies of the
   validated runner used for testing older remote checkouts.
 - `compare_asm_variants.py`, `run_e2e_candidate.py`: standalone comparison and
   full grouped-MoE e2e adapters for the three retained ISA versions.
 - `test_optimized.sh`: quick correctness and formal benchmark commands.
-- `benchmark_history.sh`: one-command, same-process comparison of the known-safe
-  baseline, the first optimized kernel, and the current double-buffered-output
-  candidate.  It records the host, Git HEAD, clocks, SHA256 values, validation,
-  and timings under `history_runs/`.
+- `benchmark_history.sh`: one-command comparison of the complete five-version
+  chain: safe baseline, optimized v1, double-output-LDS, persistent full-drain,
+  and persistent output-drain-overlap. It records the host, snapshot commit, clocks,
+  SHA256 values, validation, and timings under `history_runs/`.
 - `benchmark_att_history.sh`: builds the same history set and collects/analyzes
   one ATT capture for each version under a timestamped `att_history/` directory.
 - `run_att_const0.sh`: collect and analyze one const0 ATT capture with
@@ -42,7 +61,16 @@ in progress.
 
 ```bash
 python my_code/moe_gemm1_act1_optimized/build_optimized.py
+python my_code/moe_gemm1_act1_optimized/build_persistent_variants.py
+python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py --verify
+python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
 ```
+
+The first command verifies the pinned snapshot without reading Git. The second
+recreates the same pinned commit recorded in `SOURCE_COMMIT`; it must run on the
+host or local checkout, where Git is available. Only an explicit
+`--commit <revision>` changes the pinned revision. Benchmark commands run inside
+the `hyg_fyd1` container and never run Git.
 
 ## Test
 
@@ -51,6 +79,11 @@ bash my_code/moe_gemm1_act1_optimized/test_optimized.sh quick-random
 bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-random
 bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-const0
 bash my_code/moe_gemm1_act1_optimized/run_att_const0.sh
+bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-const0
+bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-random
+bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+AITER_ATT_VALIDATE_ONLY=1 \
+  bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
 ```
 
 After reconnecting to a machine or after any system reconfiguration, recreate
@@ -72,11 +105,39 @@ bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
 This is also the script's default mode when no mode argument is supplied.
 Standalone timing is retained only as a faster diagnostic and tuning signal.
 
-The directory intentionally retains only these three assembly versions:
+The stable historical chain remains these three assembly versions:
 
 1. `baseline_act1_independent.s`
 2. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`
 3. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`
+
+The persistent experiment adds two generated descendants of item 3:
+
+4. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s`
+5. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`
+
+`benchmark_history.sh e2e-const0`, `e2e-random`, and `e2e-both` now run all
+five versions automatically. The first three use the standard production grid;
+the two persistent variants use `grid=(16,16,1)`. Standalone modes retain the
+original three-version interleaved comparison and then run a second interleaved
+comparison for the two persistent-grid variants.
+
+`benchmark_att_history.sh` uses the identical five-version list. Its ATT launch
+helper selects the standard grid for the first three versions and
+`grid=(16,16,1)` for both persistent versions.
+Set `AITER_ATT_VALIDATE_ONLY=1` to compile and launch all five code objects once
+without collecting rocprof ATT data; this validates the version list, launch
+geometry, snapshot imports, and kernel correctness path before a long trace run.
+
+Both scripts export `PYTHONPATH` and `AITER_META_DIR` to `repo_snapshot/`.
+Consequently, all repository Python/config/JIT-source dependencies are read
+from paths below `my_code/moe_gemm1_act1_optimized/`; only system dependencies
+such as PyTorch, FlyDSL, ROCm, clang, and rocprof remain external.
+
+The current acceptance number is the `gemm1` profiler row produced by
+`benchmark_persistent.sh e2e-const0`. The script records the host, current
+clocks, ISA/launcher SHA256 values, exact test output, and all three timings in
+one timestamped `history_runs/` log.
 
 `perf-const0` first reproduces the exact historical command against
 `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s` (the version that

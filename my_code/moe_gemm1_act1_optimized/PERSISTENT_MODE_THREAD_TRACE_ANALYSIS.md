@@ -206,6 +206,37 @@ were unrealistically free. Further progress therefore requires reducing the
 hotloop cluster-barrier, LDS dependency, and residual TDM waits in addition to
 persistent scheduling.
 
+## Implemented result
+
+The follow-up implementation uses 16 physical 4x4 clusters and a fixed
+cluster-task stride of 16. It was evaluated on d01-3 with the exact same MoE
+e2e const0 process for all three versions:
+
+| Version | GEMM1 | Relative to double-LDS |
+|---|---:|---:|
+| double-output-LDS | `557.354 us` | baseline |
+| persistent with per-task full drain | `557.287 us` | `-0.012%` |
+| persistent with cross-task output drain | `542.360 us` | `-2.690%` |
+
+The near-zero scheduler-only change confirms that the trace's `2.34%` figure
+was an upper bound rather than an expected gain: the saved dispatch gaps are
+largely replaced by task-loop setup and barrier work. Moving the TENSORcnt wait
+from the task boundary to the next task's first input TDM path realizes a
+`2.690%` GEMM1 reduction. This captures part of the `8.26%` aggressive ideal;
+the remaining gap is consistent with the independent setup window being much
+shorter than the full output-drain stall and with the shared TDM/VMEM/LDS path
+limiting overlap.
+
+Correctness remained stable for random seeds 0, 1, and 2 with three repeated
+standalone validations per seed (`err=0`), and in the complete MoE pipeline:
+
+```text
+random: logits_diff=3.3980e-06, rel_l2=2.6069e-03
+const0: logits_diff=0, rel_l2=0
+```
+
+The final implementation and detailed logs are documented in `RESULTS.md`.
+
 ## Hardware references
 
 - `mi400_hw_wiki/raw/papers/mi400_hd_txt/architecture/subsystem/SH/MI400_Shader_Programming#65.txt:1445-1453`: WGP$/LDS and one TDM per SIMD-pair.
