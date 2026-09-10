@@ -175,6 +175,82 @@ def fused_silu_swiglu_elem(g, u, *, swiglu, limit_f32, neg_limit_f32):
     return g * sig * u
 
 
+def fused_silu_poly9_elem(g, u, *, limit_f32, neg_limit_f32):
+    """Fast SiLU approximation for the opt-in GEMM1 tuning path.
+
+    Approximate sigmoid on [-6, 6] with an odd degree-nine polynomial and
+    saturate outside that interval.  The gate value used by the final product
+    keeps the production upper clamp; only the sigmoid approximation is
+    clipped symmetrically.
+    """
+    import flydsl.expr as _fx
+
+    gate = fmin_f32(g, limit_f32)
+    up = fclamp_f32(u, neg_limit_f32, limit_f32)
+    x = fclamp_f32(gate, _fx.Float32(-6.0), _fx.Float32(6.0))
+    x2 = x * x
+    p = _fx.Float32(
+        llvm_dialect.intr_fma(
+            _raw(x2),
+            _raw(_fx.Float32(1.923522068e-7)),
+            _raw(_fx.Float32(-1.941049074e-5)),
+        )
+    )
+    p = _fx.Float32(
+        llvm_dialect.intr_fma(
+            _raw(x2), _raw(p), _raw(_fx.Float32(0.0007638517363))
+        )
+    )
+    p = _fx.Float32(
+        llvm_dialect.intr_fma(
+            _raw(x2), _raw(p), _raw(_fx.Float32(-0.01575167826))
+        )
+    )
+    p = _fx.Float32(
+        llvm_dialect.intr_fma(
+            _raw(x2), _raw(p), _raw(_fx.Float32(0.2435485293))
+        )
+    )
+    sig = _fx.Float32(
+        llvm_dialect.intr_fma(_raw(x), _raw(p), _raw(_fx.Float32(0.5)))
+    )
+    sig = fclamp_f32(sig, _fx.Float32(0.0), _fx.Float32(1.0))
+    return gate * sig * up
+
+
+def batched_silu_hard(pairs, *, limit_f32, neg_limit_f32, range_constexpr):
+    """Low-cost hard-sigmoid SiLU approximation used only by an opt-in path."""
+    import flydsl.expr as _fx
+
+    zero = _fx.Float32(0.0)
+    half = _fx.Float32(0.5)
+    one = _fx.Float32(1.0)
+    slope = _fx.Float32(0.193)
+    results = []
+    for i in range_constexpr(len(pairs)):
+        gate = fmin_f32(pairs[i][0], limit_f32)
+        up = fclamp_f32(pairs[i][1], neg_limit_f32, limit_f32)
+        sig = _fx.Float32(
+            llvm_dialect.intr_fma(_raw(gate), _raw(slope), _raw(half))
+        )
+        sig = fclamp_f32(sig, zero, one)
+        results.append(gate * sig * up)
+    return results
+
+
+def batched_silu_relu(pairs, *, limit_f32, neg_limit_f32, range_constexpr):
+    """ReLU-gate approximation used only by an opt-in performance experiment."""
+    import flydsl.expr as _fx
+
+    zero = _fx.Float32(0.0)
+    results = []
+    for i in range_constexpr(len(pairs)):
+        gate = fclamp_f32(pairs[i][0], zero, limit_f32)
+        up = fclamp_f32(pairs[i][1], neg_limit_f32, limit_f32)
+        results.append(gate * up)
+    return results
+
+
 def _tanh_f32(x, tanh_mul):
     """tanh(x) via the sigmoid identity tanh(z) = 2*sigmoid(2z) - 1.
 
@@ -346,6 +422,8 @@ def batched_silu_swiglu(pairs, *, swiglu, limit_f32, neg_limit_f32, range_conste
 __all__ = [
     "LOG2E",
     "SituV2Consts",
+    "batched_silu_hard",
+    "batched_silu_relu",
     "batched_silu_swiglu",
     "batched_situv2",
     "fclamp_f32",

@@ -4,6 +4,7 @@
 """Grouped contiguous-M A8W4 preshuffle MoE GEMM for gfx1250 (TDM pipeline)."""
 
 import math
+import os
 from collections import namedtuple
 
 import flydsl.compiler as flyc
@@ -17,8 +18,11 @@ from aiter.ops.flydsl.kernels import vector
 from aiter.utility.mx_types import MxDtypeInt as MxDtype
 
 from .gemm_common_gfx1250 import (
+    batched_silu_hard,
+    batched_silu_relu,
     batched_silu_swiglu,
     batched_situv2,
+    fused_silu_poly9_elem,
     fused_silu_swiglu_elem,
     fused_situv2_elem,
     make_lds_copy_ops,
@@ -39,6 +43,12 @@ from .tensor_shim import (
 )
 
 TDM_DESCRIPTOR_VERSION = 1
+AITER_FLYDSL_GEMM1_POST_MISCHED = bool(
+    int(os.environ.get("AITER_FLYDSL_GEMM1_POST_MISCHED", "1"))
+)
+AITER_FLYDSL_GEMM1_LSR_DROP_SOLUTION = bool(
+    int(os.environ.get("AITER_FLYDSL_GEMM1_LSR_DROP_SOLUTION", "0"))
+)
 
 
 @flyc.jit
@@ -79,6 +89,17 @@ def launch_gemm_a8w4_tdm(
     schedule_hints: Constexpr[int] = 0,
     relax_cluster_wrap_dscnt: Constexpr[int] = 0,
     balanced_rows_per_expert: Constexpr[int] = 0,
+    skip_cluster_sync: Constexpr[int] = 0,
+    mma_group: Constexpr[int] = 4,
+    fence_cover_mma: Constexpr[int] = 8,
+    disable_xdl_arb_stall: Constexpr[int] = -1,
+    silu_poly9: Constexpr[int] = 0,
+    silu_hard: Constexpr[int] = 0,
+    silu_relu: Constexpr[int] = 0,
+    wmma_reuse: Constexpr[int] = 0,
+    delay_acc_zero: Constexpr[int] = 0,
+    static_n: Constexpr[int] = 0,
+    static_swizzle: Constexpr[int] = 0,
 ):
     """Launch the grouped contiguous-M a8w4 MoE GEMM for gfx1250.
 
@@ -124,18 +145,13 @@ def launch_gemm_a8w4_tdm(
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
     # These are all constexpr. all() avoids the JIT boolean rewriter's
     # exponential AST expansion of a long short-circuit `and` chain.
-    fp4_prefill_schedule = all(
+    fp4_prefill_common = all(
         (
             a_is_fp4,
             K == 7168,
-            tile_m == 256,
-            tile_n == 256,
-            tile_k == 256,
-            m_warp == 2,
-            n_warp == 2,
-            num_buffers == 4,
-            num_waves_per_tensor_tdm == 1,
-            next_stage_on,
+            tile_m in (128, 256),
+            tile_n in (128, 256),
+            (m_warp, n_warp) in ((2, 2), (4, 2), (4, 4), (8, 2)),
             stage1_act == 1,
             stage1_quant_out == 0,
             out_is_f16 == 0,
@@ -144,11 +160,49 @@ def launch_gemm_a8w4_tdm(
             n_experts > 0,
         )
     )
+    fp4_prefill_schedule = fp4_prefill_common and (
+        (tile_k, num_buffers, next_stage_on, num_waves_per_tensor_tdm)
+        in (
+            (128, 4, 1, 1),
+            (128, 4, 1, 2),
+            (128, 4, 1, 4),
+            (256, 4, 1, 1),
+            (256, 4, 1, 2),
+            (256, 4, 1, 4),
+            (256, 3, 1, 1),
+            (256, 3, 1, 2),
+            (256, 3, 1, 4),
+            (256, 2, 0, 1),
+            (512, 2, 0, 1),
+        )
+    )
     assert epilogue_batch_wn in (1, 2, 4, 8)
     assert not a_preshuffle or a_is_fp4
     assert schedule_hints in (0, 1)
     assert relax_cluster_wrap_dscnt in (0, 1)
     assert balanced_rows_per_expert >= 0
+    # 0=all cluster syncs, 1=initial sync only, 2=no cluster syncs.
+    assert skip_cluster_sync in (0, 1, 2)
+    assert not skip_cluster_sync or balanced_rows_per_expert > 0
+    assert mma_group > 0
+    assert fence_cover_mma >= 0
+    assert disable_xdl_arb_stall in (-1, 0, 1)
+    assert silu_poly9 in (0, 1)
+    assert not silu_poly9 or (stage1_act == 1 and stage1_quant_out == 0)
+    assert silu_hard in (0, 1)
+    assert not silu_hard or (stage1_act == 1 and stage1_quant_out == 0)
+    assert silu_relu in (0, 1)
+    assert not silu_relu or (stage1_act == 1 and stage1_quant_out == 0)
+    assert silu_poly9 + silu_hard + silu_relu <= 1
+    # 0=off, 1=A+B, 2=A only, 3=B only.
+    assert wmma_reuse in (0, 1, 2, 3)
+    assert delay_acc_zero in (0, 1)
+    assert static_n >= 0
+    assert not static_n or balanced_rows_per_expert > 0
+    assert static_swizzle in (0, 1, 2)
+    assert not static_swizzle or static_n
+    if silu_poly9:
+        epilogue_batch_wn = 1
     if not fp4_prefill_schedule:
         epilogue_batch_wn = 1
         schedule_hints = 0
@@ -180,6 +234,17 @@ def launch_gemm_a8w4_tdm(
         schedule_hints,
         relax_cluster_wrap_dscnt,
         balanced_rows_per_expert,
+        skip_cluster_sync,
+        mma_group,
+        fence_cover_mma,
+        disable_xdl_arb_stall,
+        silu_poly9,
+        silu_hard,
+        silu_relu,
+        wmma_reuse,
+        delay_acc_zero,
+        static_n,
+        static_swizzle,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -253,13 +318,32 @@ def launch_gemm_a8w4_tdm(
     _balanced = (
         f"_bal{balanced_rows_per_expert}" if balanced_rows_per_expert > 0 else ""
     )
+    _skip_cluster_sync = ("", "_nocs", "_nocsall")[skip_cluster_sync]
+    _sched_shape = (
+        f"_mg{mma_group}_fc{fence_cover_mma}"
+        if schedule_hints and (mma_group != 4 or fence_cover_mma != 8)
+        else ""
+    )
+    _xdl_arb = (
+        f"_xdl{disable_xdl_arb_stall}" if disable_xdl_arb_stall >= 0 else ""
+    )
+    _silu_approx = "_silu_poly9" if silu_poly9 else ""
+    if silu_hard:
+        _silu_approx = "_silu_hard"
+    if silu_relu:
+        _silu_approx = "_silu_relu"
+    _wmma_reuse = ("", "_reuse", "_reusea", "_reuseb")[wmma_reuse]
+    _delay_zero = "_daz" if delay_acc_zero else ""
+    _static_geometry = f"_sgN{static_n}" if static_n else ""
+    _static_swizzle = f"_swz{static_swizzle}" if static_swizzle else ""
     _kname = (
         f"a8w4_tdm_{_afp}"
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
         f"_b{num_buffers}_K{K}"
         f"{_grouped}{_act}{_bias}{_qout}{_cl}{_next_stage}{_waves_per_tensor}"
         f"{_epilogue_batch}{_a_preshuffle}{_schedule_hints}"
-        f"{_relax_cluster_wrap}{_balanced}"
+        f"{_relax_cluster_wrap}{_balanced}{_skip_cluster_sync}{_sched_shape}{_xdl_arb}"
+        f"{_silu_approx}{_wmma_reuse}{_delay_zero}{_static_geometry}{_static_swizzle}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -278,9 +362,16 @@ def launch_gemm_a8w4_tdm(
         f32_situ_beta: fx.Float32,
         f32_situ_linear_beta: fx.Float32,
     ):
-        if const_expr(fp4_prefill_schedule):
+        xdl_arb_off = (
+            disable_xdl_arb_stall
+            if disable_xdl_arb_stall >= 0
+            else int(tile_m == 256 and tile_n == 256 and num_waves == 4)
+        )
+        if const_expr(fp4_prefill_schedule and xdl_arb_off):
             # gfx1250 SCHED_MODE bit 2; the installed convenience helper
-            # writes bit 4 instead. See CDNA5 ISA section 5.7.2.1.
+            # writes bit 4 instead. See CDNA5 ISA section 5.7.2.1. Keep this
+            # single-wave/SIMD-only: the hardware guide warns that disabling
+            # the XDL arbitration stall can block co-execution opportunities.
             llvm_dialect.call_intrinsic(
                 None,
                 "llvm.amdgcn.s.setreg",
@@ -307,24 +398,52 @@ def launch_gemm_a8w4_tdm(
         # on one m_tile. Ternaries, not `if`: the rewriter would trace a branch.
         TILES_PER_GROUP = 16
         assert TILES_PER_GROUP % cluster_m == 0
-        total_n_tiles = (i32_n + (tile_n - 1)) // tile_n
-        total_m_tiles = (i32_m + (tile_m - 1)) // tile_m
+        total_n_tiles = (
+            static_n // tile_n
+            if static_n
+            else (i32_n + (tile_n - 1)) // tile_n
+        )
+        total_m_tiles = (
+            n_experts * (balanced_rows_per_expert // tile_m)
+            if static_n
+            else (i32_m + (tile_m - 1)) // tile_m
+        )
         swz_id = bid_x // cluster_n if cluster_n > 1 else bid_x
         local_n = bid_x - swz_id * cluster_n if cluster_n > 1 else None
         n_units = total_n_tiles // cluster_n if cluster_n > 1 else total_n_tiles
         local_m = fx.block_idx.y if cluster_m > 1 else 0
         m_units = (total_m_tiles + cluster_m - 1) // cluster_m
-        group_m_units = TILES_PER_GROUP // cluster_m
-        blocks_per_group = n_units * group_m_units
-        group = swz_id // blocks_per_group
-        group_first_tile = group * group_m_units
-        in_group = swz_id - group * blocks_per_group
-        rem_tiles = m_units - group_first_tile
-        group_tiles = (rem_tiles < group_m_units).select(rem_tiles, group_m_units)
-        m_unit = group_first_tile + (in_group - (in_group // group_tiles) * group_tiles)
+        if const_expr(static_swizzle == 1):
+            # Expert-major order: all six N-clusters for one expert are nearby,
+            # maximizing reuse of that expert's four activation tiles.
+            m_unit = swz_id // n_units
+            n_unit = swz_id - m_unit * n_units
+        elif const_expr(static_swizzle == 2):
+            # N-major order is useful as a cache-locality control experiment.
+            n_unit = swz_id // m_units
+            m_unit = swz_id - n_unit * m_units
+        else:
+            group_m_units = TILES_PER_GROUP // cluster_m
+            blocks_per_group = n_units * group_m_units
+            group = swz_id // blocks_per_group
+            group_first_tile = group * group_m_units
+            in_group = swz_id - group * blocks_per_group
+            if const_expr(static_n):
+                # The balanced target has exactly 96 cluster-M units, divisible
+                # by four. Avoid a runtime tail-group divisor in every wave.
+                assert m_units % group_m_units == 0
+                group_tiles = group_m_units
+            else:
+                rem_tiles = m_units - group_first_tile
+                group_tiles = (rem_tiles < group_m_units).select(
+                    rem_tiles, group_m_units
+                )
+            m_unit = group_first_tile + (
+                in_group - (in_group // group_tiles) * group_tiles
+            )
+            n_unit = in_group // group_tiles
         m_tile = m_unit * cluster_m + local_m
         blk_m = m_tile * tile_m
-        n_unit = in_group // group_tiles
         blk_n = (
             (n_unit * cluster_n + local_n) * tile_n
             if cluster_n > 1
@@ -337,7 +456,7 @@ def launch_gemm_a8w4_tdm(
         )
         blk_m64 = fx.Int64(blk_m)
         blk_n64 = fx.Int64(blk_n)
-        n64 = fx.Int64(i32_n)
+        n64 = fx.Int64(static_n) if static_n else fx.Int64(i32_n)
 
         # Find the expert owning this M-tile.  Explicitly balanced routing can
         # bypass the global psum binary search and launches no capacity tail.
@@ -346,7 +465,11 @@ def launch_gemm_a8w4_tdm(
         )
         tile_map = fx.recast_iter(i32_ptr, arg_m_tile_map)
         if const_expr(balanced_rows_per_expert > 0):
-            expert = blk_m // balanced_rows_per_expert
+            expert = (
+                m_unit
+                if static_n and balanced_rows_per_expert == cluster_m * tile_m
+                else blk_m // balanced_rows_per_expert
+            )
         else:
             lo, hi = blk_m * 0, blk_m * 0 + n_experts
             for _ in range_constexpr(
@@ -363,7 +486,11 @@ def launch_gemm_a8w4_tdm(
         N_SUPERS = (n64 + 31) // 32
         AS_ROW = (K // 4) if a_preshuffle else (K // 128) * wmma_m_rep * 16
 
-        c_outer_off, c_inner_off, c_stride = blk_m64, blk_n64, i32_n
+        c_outer_off, c_inner_off, c_stride = (
+            blk_m64,
+            blk_n64,
+            static_n if static_n else i32_n,
+        )
         SB_OUTER_STRIDE = K4
         sb_batch_off = eb64 * (N_SUPERS * K4)
         # Per-expert A-data OOB: bound to the owning expert's valid-row
@@ -385,7 +512,11 @@ def launch_gemm_a8w4_tdm(
                 if balanced_rows_per_expert > 0
                 else (tile_map[n_experts - 1] + tile_m - 1) // tile_m
             )
-            full_cluster = cluster_first_m + cluster_m <= valid_m_tiles
+            full_cluster = (
+                True
+                if static_n
+                else cluster_first_m + cluster_m <= valid_m_tiles
+            )
             if const_expr(balanced_rows_per_expert > 0):
                 column_mask = fx.Int32(0x1111)
             else:
@@ -409,10 +540,19 @@ def launch_gemm_a8w4_tdm(
                     )
             # A cluster containing sentinel tiles cannot use a cluster barrier.
             # Its live rows use the existing independent 1-D A-only protocol.
-            b_mcast_mask = full_cluster.select(column_mask << local_n, 0)
+            b_mcast_mask = (
+                column_mask << local_n
+                if static_n
+                else full_cluster.select(column_mask << local_n, 0)
+            )
 
         def cluster_sync(drain_lds=True):
             if const_expr(cluster_m > 1):
+                if const_expr(
+                    skip_cluster_sync == 2
+                    or (skip_cluster_sync == 1 and not drain_lds)
+                ):
+                    return
                 if full_cluster:
                     if const_expr(drain_lds):
                         workgroup_barrier()
@@ -494,11 +634,13 @@ def launch_gemm_a8w4_tdm(
             num_waves_per_tensor_tdm <= num_waves
         ), "waves per tensor cannot exceed workgroup waves"
         assert (
-            4 * num_waves_per_tensor_tdm
-        ) % num_waves == 0, "A/B/SA/SB ownership must cover every workgroup wave"
-        # TDMs one wave issues per k-tile: its share of the four A/B/SA/SB jobs.
-        # Both the tensorcnt arithmetic and the WMMA interleave count in these.
-        TDM_PER = 4 * num_waves_per_tensor_tdm // num_waves
+            num_waves % num_waves_per_tensor_tdm == 0
+        ), "workgroup waves must divide evenly into tensor-owner groups"
+        # TDMs issued by an owner wave per k-tile.  When the workgroup has more
+        # waves than the four A/B/SA/SB owner groups cover, the remaining waves
+        # are compute-only.  This keeps the input at four TDM operations per WG
+        # instead of duplicating every descriptor solely to cover every wave.
+        TDM_PER = max(1, 4 * num_waves_per_tensor_tdm // num_waves)
         shared = fx.AddressSpace.Shared
         p8_shared = fx.PointerType.get(
             elem_ty=fx.Int8.ir_type, address_space=shared, alignment=16
@@ -637,7 +779,11 @@ def launch_gemm_a8w4_tdm(
                 else (blk_m64 // (wmma_m_rep * 16)) * AS_ROW
             ),
             AS_ROW,
-            ((mn_oob + 31) // 32) if a_preshuffle else None,
+            (
+                None
+                if static_n
+                else ((mn_oob + 31) // 32 if a_preshuffle else None)
+            ),
             AS_INNER,
             AS_SUPERS,
             on_i32=True,
@@ -702,6 +848,9 @@ def launch_gemm_a8w4_tdm(
             for g in range_constexpr(len(job_waves)):
                 if owns(job_waves[g]):
                     fn([j for j in jobs if j.waves == job_waves[g]])
+            if const_expr(4 * num_waves_per_tensor_tdm < num_waves):
+                if wave >= 4 * num_waves_per_tensor_tdm:
+                    fn([])
 
         wmb = wave_m * warp_tile_m
         wnb = wave_n * warp_tile_n
@@ -819,8 +968,13 @@ def launch_gemm_a8w4_tdm(
         c_frags = [
             fx.make_rmem_tensor(c_width, fx.Float32) for _ in range_constexpr(mma_n_acc)
         ]
-        for cf in c_frags:
-            cf.store(fx.constant_vector(0.0, T.vec(c_width, T.f32)))
+
+        def zero_accumulators():
+            for cf in c_frags:
+                cf.store(fx.constant_vector(0.0, T.vec(c_width, T.f32)))
+
+        if const_expr(not delay_acc_zero):
+            zero_accumulators()
 
         front_wm = (wmma_m_rep + 1) // 2
         FRONT = list(range(front_wm))
@@ -828,10 +982,10 @@ def launch_gemm_a8w4_tdm(
 
         # Hint shape for compute_ktile. Re-swept on t256x256x256 with random
         # activations: 4 is safe for both, 16 costs 2.5%; 2..8 is within noise.
-        MMA_GROUP = 4
+        MMA_GROUP = mma_group
         # WMMA held back as a closing pure-MFMA group, covering the next k128's
         # REUSE fence; the prefetch reads interleave evenly over the rest.
-        FENCE_COVER_MMA = 8
+        FENCE_COVER_MMA = fence_cover_mma
 
         def mma_rows(wm_list, act, wt, sa_k, sb_k):
             for i in range_constexpr(len(wm_list)):
@@ -850,6 +1004,15 @@ def launch_gemm_a8w4_tdm(
                                 sa_k[wm // 2],
                                 scaleAType=0,
                                 scaleBType=wm % 2,
+                                # Snake traversal keeps the activation operand
+                                # unchanged within a row and the weight operand
+                                # unchanged across adjacent row boundaries.
+                                reuseA=bool(wmma_reuse in (1, 2) and wn_raw > 0),
+                                reuseB=bool(
+                                    wmma_reuse in (1, 3)
+                                    and wm > 0
+                                    and wn_raw == 0
+                                ),
                             )
                         )
                     else:
@@ -894,9 +1057,13 @@ def launch_gemm_a8w4_tdm(
                 sb=fx.make_rmem_tensor(SB_WIDTH, fx.Int32),
             )
 
-        # Two slots: the k-tile loop is a runtime scf.for, so the tile boundary
-        # cannot carry a Python value, and a prefetch needs a slot no WMMA reads.
-        rmem_slots = [make_rmem_slot() for _ in range_constexpr(2)]
+        # KWS==1 carries the next tile back into slot 0 only after this tile's
+        # WMMA has consumed it, so a second slot is dead weight.  Avoiding that
+        # slot is important for the 16-wave geometry: it removes enough live
+        # VGPR state to avoid hot-loop scratch spills.  Multi-subtile K tiles
+        # still ping-pong two slots while preloading the following k128.
+        RMEM_SLOTS = 1 if KWS == 1 else 2
+        rmem_slots = [make_rmem_slot() for _ in range_constexpr(RMEM_SLOTS)]
 
         def load_lds_data(slot, lds_addr, ksl):
             """Load one k128 from precomputed LDS bases into ``slot``."""
@@ -938,6 +1105,7 @@ def launch_gemm_a8w4_tdm(
             next_stage_buf=None,
             my_jobs=None,
             next_stage_wait=None,
+            tdm_per=TDM_PER,
         ):
             """Compute one k-tile, carrying one k128 of A/B/scales across tiles.
 
@@ -1003,7 +1171,7 @@ def launch_gemm_a8w4_tdm(
                 # Spread the tail issue's TDMs over the WMMA groups: one burst
                 # would block the MFMA pipe for its whole descriptor setup.
                 tdm_schedule = spread(
-                    TDM_PER if (tail_issue and ksl + 1 == KWS) else 0,
+                    tdm_per if (tail_issue and ksl + 1 == KWS) else 0,
                     schedule_slots,
                 )
                 for i in range_constexpr(schedule_slots):
@@ -1070,6 +1238,10 @@ def launch_gemm_a8w4_tdm(
                 # Post-compute issue: better for decode (small tile_m).
                 for i in range_constexpr(num_buffers):
                     issue(i, i)
+                if const_expr(delay_acc_zero):
+                    rocdl.sched_barrier(0)
+                    zero_accumulators()
+                    rocdl.sched_barrier(0)
                 n_steady = K_TILES - num_buffers
                 if const_expr(next_stage_on):
                     # Every rolled iteration reads the carry, so prime it here --
@@ -1094,6 +1266,9 @@ def launch_gemm_a8w4_tdm(
                         compute_ktile(buf, None, next_stage_on, next_stage_buf)
                         workgroup_barrier()
                         issue(s, kt + num_buffers, my_jobs)
+                        if const_expr(cluster_m > 1):
+                            if (kt + 1) % num_buffers == 0:
+                                cluster_sync(drain_lds=not relax_cluster_wrap_dscnt)
 
                 dispatch_wave_job(steady_post)
                 for j in range_constexpr(num_buffers):
@@ -1116,6 +1291,10 @@ def launch_gemm_a8w4_tdm(
                 PRE = num_buffers if next_stage_on else num_buffers - 1
                 for i in range_constexpr(PRE):
                     issue(i, i)
+                if const_expr(delay_acc_zero):
+                    rocdl.sched_barrier(0)
+                    zero_accumulators()
+                    rocdl.sched_barrier(0)
                 n_steady = K_TILES - PRE
                 if const_expr(next_stage_on):
                     pipeline_fence(outstanding=TDM_PER * (PRE - 1))
@@ -1126,6 +1305,7 @@ def launch_gemm_a8w4_tdm(
                 # With the carry, a tile's only fence is at its last k128 (see
                 # k_step); buffer 0 and the first drain tile use the prologue's.
                 def steady_mid(my_jobs):
+                    my_tdm_per = len(my_jobs)
                     for kt in range(n_steady):
                         s = kt % num_buffers
                         buf = ptr_to_idx(buf_ptr(s))
@@ -1145,10 +1325,11 @@ def launch_gemm_a8w4_tdm(
                             # At the fence, before this tile's issue: kt+PRE tiles
                             # are out and everything through kt+1 must have landed.
                             (
-                                TDM_PER * (num_buffers - 2)
+                                my_tdm_per * (num_buffers - 2)
                                 if const_expr(next_stage_on)
                                 else None
                             ),
+                            my_tdm_per,
                         )
                         if const_expr(cluster_m > 1):
                             if (kt + 1) % num_buffers == 0:
@@ -1234,7 +1415,7 @@ def launch_gemm_a8w4_tdm(
                 is_kgrp0 = fx.Int32(kgrp) == fx.Int32(0)
                 # i32_n is the pre-activation gate+up width; the quantized
                 # output has half as many columns and one scale dword per K128.
-                q_dst_scale_dwpr = i32_n // 256
+                q_dst_scale_dwpr = (static_n if static_n else i32_n) // 256
 
                 v2i32_ty = T.vec(2, T.i32)
                 QRPT_LOG2 = int(math.log2(QUANT_ROWS_PER_TILE))
@@ -1360,13 +1541,28 @@ def launch_gemm_a8w4_tdm(
                                     pairs.append(
                                         (batch_accs[i][2 * p], batch_accs[i][2 * p + 1])
                                     )
-                            act_vals = batched_silu_swiglu(
-                                pairs,
-                                swiglu=is_swiglu,
-                                limit_f32=f32_swiglu_limit,
-                                neg_limit_f32=neg_limit,
-                                range_constexpr=range_constexpr,
-                            )
+                            if const_expr(silu_relu):
+                                act_vals = batched_silu_relu(
+                                    pairs,
+                                    limit_f32=f32_swiglu_limit,
+                                    neg_limit_f32=neg_limit,
+                                    range_constexpr=range_constexpr,
+                                )
+                            elif const_expr(silu_hard):
+                                act_vals = batched_silu_hard(
+                                    pairs,
+                                    limit_f32=f32_swiglu_limit,
+                                    neg_limit_f32=neg_limit,
+                                    range_constexpr=range_constexpr,
+                                )
+                            else:
+                                act_vals = batched_silu_swiglu(
+                                    pairs,
+                                    swiglu=is_swiglu,
+                                    limit_f32=f32_swiglu_limit,
+                                    neg_limit_f32=neg_limit,
+                                    range_constexpr=range_constexpr,
+                                )
                             for i in range_constexpr(epilogue_batch_wn):
                                 wn = wn_base + i
                                 col_rel = wnb + wn * 16 + kgrp * 8
@@ -1385,7 +1581,9 @@ def launch_gemm_a8w4_tdm(
                             if const_expr(has_bias):
                                 acc = acc + Vec(
                                     fx.ptr_load(
-                                        bias_map + expert * i32_n + col_rel,
+                                        bias_map
+                                        + expert * (static_n if static_n else i32_n)
+                                        + col_rel,
                                         result_type=T.vec(8, out_elem),
                                     )
                                 ).to(fx.Float32)
@@ -1396,6 +1594,16 @@ def launch_gemm_a8w4_tdm(
                                             acc[2 * p],
                                             acc[2 * p + 1],
                                             consts=situ_c,
+                                        )
+                                        for p in range_constexpr(4)
+                                    ]
+                                elif const_expr(silu_poly9):
+                                    act_vals = [
+                                        fused_silu_poly9_elem(
+                                            acc[2 * p],
+                                            acc[2 * p + 1],
+                                            limit_f32=f32_swiglu_limit,
+                                            neg_limit_f32=neg_limit,
                                         )
                                         for p in range_constexpr(4)
                                     ]
@@ -1437,7 +1645,6 @@ def launch_gemm_a8w4_tdm(
                             ]
                             if pin:
                                 vgpr_keepalive(*pin)
-
             # -- Shared LDS -> TDM store to global --
             # dscnt-only barrier: the TDM store reads LDS, not the e8m0 scales
             # still in flight, so their storecnt wait moves past the store below.
@@ -1448,7 +1655,7 @@ def launch_gemm_a8w4_tdm(
             else:
                 workgroup_barrier()
             if const_expr(stage1_act):
-                out_stride = i32_n // 2
+                out_stride = (static_n if static_n else i32_n) // 2
                 out_col_off = blk_n64 // 2
             else:
                 out_stride = c_stride
@@ -1488,8 +1695,12 @@ def launch_gemm_a8w4_tdm(
                 rocdl.s_wait_storecnt(0)
             tdm_ops.tensor_wait(0)
 
-    m_tiles = (i32_m + (tile_m - 1)) // tile_m
-    n_tiles = (N + (tile_n - 1)) // tile_n
+    m_tiles = (
+        n_experts * (balanced_rows_per_expert // tile_m)
+        if static_n
+        else (i32_m + (tile_m - 1)) // tile_m
+    )
+    n_tiles = static_n // tile_n if static_n else (N + (tile_n - 1)) // tile_n
     kargs = (
         arg_c,
         arg_a,
@@ -1526,4 +1737,6 @@ launch_gemm_a8w4_tdm.compile_hints["llvm_options"] = {
     "amdgpu-expert-scheduling-mode": AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE,
     "amdgpu-kernarg-preload": AITER_FLYDSL_KERNARG_PRELOAD,
     "amdgpu-kernarg-preload-count": AITER_FLYDSL_KERNARG_PRELOAD_COUNT,
+    "enable-post-misched": AITER_FLYDSL_GEMM1_POST_MISCHED,
+    "lsr-drop-solution": AITER_FLYDSL_GEMM1_LSR_DROP_SOLUTION,
 }

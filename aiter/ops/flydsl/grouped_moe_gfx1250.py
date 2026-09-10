@@ -561,23 +561,35 @@ def _grouped_a8w4_tdm_moe(
     _is_fp4 = data_format == "fp4"
     _quant_mode = "fp4" if _is_fp4 else "fp8"
     _a_is_fp4 = 1 if _is_fp4 else 0
-    _target_fp4_prefill = all(
+    _target_fp4_prefill_common = all(
         (
             _is_fp4,
             model_dim == 7168,
             two_inter == 6144,
-            tile_m == 256,
-            tile_n == 256,
-            tile_k == 256,
-            m_warp == 2,
-            n_warp == 2,
-            num_buffers == 4,
+            tile_m in (128, 256),
+            tile_n in (128, 256),
+            (m_warp, n_warp) in ((2, 2), (4, 2), (4, 4), (8, 2)),
             stage1_act == 1,
             _b1 is None,
             out_is_f16 == 0,
             cluster_n == 4,
-            waves_per_tensor_tdm == 1,
             next_stage_prefetch == 1,
+        )
+    )
+    _target_fp4_prefill = _target_fp4_prefill_common and (
+        (tile_k, num_buffers, waves_per_tensor_tdm)
+        in (
+            (128, 4, 1),
+            (128, 4, 2),
+            (128, 4, 4),
+            (256, 4, 1),
+            (256, 4, 2),
+            (256, 4, 4),
+            (256, 3, 1),
+            (256, 3, 2),
+            (256, 3, 4),
+            (256, 2, 1),
+            (512, 2, 1),
         )
     )
     _a_preshuffle_env = os.environ.get("AITER_FLYDSL_GEMM1_A_PRESHUFFLE")
@@ -703,6 +715,21 @@ def _grouped_a8w4_tdm_moe(
             balanced_rows_per_expert=_balanced_rows_per_expert,
             **_situ_kw,
         )
+        if os.environ.get("AITER_FLYDSL_GEMM1_DEBUG_OUTPUT", "0") == "1":
+            torch.cuda.synchronize()
+            _y = y.float()
+            _bad = ~torch.isfinite(_y)
+            _bad_2d = _bad.reshape(-1, _bad.shape[-1])
+            _bad_rows = torch.nonzero(_bad_2d.any(dim=1), as_tuple=False).flatten()
+            _bad_cols = torch.nonzero(_bad_2d.any(dim=0), as_tuple=False).flatten()
+            print(
+                "[grouped-moe gemm1 debug] "
+                f"shape={tuple(y.shape)} nan={int(torch.isnan(_y).sum())} "
+                f"inf={int(torch.isinf(_y).sum())} finite={int(torch.isfinite(_y).sum())} "
+                f"bad_rows={_bad_rows[:16].cpu().tolist()} "
+                f"bad_cols={_bad_cols[:16].cpu().tolist()}",
+                flush=True,
+            )
         # Route-indexed: quantize only the routed rows instead of sweeping the
         # whole (1, contiguous_m) capacity buffer. topids_to_rows already holds
         # contiguous grouped rows after contiguous_psum_remap, so source and
@@ -1144,6 +1171,7 @@ def grouped_gemm_gfx1250_a8w4(
         _ov_nw = _tdm_env("AITER_TDM_N_WARP")
         _ov_mw2 = _tdm_env("AITER_TDM_M_WARP2")
         _ov_nw2 = _tdm_env("AITER_TDM_N_WARP2")
+        _ov_wpt = _tdm_env("AITER_FLYDSL_NUM_WAVES_PER_TENSOR_TDM")
         if any(v is not None for v in (_ov_mw, _ov_nw, _ov_mw2, _ov_nw2)):
             _base_mw = _ov_mw if _ov_mw is not None else _tdm_kw.get("m_warp", 1)
             _base_nw = _ov_nw if _ov_nw is not None else _tdm_kw.get("n_warp", n_warp)
@@ -1151,6 +1179,8 @@ def grouped_gemm_gfx1250_a8w4(
             _tdm_kw["n_warp"] = _base_nw
             _tdm_kw["m_warp2"] = _ov_mw2 if _ov_mw2 is not None else _base_mw
             _tdm_kw["n_warp2"] = _ov_nw2 if _ov_nw2 is not None else _base_nw
+        if _ov_wpt is not None:
+            _tdm_kw["waves_per_tensor_tdm"] = _ov_wpt
         return _grouped_a8w4_tdm_moe(
             hidden_states,
             w1,
