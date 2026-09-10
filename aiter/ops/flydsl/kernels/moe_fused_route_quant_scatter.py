@@ -268,30 +268,14 @@ def _emit_quant_block_loop(c: SimpleNamespace) -> None:
     # i64 row base: at >64k tokens a grouped row index times model_dim exceeds the
     # 32-bit buffer voffset (contiguous_m * feat_dim > 2**32), corrupting the store.
     payload_bytes_per_row = c.payload_bytes_per_row
-    a_preshuffle = bool(getattr(c, "a_preshuffle", False))
     dst_payload = []
-    dst_payload_row_in_tile = []
     for dst in c.dests:
-        if a_preshuffle:
-            row_u32 = fx.Uint32(dst.payload_row_i32)
-            row_tile = row_u32 // arith.constant(16, type=i32)
-            row_in_tile = row_u32 - row_tile * arith.constant(16, type=i32)
-            row_addr = (
-                c.payload_base
-                + fx.Uint64(row_tile) * (payload_bytes_per_row * 16)
-            )
-            dst_payload_row_in_tile.append(row_in_tile)
-            records = payload_bytes_per_row * 16
-        else:
-            row_addr = (
-                c.payload_base
-                + fx.Uint64(dst.payload_row_i32) * payload_bytes_per_row
-            )
-            dst_payload_row_in_tile.append(None)
-            records = payload_bytes_per_row
+        row_addr = (
+            c.payload_base + fx.Uint64(dst.payload_row_i32) * payload_bytes_per_row
+        )
         dst_payload.append(
             buffer_ops.create_buffer_resource_from_addr(
-                row_addr, num_records_bytes=records
+                row_addr, num_records_bytes=payload_bytes_per_row
             )
         )
 
@@ -455,19 +439,10 @@ def _emit_quant_block_loop(c: SimpleNamespace) -> None:
             e8m0_byte = arith.trunci(T.i8, e8m0_scale)
             for di, dst in enumerate(c.dests):
                 payload_rsrc = dst_payload[di]
-                if a_preshuffle:
-                    # shuffle_weight_f4 layout:
-                    # [row//16, packed_k//16, row%16, packed_k%16].
-                    payload_byte_off = (
-                        mx_block * arith.constant(16 * 16, type=i32)
-                        + dst_payload_row_in_tile[di] * arith.constant(16, type=i32)
-                        + c.lane_in_block * c.c_payload_bytes_per_lane
-                    )
-                else:
-                    payload_byte_off = (
-                        mx_block * c.c_payload_bytes_per_block
-                        + c.lane_in_block * c.c_payload_bytes_per_lane
-                    )
+                payload_byte_off = (
+                    mx_block * c.c_payload_bytes_per_block
+                    + c.lane_in_block * c.c_payload_bytes_per_lane
+                )
                 buffer_ops.buffer_store(
                     payload_val, payload_rsrc, payload_byte_off, offset_is_bytes=True
                 )
@@ -475,13 +450,8 @@ def _emit_quant_block_loop(c: SimpleNamespace) -> None:
                 # one e8m0 byte per block, written by the block's lead lane.
                 _if_lead = scf.IfOp(_raw(c.is_block_lead))
                 with ir.InsertionPoint(_if_lead.then_block):
-                    scale_row_stride = (
-                        arith.constant(32, type=i32)
-                        if a_preshuffle
-                        else c.c_wmma_rep * 16
-                    )
                     dst_scale_dword = (
-                        dst.scale_row_dword_base + scale_dword * scale_row_stride
+                        dst.scale_row_dword_base + scale_dword * c.c_wmma_rep * 16
                     )
                     dst_scale_byte = dst_scale_dword * c.c4_i32 + byte_in_dword
                     buffer_ops.buffer_store(e8m0_byte, c.scale_rsrc, dst_scale_byte)
@@ -1065,7 +1035,6 @@ def build_moe_fused_quant_preshuffle_module(
     wmma_rep: int,
     quant_mode: str = "fp4",
     skip_padding: bool = False,
-    a_preshuffle: bool = False,
 ):
     """Return a JIT launcher for the fused (grouped) quant + scale-preshuffle kernel.
 
@@ -1103,8 +1072,6 @@ def build_moe_fused_quant_preshuffle_module(
       n_rows          : E*max_m  (padding rows skipped iff skip_padding)
       max_m           : per-expert row capacity (for expert = row // max_m)
     """
-    if a_preshuffle and quant_mode != "fp4":
-        raise NotImplementedError("A preshuffle is supported only for fp4 payloads")
     L = _quant_layout(feat_dim, quant_mode, wmma_rep)
     # Unpack into locals so the @kernel closure captures the quant_mode-derived
     # scalars (is_fp8, payload geometry, ...). The JIT disk cache keys on the
@@ -1137,7 +1104,6 @@ def build_moe_fused_quant_preshuffle_module(
     module_name = (
         f"moe_fused_quant_preshuffle_fd{feat_dim}_r{wmma_rep}"
         f"_{quant_mode}_{L.native_tag}_{skip_tag}"
-        f"{'_apre' if a_preshuffle else ''}"
     )
 
     @flyc.kernel(name=module_name, known_block_size=[BLOCK_THREADS, 1, 1])
@@ -1189,25 +1155,16 @@ def build_moe_fused_quant_preshuffle_module(
 
             def _emit_row():
                 # --- per-row scale-preshuffle geometry (uniform; row pos == slot) ---
-                if const_expr(a_preshuffle):
-                    scale_tile = fx.Uint32(slot) // fx.Uint32(32)
-                    row_in_tile = slot - scale_tile * fx.Uint32(32)
-                    scale_row_dword_base = (
-                        expert * (m * c_scale_dwords_per_row)
-                        + scale_tile * c_scale_dwords_per_row * fx.Uint32(32)
-                        + row_in_tile
-                    )
-                else:
-                    scale_tile = fx.Uint32(slot) // fx.Uint32(c_rows_per_tile)
-                    row_in_tile = slot - scale_tile * c_rows_per_tile
-                    wmma_row = fx.Uint32(row_in_tile) // fx.Uint32(c16_i32)
-                    row_lane16 = row_in_tile - wmma_row * c16_i32
-                    scale_row_dword_base = (
-                        expert * (m * c_scale_dwords_per_row)
-                        + scale_tile * c_dst_scale_dwords_per_row * c16_i32
-                        + wmma_row * c16_i32
-                        + row_lane16
-                    )
+                scale_tile = fx.Uint32(slot) // fx.Uint32(c_rows_per_tile)
+                row_in_tile = slot - scale_tile * c_rows_per_tile
+                wmma_row = fx.Uint32(row_in_tile) // fx.Uint32(c16_i32)
+                row_lane16 = row_in_tile - wmma_row * c16_i32
+                scale_row_dword_base = (
+                    expert * (m * c_scale_dwords_per_row)
+                    + scale_tile * c_dst_scale_dwords_per_row * c16_i32
+                    + wmma_row * c16_i32
+                    + row_lane16
+                )
 
                 payload_base = fx.Int64(ptrtoint(grouped_payload))
                 hidden_base = fx.Int64(ptrtoint(grouped_in))
@@ -1239,7 +1196,6 @@ def build_moe_fused_quant_preshuffle_module(
                     c_payload_bytes_per_block=c_payload_bytes_per_block,
                     c_payload_bytes_per_lane=c_payload_bytes_per_lane,
                     c_wmma_rep=c_wmma_rep,
-                    a_preshuffle=a_preshuffle,
                     block_in_wave=block_in_wave,
                     lane_in_block=lane_in_block,
                     is_block_lead=is_block_lead,
@@ -1314,7 +1270,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
     source_topk: int = 0,
     remap_rows: bool = False,
     ksplit: bool = True,
-    a_preshuffle: bool = False,
 ):
     """Route-indexed grouped quant+preshuffle.
 
@@ -1326,8 +1281,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
     When ``ksplit=False`` (large token counts where grid.x already saturates),
     ``grid.y = 1`` and each warp loops over all K-groups internally.
     """
-    if a_preshuffle and quant_mode != "fp4":
-        raise NotImplementedError("A preshuffle is supported only for fp4 payloads")
     L = _quant_layout(feat_dim, quant_mode, wmma_rep)
     if not L.use_pk8:
         raise NotImplementedError(
@@ -1348,7 +1301,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
     mx_blocks_per_wave_iter = L.mx_blocks_per_wave_iter
     mx_blocks_per_row = L.mx_blocks_per_row
     rows_per_tile = L.rows_per_tile
-    scale_dwords_per_row = L.scale_dwords_per_row
     dst_scale_dwords_per_row = L.dst_scale_dwords_per_row
     block_iters = L.block_iters
     amax_shuffle_dists = L.amax_shuffle_dists
@@ -1362,7 +1314,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
     module_name = (
         f"moe_fused_quant_preshuffle_routeks_fd{feat_dim}_r{wmma_rep}"
         f"_{quant_mode}_{L.native_tag}_{source_tag}{remap_tag}{ksplit_tag}"
-        f"{'_apre' if a_preshuffle else ''}"
     )
 
     @flyc.kernel(name=module_name, known_block_size=[BLOCK_THREADS, 1, 1])
@@ -1393,7 +1344,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
         _c_payload_bytes_per_row = arith.constant(payload_bytes_per_row, type=i32)
         c_payload_bytes_per_block = arith.constant(payload_bytes_per_block, type=i32)
         c_payload_bytes_per_lane = arith.constant(payload_bytes_per_lane, type=i32)
-        c_scale_dwords_per_row = arith.constant(scale_dwords_per_row, type=i32)
         c_dst_scale_dwords_per_row = arith.constant(dst_scale_dwords_per_row, type=i32)
         c_wmma_rep = arith.constant(wmma_rep, type=i32)
         c_rows_per_tile = arith.constant(rows_per_tile, type=i32)
@@ -1451,23 +1401,15 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
                 if store_cond:
                     buffer_ops.buffer_store(row, rows_rsrc, route)
 
-            if const_expr(a_preshuffle):
-                scale_tile = fx.Uint32(row) // fx.Uint32(32)
-                row_in_tile = row - scale_tile * fx.Uint32(32)
-                scale_row_dword_base = (
-                    scale_tile * c_scale_dwords_per_row * fx.Uint32(32)
-                    + row_in_tile
-                )
-            else:
-                scale_tile = fx.Uint32(row) // fx.Uint32(c_rows_per_tile)
-                row_in_tile = row - scale_tile * c_rows_per_tile
-                wmma_row = fx.Uint32(row_in_tile) // fx.Uint32(c16_i32)
-                row_lane16 = row_in_tile - wmma_row * c16_i32
-                scale_row_dword_base = (
-                    scale_tile * c_dst_scale_dwords_per_row * c16_i32
-                    + wmma_row * c16_i32
-                    + row_lane16
-                )
+            scale_tile = fx.Uint32(row) // fx.Uint32(c_rows_per_tile)
+            row_in_tile = row - scale_tile * c_rows_per_tile
+            wmma_row = fx.Uint32(row_in_tile) // fx.Uint32(c16_i32)
+            row_lane16 = row_in_tile - wmma_row * c16_i32
+            scale_row_dword_base = (
+                scale_tile * c_dst_scale_dwords_per_row * c16_i32
+                + wmma_row * c16_i32
+                + row_lane16
+            )
 
             if const_expr(source_topk > 0):
                 if const_expr(source_topk_is_pow2):
@@ -1513,7 +1455,6 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
                 c_payload_bytes_per_block=c_payload_bytes_per_block,
                 c_payload_bytes_per_lane=c_payload_bytes_per_lane,
                 c_wmma_rep=c_wmma_rep,
-                a_preshuffle=a_preshuffle,
                 block_in_wave=block_in_wave,
                 lane_in_block=lane_in_block,
                 is_block_lead=is_block_lead,

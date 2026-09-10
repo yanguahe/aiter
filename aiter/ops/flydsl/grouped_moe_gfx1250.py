@@ -592,29 +592,6 @@ def _grouped_a8w4_tdm_moe(
             (512, 2, 1),
         )
     )
-    _a_preshuffle_env = os.environ.get("AITER_FLYDSL_GEMM1_A_PRESHUFFLE")
-    _gemm1_a_preshuffle = _is_fp4 and (
-        os.environ.get("AITER_MOE_GEMM1_LAUNCH_BACKEND", "").strip().lower() == "cpp"
-        or (
-            _target_fp4_prefill
-            if _a_preshuffle_env is None
-            else _a_preshuffle_env in _TRUTHY_ENV
-        )
-    )
-    _balanced_rows_per_expert = 0
-    if (
-        _target_fp4_prefill
-        and not _is_ep
-        and os.environ.get("AITER_MOE_EXPERT_BALANCE", "False").lower() == "true"
-        and (token_num * topk) % E == 0
-    ):
-        _rows_per_expert = (token_num * topk) // E
-        if _rows_per_expert % tile_m == 0:
-            _balanced_rows_per_expert = _rows_per_expert
-    _gemm1_launch_m = (
-        E * _balanced_rows_per_expert if _balanced_rows_per_expert > 0 else contiguous_m
-    )
-
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
         hidden_states.reshape(1, token_num, model_dim),
         1,
@@ -625,7 +602,6 @@ def _grouped_a8w4_tdm_moe(
         topids_to_rows=topids_to_rows,
         source_topk=topk,
         num_valid_routes=_ep_nvr,
-        a_preshuffle=_gemm1_a_preshuffle,
     )
 
     # Fuse gemm1 silu/swiglu + fp8 quantization + scale preshuffle into the
@@ -659,7 +635,7 @@ def _grouped_a8w4_tdm_moe(
             w1s_i32,
             psum,
             n_experts=E,
-            contiguous_m=_gemm1_launch_m,
+            contiguous_m=contiguous_m,
             N=two_inter,
             K=model_dim,
             tile_m=tile_m,
@@ -679,8 +655,6 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
-            a_preshuffle=_gemm1_a_preshuffle,
-            balanced_rows_per_expert=_balanced_rows_per_expert,
             **_situ_kw,
         )
     else:
@@ -694,7 +668,7 @@ def _grouped_a8w4_tdm_moe(
             w1s_i32,
             psum,
             n_experts=E,
-            contiguous_m=_gemm1_launch_m,
+            contiguous_m=contiguous_m,
             N=two_inter,
             K=model_dim,
             tile_m=tile_m,
@@ -711,8 +685,6 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
-            a_preshuffle=_gemm1_a_preshuffle,
-            balanced_rows_per_expert=_balanced_rows_per_expert,
             **_situ_kw,
         )
         if os.environ.get("AITER_FLYDSL_GEMM1_DEBUG_OUTPUT", "0") == "1":

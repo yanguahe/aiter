@@ -98,20 +98,6 @@ def _select_binary_int(name: str, default: int) -> int:
     return int(value)
 
 
-def _select_skip_cluster_sync(default: int) -> int:
-    try:
-        value = int(
-            os.environ.get("AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC", str(default))
-        )
-    except ValueError as exc:
-        raise ValueError(
-            "AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC must be 0, 1, or 2"
-        ) from exc
-    if value not in (0, 1, 2):
-        raise ValueError("AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC must be 0, 1, or 2")
-    return value
-
-
 def _select_positive_int(name: str, default: int) -> int:
     try:
         value = int(os.environ.get(name, str(default)))
@@ -139,20 +125,6 @@ def _select_wmma_reuse(default: int = 0) -> int:
         raise ValueError("AITER_FLYDSL_GEMM1_WMMA_REUSE must be 0, 1, 2, or 3") from exc
     if value not in (0, 1, 2, 3):
         raise ValueError("AITER_FLYDSL_GEMM1_WMMA_REUSE must be 0, 1, 2, or 3")
-    return value
-
-
-def _select_static_swizzle(default: int = 0) -> int:
-    try:
-        value = int(
-            os.environ.get("AITER_FLYDSL_GEMM1_STATIC_SWIZZLE", str(default))
-        )
-    except ValueError as exc:
-        raise ValueError(
-            "AITER_FLYDSL_GEMM1_STATIC_SWIZZLE must be 0, 1, or 2"
-        ) from exc
-    if value not in (0, 1, 2):
-        raise ValueError("AITER_FLYDSL_GEMM1_STATIC_SWIZZLE must be 0, 1, or 2")
     return value
 
 
@@ -188,8 +160,6 @@ def flydsl_grouped_gemm_a8w4_masked(
     next_stage_prefetch=0,
     situ_beta=1.0,
     situ_linear_beta=1.0,
-    a_preshuffle=0,
-    balanced_rows_per_expert=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
@@ -279,11 +249,8 @@ def flydsl_grouped_gemm_a8w4_masked(
         float(situ_beta),
         float(situ_linear_beta),
         _select_epilogue_batch_wn(8 if target_fp4_prefill else 1),
-        int(bool(a_preshuffle)),
         _select_schedule_hints(1 if target_fp4_prefill else 0),
         _select_relax_cluster_wrap_dscnt(1 if target_fp4_prefill else 0),
-        int(balanced_rows_per_expert),
-        _select_skip_cluster_sync(0) if stage1_act == 1 else 0,
         _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4),
         _select_positive_int("AITER_FLYDSL_GEMM1_FENCE_COVER_MMA", 8),
         _select_tristate("AITER_FLYDSL_GEMM1_DISABLE_XDL_ARB_STALL"),
@@ -298,15 +265,5 @@ def flydsl_grouped_gemm_a8w4_masked(
         else 0,
         _select_wmma_reuse(),
         _select_binary_int("AITER_FLYDSL_GEMM1_DELAY_ACC_ZERO", 0),
-        N
-        if target_fp4_prefill
-        and balanced_rows_per_expert > 0
-        and _select_binary_int("AITER_FLYDSL_GEMM1_STATIC_GEOMETRY", 0)
-        else 0,
-        _select_static_swizzle()
-        if target_fp4_prefill
-        and balanced_rows_per_expert > 0
-        and _select_binary_int("AITER_FLYDSL_GEMM1_STATIC_GEOMETRY", 0)
-        else 0,
     )
     return out

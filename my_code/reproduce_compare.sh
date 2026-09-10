@@ -90,16 +90,15 @@ declare -a TEST_SHAPE=(
 
 declare -a CASES=(
     baseline
-    nocs_mg4_fc8
-    nocs_mg2_fc12
-    nocs_mg4_fc28
-    static_swz1
-    static_swz1_hard
-    static_swz1_relu
+    sync_mg4_fc8
+    sync_mg2_fc12
+    sync_mg4_fc28
+    sync_mg4_fc28_hard
+    sync_mg4_fc28_relu
 )
 
 # Optional comma-separated subset, preserving the caller's requested order.
-# Example: CASE_LIST=baseline,nocs_mg4_fc28,static_swz1,static_swz1_hard
+# Example: CASE_LIST=baseline,sync_mg4_fc28,sync_mg4_fc28_hard
 if [[ -n "${CASE_LIST:-}" ]]; then
     IFS=',' read -r -a CASES <<<"${CASE_LIST}"
 fi
@@ -109,73 +108,48 @@ case_env() {
     case "$1" in
         baseline)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=0
                 AITER_FLYDSL_GEMM1_MMA_GROUP=4
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=8
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=0
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
             )
             ;;
-        nocs_mg4_fc8)
+        sync_mg4_fc8)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
                 AITER_FLYDSL_GEMM1_MMA_GROUP=4
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=8
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=0
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
             )
             ;;
-        nocs_mg2_fc12)
+        sync_mg2_fc12)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
                 AITER_FLYDSL_GEMM1_MMA_GROUP=2
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=12
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=0
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
             )
             ;;
-        nocs_mg4_fc28)
+        sync_mg4_fc28)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
                 AITER_FLYDSL_GEMM1_MMA_GROUP=4
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=0
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
             )
             ;;
-        static_swz1)
+        sync_mg4_fc28_hard)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
                 AITER_FLYDSL_GEMM1_MMA_GROUP=4
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=1
-                AITER_FLYDSL_GEMM1_STATIC_SWIZZLE=1
-                AITER_FLYDSL_GEMM1_SILU_HARD=0
-                AITER_FLYDSL_GEMM1_SILU_RELU=0
-            )
-            ;;
-        static_swz1_hard)
-            CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
-                AITER_FLYDSL_GEMM1_MMA_GROUP=4
-                AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=1
-                AITER_FLYDSL_GEMM1_STATIC_SWIZZLE=1
                 AITER_FLYDSL_GEMM1_SILU_HARD=1
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
             )
             ;;
-        static_swz1_relu)
+        sync_mg4_fc28_relu)
             CASE_ENV=(
-                AITER_FLYDSL_GEMM1_SKIP_CLUSTER_SYNC=1
                 AITER_FLYDSL_GEMM1_MMA_GROUP=4
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
-                AITER_FLYDSL_GEMM1_STATIC_GEOMETRY=1
-                AITER_FLYDSL_GEMM1_STATIC_SWIZZLE=1
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=1
             )
@@ -191,16 +165,15 @@ case_kernel() {
     local suffix=""
     case "$1" in
         baseline) ;;
-        nocs_mg4_fc8) suffix="_nocs" ;;
-        nocs_mg2_fc12) suffix="_nocs_mg2_fc12" ;;
-        nocs_mg4_fc28) suffix="_nocs_mg4_fc28" ;;
-        static_swz1) suffix="_nocs_mg4_fc28_sgN6144_swz1" ;;
-        static_swz1_hard) suffix="_nocs_mg4_fc28_silu_hard_sgN6144_swz1" ;;
-        static_swz1_relu) suffix="_nocs_mg4_fc28_silu_relu_sgN6144_swz1" ;;
+        sync_mg4_fc8) ;;
+        sync_mg2_fc12) suffix="_mg2_fc12" ;;
+        sync_mg4_fc28) suffix="_mg4_fc28" ;;
+        sync_mg4_fc28_hard) suffix="_mg4_fc28_silu_hard" ;;
+        sync_mg4_fc28_relu) suffix="_mg4_fc28_silu_relu" ;;
         *) return 2 ;;
     esac
     printf '%s%s\n' \
-        'a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1_eb8_apre_sh_rcw_bal1024' \
+        'a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1_eb8_sh_rcw' \
         "${suffix}"
 }
 
