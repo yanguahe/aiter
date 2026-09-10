@@ -167,6 +167,7 @@ def flydsl_grouped_gemm_a8w4_masked(
     next_stage_prefetch=0,
     situ_beta=1.0,
     situ_linear_beta=1.0,
+    a_preshuffle=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     # Keep the historical kernel available in the current tree so performance
@@ -299,6 +300,7 @@ def flydsl_grouped_gemm_a8w4_masked(
         float(situ_beta),
         float(situ_linear_beta),
         _select_epilogue_batch_wn(8 if target_fp4_prefill else 1),
+        int(bool(a_preshuffle)),
         _select_schedule_hints(1 if target_fp4_prefill else 0),
         _select_relax_cluster_wrap_dscnt(1 if target_fp4_prefill else 0),
         _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4),

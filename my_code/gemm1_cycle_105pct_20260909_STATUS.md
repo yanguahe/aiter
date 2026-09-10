@@ -1,13 +1,18 @@
 # gfx1250 MoE GEMM1 cycle optimization
 
-## Current direction: baseline routeks layout
+## Current direction: baseline routeks layout by default
 
 The active implementation now keeps the baseline
 `moe_fused_quant_preshuffle_routeks_fd7168_r8_fp4_pk8_srctk6_noKS`
-producer from commit `93665e8417afe1f07cb9bbe1c4902c38da8e3fa3`.  The A-preshuffled
-`_apre` producer/consumer path has been removed.  The balanced-row shortcut,
-cluster-sync skipping, static geometry, and static swizzle have also been
-removed so the GEMM1 kernel always supports non-balanced routing.
+producer from commit `93665e8417afe1f07cb9bbe1c4902c38da8e3fa3` by default.  The
+A-preshuffled `_apre` producer/consumer path is available as an opt-in
+experiment through `AITER_FLYDSL_GEMM1_A_PRESHUFFLE=1`; the default remains
+off to preserve the existing production selection.  Its optimized producer
+quantizes each source token once, builds a grouped-row-to-token map, and uses
+an LDS transpose to emit coalesced A/ScaleA preshuffle stores.
+The balanced-row shortcut, cluster-sync skipping, static geometry, and static
+swizzle remain removed, so GEMM1 still uses dynamic `m_tile_map` lookup and
+supports non-balanced routing.
 
 The exact GEMM1 implementation from that commit is retained in-tree as
 `mxfp4_preshuffle_gfx1250_tdm_93665e.py`.  The baseline case uses the
@@ -16,9 +21,9 @@ Python process.
 This allows baseline and current kernels to be benchmarked without changing
 Git state or relying on a baseline-selection environment variable.
 
-Timing results below that contain an `_apre`, `nocs`, or static-swizzle
-kernel are historical and must be rerun before drawing final end-to-end
-conclusions for the baseline-routeks, dynamic-routing path.
+Older timing results in the historical sections that contain an `_apre`,
+`nocs`, or static-swizzle kernel must not be mixed with the current
+baseline-routeks, dynamic-routing measurements.
 
 Target workload:
 
@@ -55,14 +60,128 @@ random input and benchmarks them with the exact target shape and `--const-init 0
 2. `sync_mg4_fc8`: renamed current-branch baseline, synchronized `mg4/fc8`.
 3. `sync_mg2_fc12`: synchronized `mg2/fc12` schedule candidate.
 4. `sync_mg4_fc28`: synchronized `mg4/fc28` schedule candidate.
-5. `sync_mg4_fc28_hard`: synchronized `mg4/fc28` with hard SiLU.
-6. `sync_mg4_fc28_relu`: synchronized `mg4/fc28` with ReLU gate.
+5. `sync_mg4_fc28_apre`: `sync_mg4_fc28` plus GEMM1 A preshuffle and the
+   matching A/ScaleA LDS layout, TDM descriptors, and LDS load mapping.
+6. `sync_mg4_fc28_hard`: synchronized `mg4/fc28` with hard SiLU.
+7. `sync_mg4_fc28_relu`: synchronized `mg4/fc28` with ReLU gate.
 
 Odd rounds run baseline-to-current; even rounds reverse the order.  The final
 summary reports every sample, median/min/max, and improvement relative to the
 same-run baseline.  Set `RUN_ATT=1` when paired cycle captures are required.
 
-### Latest baseline-compatible result
+### Optimized A-preshuffle producer result on d01-3
+
+#### Functional-equivalence conclusion
+
+The first three-kernel prototype used:
+
+```text
+moe_invert_route_rows_tk6
+dynamic_per_group_scaled_quant_kernel
+moe_scatter_preshuffled_a_fd7168_r32_lds
+```
+
+It was byte-identical to the original direct `_apre` producer on the tested
+inputs.  However, `dynamic_per_group_scaled_quant_kernel` is a separate HIP/C++
+quantization implementation, so this prototype alone was not enough to claim
+universal bit equivalence for special floating-point inputs.
+
+The final implementation therefore uses:
+
+```text
+moe_quant_token_fd7168_fp4_pk8
+moe_invert_route_rows_tk6
+moe_scatter_preshuffled_a_fd7168_r32_lds
+```
+
+`moe_quant_token_fd7168_fp4_pk8` reuses exactly the same
+`emit_mx_e8m0_scale`, `_ROUND_MODE`,
+`v_cvt_scalef32_pk8_fp4_bf16`, four-lane MX32 reduction, and pack mapping as
+the original routeks producer.  The inverse-map kernel only changes the
+direction of the existing bijective route map, and the LDS scatter kernel only
+copies and permutes those bytes into the requested A/ScaleA layouts.  Therefore
+the valid routed rows are a byte-exact transformation, not a numerical
+approximation.
+
+The two-round run on `heliosr-1b114-d01-3` completed at
+`20260910T153812Z`:
+
+| case | GEMM1 samples (us) | GEMM1 median us | GEMM1 vs 93665e | MOE e2e samples (us) | MOE e2e median us | MOE e2e vs 93665e | random pass | hash |
+|---|---|---:|---:|---|---:|---:|:---:|---|
+| baseline_93665e | 696.024, 697.422 | 696.723 | +0.00% | 1673.15, 1671.24 | 1672.20 | +0.00% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg4_fc28 | 609.458, 614.717 | 612.087 | +12.15% | 1588.37, 1593.85 | 1591.11 | +4.85% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg4_fc28_apre | 560.762, 566.543 | 563.652 | +19.10% | 1444.34, 1451.25 | 1447.80 | +13.42% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+
+The optimized GEMM1-input producer has the following two-round profile:
+
+| component | samples (us) | median (us) |
+|---|---|---:|
+| FlyDSL token FP4 quant | 26.1, 26.6 | 26.35 |
+| grouped-row inverse map | 5.5, 5.5 | 5.50 |
+| LDS-transpose A/ScaleA preshuffle scatter | 75.1, 75.5 | 75.30 |
+| explicit producer total | 106.7, 107.6 | 107.15 |
+
+The previous direct `_apre` route-scatter producer measured about `450.5 us`.
+The replacement reduces explicit producer GPU time by `76.22%` (`4.20x`) and
+is below the `192 us` target.  Compared directly with `sync_mg4_fc28`, the new
+candidate improves GEMM1 by `7.91%` and MOE end-to-end by `9.01%`.
+
+Functional equivalence was checked at the producer outputs, not only at the
+final MoE output.  The token quant kernel reuses the original routeks
+producer's `emit_mx_e8m0_scale` and
+`v_cvt_scalef32_pk8_fp4_bf16` path. Against the original direct `_apre`
+producer:
+
+```text
+balanced_target:  payload_bad=0 scale_bad=0
+unbalanced_random: payload_bad=0 scale_bad=0
+```
+
+The expanded byte-equivalence sweep also passed for `K=512` (fallback),
+`1024`, `2048`, `3072`, `4096`, `7168`, and `8192`, with `topk=2/4/6/8`,
+balanced and random routing, and finite BF16 edge values including signed zero
+and FP4 rounding boundaries.  The fast three-kernel path is selected only when
+its geometry is valid (`K % 1024 == 0`, grouped rows divisible by 32, non-EP
+stage1 with `topk > 1`, and all temporary/output byte offsets below 2 GiB);
+other shapes retain the original producer.
+
+Padding rows are intentionally unwritten by both implementations and are never
+consumed by GEMM.  The byte-comparison tests zero-initialized both output
+buffers, so the full buffers, including padding, could also be compared.
+
+#### Why three kernels are faster than the original fused producer
+
+The original `_apre` producer assigns one wave to every route.  For the target
+shape there are `16,384` tokens, `topk=6`, and therefore `98,304` routes.  The
+same activation row is consequently loaded and quantized six times.  Its
+preshuffled payload stores are also poorly coalesced: a wave writes eight
+16-byte segments separated by 256 bytes.
+
+The replacement changes the work decomposition without changing the result:
+
+1. `moe_quant_token_*` quantizes each of the `16,384` source tokens once.  This
+   reduces quantization work and logical BF16 input reads to one sixth of the
+   route-per-wave implementation.
+2. `moe_invert_route_rows_tk6` converts the existing
+   `route -> grouped_row` mapping into `grouped_row -> token`.  It uses the
+   dynamic route result and makes no balanced-routing assumption.
+3. `moe_scatter_preshuffled_a_*_lds` assigns one workgroup to 32 adjacent
+   grouped rows.  It reads each compact token payload as contiguous 128-byte
+   chunks, stages a 32-row tile through LDS with a 33-dword pitch, then emits
+   two contiguous 256-byte A segments per wave.  ScaleA is emitted as a
+   contiguous 128-byte row-tile store.
+
+The two additional launches cost only a few microseconds.  Eliminating sixfold
+quantization and replacing scattered global stores with LDS-transposed,
+coalesced stores saves substantially more time.
+
+Artifacts:
+
+```text
+my_code/gemm1_cycle_105pct_20260909/runs/heliosr-1b114-d01-3_20260910T153812Z
+```
+
+### Previous baseline-compatible result
 
 The two-round run on `heliosr-1b114-a07-3` completed at
 `20260910T122422Z`:

@@ -2907,6 +2907,7 @@ def _get_compiled_fused_quant_preshuffle(
     wmma_rep: int,
     quant_mode: str = "fp4",
     skip_padding: bool = False,
+    a_preshuffle: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_fused_quant_preshuffle_module,
@@ -2917,10 +2918,38 @@ def _get_compiled_fused_quant_preshuffle(
         wmma_rep=wmma_rep,
         quant_mode=quant_mode,
         skip_padding=skip_padding,
+        a_preshuffle=a_preshuffle,
     )
 
 
 _ROUTEKS_KSPLIT_GRID_THRESHOLD = 512
+
+
+@functools.cache
+def _get_compiled_quant_token_fp4(feat_dim: int):
+    from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
+        build_moe_quant_token_fp4_module,
+    )
+
+    return build_moe_quant_token_fp4_module(feat_dim=feat_dim)
+
+
+@functools.cache
+def _get_compiled_invert_route_rows(source_topk: int = 0):
+    from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
+        build_moe_invert_route_rows_module,
+    )
+
+    return build_moe_invert_route_rows_module(source_topk=source_topk)
+
+
+@functools.cache
+def _get_compiled_scatter_preshuffled_a_lds(feat_dim: int):
+    from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
+        build_moe_scatter_preshuffled_a_lds_module,
+    )
+
+    return build_moe_scatter_preshuffled_a_lds_module(feat_dim=feat_dim)
 
 
 @functools.cache
@@ -2931,6 +2960,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
     source_topk: int = 0,
     remap_rows: bool = False,
     ksplit: bool = True,
+    a_preshuffle: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_fused_quant_preshuffle_route_ksplit_module,
@@ -2943,6 +2973,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
         source_topk=source_topk,
         remap_rows=remap_rows,
         ksplit=ksplit,
+        a_preshuffle=a_preshuffle,
     )
 
 
@@ -2963,6 +2994,7 @@ def flydsl_moe_fused_quant_preshuffle(
     num_valid_routes: (
         torch.Tensor | None
     ) = None,  # (1,) int32; route-branch only: skip routes >= this (EP dead-tail)
+    a_preshuffle: bool = False,
 ):
     """Fused grouped quant + e8m0 scale-preshuffle in one kernel pass.
 
@@ -3022,15 +3054,7 @@ def flydsl_moe_fused_quant_preshuffle(
         else:
             row_starts_i32 = masked_m
             route_max_m_arg = 1
-        use_ksplit = grid_blocks < _ROUTEKS_KSPLIT_GRID_THRESHOLD
-        launch = _get_compiled_fused_quant_preshuffle_route_ksplit(
-            feat_dim=feat_dim,
-            wmma_rep=wmma_rep,
-            quant_mode=quant_mode,
-            source_topk=source_topk,
-            remap_rows=remap_rows,
-            ksplit=use_ksplit,
-        )
+
         # Dead-tail skip (EP dynamic token count): routes >= num_valid_routes are
         # padding rows of the dispatch buffer and are not gathered/quantized. When
         # not provided, pass a null pointer (0-element tensor -> data_ptr() == 0).
@@ -3041,6 +3065,78 @@ def flydsl_moe_fused_quant_preshuffle(
             num_valid_routes_i32 = (
                 num_valid_routes.reshape(-1)[:1].to(device=device, dtype=torch.int32)
             ).contiguous()
+
+        # Stage1 A-preshuffle fast path. Quantize each source token once, invert
+        # route->row to row->token, then transpose 32 grouped rows through LDS so
+        # both payload and ScaleA reach global memory with coalesced stores.
+        if (
+            a_preshuffle
+            and quant_mode == "fp4"
+            and source_topk > 1
+            and not remap_rows
+            and num_valid_routes is None
+            and feat_dim % 1024 == 0
+            and n_rows % 32 == 0
+            and (numel // source_topk) * Pb < 0x80000000
+            and (numel // source_topk) * Ws < 0x80000000
+            and n_rows * Pb < 0x80000000
+            and n_rows * Ws < 0x80000000
+        ):
+            if numel % source_topk:
+                raise ValueError(
+                    f"route count {numel} must be divisible by source_topk "
+                    f"{source_topk}"
+                )
+            token_rows = numel // source_topk
+            token_input = grouped_in.contiguous().view(-1, feat_dim)[:token_rows]
+            token_payload = torch.empty(
+                (token_rows, Pb), dtype=torch.uint8, device=device
+            )
+            token_scale = torch.empty(
+                (token_rows, Ws), dtype=torch.uint8, device=device
+            )
+            token_grid = (token_rows + warps_per_block - 1) // warps_per_block
+            _get_compiled_quant_token_fp4(feat_dim)(
+                ptr_arg(token_input.view(-1)),
+                ptr_arg(token_payload.view(-1)),
+                ptr_arg(token_scale.view(-1)),
+                token_rows,
+                token_grid,
+                stream=torch.cuda.current_stream(),
+            )
+            rows_to_tokens = torch.full(
+                (n_rows,), -1, dtype=torch.int32, device=device
+            )
+            invert_grid = (numel + 255) // 256
+            _get_compiled_invert_route_rows(source_topk)(
+                ptr_arg(topids_to_rows_i32),
+                ptr_arg(rows_to_tokens),
+                numel,
+                ptr_arg(num_valid_routes_i32),
+                invert_grid,
+                stream=torch.cuda.current_stream(),
+            )
+            scatter_grid = (n_rows + 31) // 32
+            _get_compiled_scatter_preshuffled_a_lds(feat_dim)(
+                ptr_arg(token_payload.view(torch.uint8)),
+                ptr_arg(token_scale.view(torch.uint8)),
+                ptr_arg(out_payload.view(-1)),
+                ptr_arg(out_scale.view(-1)),
+                ptr_arg(rows_to_tokens),
+                scatter_grid,
+                stream=torch.cuda.current_stream(),
+            )
+            return out_payload, out_scale
+        use_ksplit = grid_blocks < _ROUTEKS_KSPLIT_GRID_THRESHOLD
+        launch = _get_compiled_fused_quant_preshuffle_route_ksplit(
+            feat_dim=feat_dim,
+            wmma_rep=wmma_rep,
+            quant_mode=quant_mode,
+            source_topk=source_topk,
+            remap_rows=remap_rows,
+            ksplit=use_ksplit,
+            a_preshuffle=a_preshuffle,
+        )
         launch(
             ptr_arg(grouped_in.contiguous().view(-1)),
             ptr_arg(out_payload.view(-1)),
@@ -3062,6 +3158,7 @@ def flydsl_moe_fused_quant_preshuffle(
         wmma_rep=wmma_rep,
         quant_mode=quant_mode,
         skip_padding=skip_padding,
+        a_preshuffle=a_preshuffle,
     )
     launch(
         ptr_arg(grouped_in.contiguous().view(-1)),

@@ -561,6 +561,9 @@ def _grouped_a8w4_tdm_moe(
     _is_fp4 = data_format == "fp4"
     _quant_mode = "fp4" if _is_fp4 else "fp8"
     _a_is_fp4 = 1 if _is_fp4 else 0
+    _gemm1_a_preshuffle = _is_fp4 and _as_bool(
+        os.environ.get("AITER_FLYDSL_GEMM1_A_PRESHUFFLE"), False
+    )
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
         hidden_states.reshape(1, token_num, model_dim),
         1,
@@ -571,6 +574,7 @@ def _grouped_a8w4_tdm_moe(
         topids_to_rows=topids_to_rows,
         source_topk=topk,
         num_valid_routes=_ep_nvr,
+        a_preshuffle=_gemm1_a_preshuffle,
     )
 
     # Fuse gemm1 silu/swiglu + fp8 quantization + scale preshuffle into the
@@ -624,6 +628,7 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
+            a_preshuffle=_gemm1_a_preshuffle,
             **_situ_kw,
         )
     else:
@@ -654,6 +659,7 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             waves_per_tensor_tdm=waves_per_tensor_tdm,
             next_stage_prefetch=next_stage_prefetch,
+            a_preshuffle=_gemm1_a_preshuffle,
             **_situ_kw,
         )
         if os.environ.get("AITER_FLYDSL_GEMM1_DEBUG_OUTPUT", "0") == "1":

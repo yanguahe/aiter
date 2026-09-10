@@ -88,6 +88,7 @@ declare -a COMMON_ENV=(
     AITER_LOG_MORE=1
     AITER_MOE_EXPERT_BALANCE=true
     AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1
+    AITER_FLYDSL_GEMM1_A_PRESHUFFLE=0
 )
 
 declare -a TEST_SHAPE=(
@@ -107,6 +108,7 @@ declare -a CASES=(
     sync_mg4_fc8
     sync_mg2_fc12
     sync_mg4_fc28
+    sync_mg4_fc28_apre
     sync_mg4_fc28_hard
     sync_mg4_fc28_relu
 )
@@ -145,6 +147,15 @@ case_env() {
                 AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
                 AITER_FLYDSL_GEMM1_SILU_HARD=0
                 AITER_FLYDSL_GEMM1_SILU_RELU=0
+            )
+            ;;
+        sync_mg4_fc28_apre)
+            CASE_ENV=(
+                AITER_FLYDSL_GEMM1_MMA_GROUP=4
+                AITER_FLYDSL_GEMM1_FENCE_COVER_MMA=28
+                AITER_FLYDSL_GEMM1_SILU_HARD=0
+                AITER_FLYDSL_GEMM1_SILU_RELU=0
+                AITER_FLYDSL_GEMM1_A_PRESHUFFLE=1
             )
             ;;
         sync_mg4_fc28_hard)
@@ -193,6 +204,11 @@ case_kernel() {
         sync_mg4_fc8) ;;
         sync_mg2_fc12) suffix="_mg2_fc12" ;;
         sync_mg4_fc28) suffix="_mg4_fc28" ;;
+        sync_mg4_fc28_apre)
+            printf '%s\n' \
+                'a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_wpt1_eb8_apre_sh_rcw_mg4_fc28'
+            return
+            ;;
         sync_mg4_fc28_hard) suffix="_mg4_fc28_silu_hard" ;;
         sync_mg4_fc28_relu) suffix="_mg4_fc28_silu_relu" ;;
         *) return 2 ;;
