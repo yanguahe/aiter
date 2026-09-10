@@ -62,6 +62,41 @@ Odd rounds run baseline-to-current; even rounds reverse the order.  The final
 summary reports every sample, median/min/max, and improvement relative to the
 same-run baseline.  Set `RUN_ATT=1` when paired cycle captures are required.
 
+### Latest baseline-compatible result
+
+The two-round run on `heliosr-1b114-a07-3` completed at
+`20260910T122422Z`:
+
+| case | GEMM1 samples (us) | GEMM1 median us | GEMM1 vs 93665e | MOE e2e samples (us) | MOE e2e median us | MOE e2e vs 93665e | random pass | hash |
+|---|---|---:|---:|---|---:|---:|:---:|---|
+| baseline_93665e | 713.628, 705.837 | 709.733 | +0.00% | 1643.83, 1629.68 | 1636.76 | +0.00% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg4_fc8 | 642.171, 643.124 | 642.648 | +9.45% | 1574.17, 1581.34 | 1577.76 | +3.60% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg2_fc12 | 637.062, 650.056 | 643.559 | +9.32% | 1564.85, 1586.58 | 1575.71 | +3.73% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg4_fc28 | 635.348, 633.735 | 634.542 | +10.59% | 1562.77, 1566.71 | 1564.74 | +4.40% | True | `aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2` |
+| sync_mg4_fc28_hard | 600.207, 614.597 | 607.402 | +14.42% | 1527.25, 1551.06 | 1539.15 | +5.96% | True | `91f3c3c87e7e17e854bcc5c3dbb7032f0f5a039a033a205a1cba04206799b5ca` |
+| sync_mg4_fc28_relu | 586.739, 588.063 | 587.401 | +17.24% | 1516.62, 1515.64 | 1516.13 | +7.37% | True | `ca4a57024a6c0ee78991a0a2dcfd227852945fd356657fe64df596f62e98bdd4` |
+
+Current conclusions:
+
+1. `sync_mg4_fc28` is the best exact-SiLU version: GEMM1 improves by
+   `10.59%` and MOE end-to-end improves by `4.40%`, with the same output
+   hash as `baseline_93665e`.
+2. `sync_mg4_fc28_hard` improves GEMM1 by `14.42%` and MOE end-to-end by
+   `5.96%`, but uses the approximate hard-SiLU path and changes the output
+   hash.
+3. `sync_mg4_fc28_relu` is the fastest measured version: GEMM1 improves by
+   `17.24%` and MOE end-to-end by `7.37%`, with the largest activation
+   semantic change.
+4. Every version passed the random-input production accuracy gate.
+
+Artifacts:
+
+```text
+my_code/gemm1_cycle_105pct_20260909/runs/heliosr-1b114-a07-3_20260910T122422Z
+```
+
+### Historical results
+
 The first d01-3 smoke run (`ROUNDS=1`) produced:
 
 | Version | GEMM1 us | vs same-run baseline | Random verification |
