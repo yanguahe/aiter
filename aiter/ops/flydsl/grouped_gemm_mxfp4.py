@@ -303,6 +303,16 @@ def flydsl_grouped_gemm_a8w4_masked(
         int(bool(a_preshuffle)),
         _select_schedule_hints(1 if target_fp4_prefill else 0),
         _select_relax_cluster_wrap_dscnt(1 if target_fp4_prefill else 0),
+        _select_binary_int("AITER_FLYDSL_GEMM1_DIRECT_SCALES", 0)
+        if target_fp4_prefill
+        else 0,
+        _select_binary_int("AITER_FLYDSL_GEMM1_TRANSITIVE_CLUSTER_SYNC", 0)
+        if target_fp4_prefill
+        else 0,
+        _select_binary_int("AITER_FLYDSL_GEMM1_TDM_EARLY_TIMEOUT", 1),
+        _select_binary_int("AITER_FLYDSL_GEMM1_M_MAJOR_SWIZZLE", 0)
+        if target_fp4_prefill
+        else 0,
         _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4),
         _select_positive_int("AITER_FLYDSL_GEMM1_FENCE_COVER_MMA", 8),
         _select_tristate("AITER_FLYDSL_GEMM1_DISABLE_XDL_ARB_STALL"),
