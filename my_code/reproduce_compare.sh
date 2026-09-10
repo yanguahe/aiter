@@ -174,7 +174,7 @@ case_test_script() {
     case "$1" in
         baseline_93665e)
             printf '%s\n' \
-                'my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py'
+                'my_code/run_gemm1_baseline_93665e.py'
             ;;
         *)
             printf '%s\n' 'op_tests/test_flydsl_grouped_gemm_gfx1250.py'
@@ -211,16 +211,16 @@ case_kernel() {
     echo "run_verify=${RUN_VERIFY}"
     echo "run_att=${RUN_ATT}"
     echo "baseline_commit=93665e8417afe1f07cb9bbe1c4902c38da8e3fa3"
-    echo "baseline_entry=my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py"
+    echo "baseline_entry=my_code/run_gemm1_baseline_93665e.py"
     echo "execution=inside-container"
     echo "moe_e2e_metric=fused_moe end-to-end us"
-    echo "baseline_command=python3 -u my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
+    echo "baseline_command=python3 -u my_code/run_gemm1_baseline_93665e.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
     echo "current_command=python3 -u op_tests/test_flydsl_grouped_gemm_gfx1250.py --scenario bench ${TEST_SHAPE[*]} --iters 20 --const-init 0"
     echo
     echo "task source hashes:"
     sha256sum \
         my_code/reproduce_compare.sh \
-        my_code/gemm1_cycle_105pct_20260909/run_baseline_93665e.py \
+        my_code/run_gemm1_baseline_93665e.py \
         aiter/ops/flydsl/grouped_gemm_mxfp4.py \
         aiter/ops/flydsl/grouped_moe_gfx1250.py \
         aiter/ops/flydsl/moe_kernels.py \
