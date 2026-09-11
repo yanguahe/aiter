@@ -67,6 +67,24 @@ def _select_num_waves_per_tensor_tdm(csv_num_waves: int) -> int:
     return num_waves
 
 
+def _select_gemm1_num_waves_per_tensor_tdm(default: int) -> int:
+    """Select a GEMM1-only TDM wave override without changing GEMM2."""
+    value = os.environ.get("AITER_FLYDSL_GEMM1_WAVES_PER_TENSOR_TDM")
+    if value is None:
+        return default
+    try:
+        num_waves = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            "AITER_FLYDSL_GEMM1_WAVES_PER_TENSOR_TDM must be 1, 2, or 4"
+        ) from exc
+    if num_waves not in (1, 2, 4):
+        raise ValueError(
+            "AITER_FLYDSL_GEMM1_WAVES_PER_TENSOR_TDM must be 1, 2, or 4"
+        )
+    return num_waves
+
+
 def _select_epilogue_batch_wn(default: int) -> int:
     """Selects the target GEMM1 SiLU epilogue batch width."""
     try:
@@ -194,6 +212,30 @@ def flydsl_grouped_gemm_a8w4_masked(
     cluster_n = _select_cluster_n(n_tiles, cluster_n)
     waves_per_tensor_tdm = _select_num_waves_per_tensor_tdm(waves_per_tensor_tdm)
     next_stage_prefetch = _select_next_stage_prefetch(next_stage_prefetch)
+    target_gemm1_apre = all(
+        (
+            bool(a_preshuffle),
+            a_is_fp4,
+            K == 7168,
+            tile_m == 256,
+            tile_n == 256,
+            tile_k == 256,
+            m_warp == 2,
+            n_warp == 2,
+            num_buffers == 4,
+            stage1_act == 1,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+            n_experts > 0,
+        )
+    )
+    if target_gemm1_apre:
+        waves_per_tensor_tdm = _select_gemm1_num_waves_per_tensor_tdm(
+            waves_per_tensor_tdm
+        )
     if cluster_n > 1 and n_tiles % cluster_n:
         raise ValueError(
             f"[grouped-moe tdm] cluster_n={cluster_n} needs n_tiles={n_tiles} "
@@ -315,7 +357,11 @@ def flydsl_grouped_gemm_a8w4_masked(
         else 0,
         _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4),
         _select_positive_int("AITER_FLYDSL_GEMM1_FENCE_COVER_MMA", 8),
-        _select_tristate("AITER_FLYDSL_GEMM1_DISABLE_XDL_ARB_STALL"),
+        (
+            _select_tristate("AITER_FLYDSL_GEMM1_DISABLE_XDL_ARB_STALL")
+            if target_fp4_prefill
+            else -1
+        ),
         _select_binary_int("AITER_FLYDSL_GEMM1_SILU_POLY9", 0)
         if stage1_act == 1
         else 0,
@@ -325,7 +371,12 @@ def flydsl_grouped_gemm_a8w4_masked(
         _select_binary_int("AITER_FLYDSL_GEMM1_SILU_RELU", 0)
         if stage1_act == 1
         else 0,
-        _select_wmma_reuse(),
+        _select_wmma_reuse() if target_fp4_prefill else 0,
         _select_binary_int("AITER_FLYDSL_GEMM1_DELAY_ACC_ZERO", 0),
+        (
+            _select_binary_int("AITER_FLYDSL_GEMM1_OVERLAP_OUTPUT_STORE", 0)
+            if target_fp4_prefill
+            else 0
+        ),
     )
     return out

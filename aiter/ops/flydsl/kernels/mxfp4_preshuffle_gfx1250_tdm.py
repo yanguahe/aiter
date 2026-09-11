@@ -100,6 +100,7 @@ def launch_gemm_a8w4_tdm(
     silu_relu: Constexpr[int] = 0,
     wmma_reuse: Constexpr[int] = 0,
     delay_acc_zero: Constexpr[int] = 0,
+    overlap_output_store: Constexpr[int] = 0,
 ):
     """Launch the grouped contiguous-M a8w4 MoE GEMM for gfx1250.
 
@@ -203,6 +204,10 @@ def launch_gemm_a8w4_tdm(
     # 0=off, 1=A+B, 2=A only, 3=B only.
     assert wmma_reuse in (0, 1, 2, 3)
     assert delay_acc_zero in (0, 1)
+    assert overlap_output_store in (0, 1)
+    assert not overlap_output_store or (
+        fp4_prefill_schedule and stage1_act == 1 and stage1_quant_out == 0
+    )
     if silu_poly9:
         epilogue_batch_wn = 1
     if not fp4_prefill_schedule:
@@ -248,6 +253,7 @@ def launch_gemm_a8w4_tdm(
         silu_relu,
         wmma_reuse,
         delay_acc_zero,
+        overlap_output_store,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -337,6 +343,7 @@ def launch_gemm_a8w4_tdm(
         _silu_approx = "_silu_relu"
     _wmma_reuse = ("", "_reuse", "_reusea", "_reuseb")[wmma_reuse]
     _delay_zero = "_daz" if delay_acc_zero else ""
+    _overlap_store = "_ostore2p" if overlap_output_store else ""
     _kname = (
         f"a8w4_tdm_{_afp}"
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
@@ -345,7 +352,7 @@ def launch_gemm_a8w4_tdm(
         f"{_epilogue_batch}{_a_preshuffle}{_schedule_hints}"
         f"{_relax_cluster_wrap}{_direct_scales}{_transitive_sync}{_early_timeout}{_m_major}"
         f"{_sched_shape}{_xdl_arb}"
-        f"{_silu_approx}{_wmma_reuse}{_delay_zero}"
+        f"{_silu_approx}{_wmma_reuse}{_delay_zero}{_overlap_store}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -1429,6 +1436,43 @@ def launch_gemm_a8w4_tdm(
             )
             oc = fx.Float16 if out_is_f16 else fx.BFloat16
 
+            EPILOGUE_HALF_WM = wmma_m_rep // 2
+            EPILOGUE_HALF_ROWS = EPILOGUE_HALF_WM * 16
+
+            def issue_output_half(wm_base):
+                """Store completed M rows while later exact-SiLU rows activate."""
+                workgroup_barrier()
+                if wave_n == 0:
+                    row_start = wmb + wm_base * 16
+                    remaining = mn_oob - row_start
+                    slice_oob = (remaining > 0).select(remaining, 0)
+                    out_stride = i32_n // 2
+                    out_col_off = blk_n64 // 2
+                    c_iter = fx.get_iter(arg_c)
+                    c_off_rt = (
+                        (c_outer_off + fx.Int64(row_start)) * fx.Int64(out_stride)
+                        + out_col_off
+                    )
+                    gt_half = global_view(
+                        c_iter,
+                        c_off_rt,
+                        (EPILOGUE_HALF_ROWS, STORE_PITCH),
+                        (out_stride, 1),
+                    )
+                    atom_half = fx.rocdl.make_tdm_atom(
+                        gt_half,
+                        [slice_oob, STORE_N],
+                        strides=[out_stride, None],
+                        num_warps=1,
+                    )
+                    src_half = lds_view(
+                        fx.recast_iter(oc, base_ptr)
+                        + fx.index_cast(T.index, row_start * STORE_PITCH),
+                        (EPILOGUE_HALF_ROWS, STORE_PITCH),
+                        (STORE_PITCH, 1),
+                    )
+                    fx.copy(atom_half, src_half, gt_half)
+
             # -- Activate + stage to LDS --
             if const_expr(stage1_quant_out and stage1_act):
                 # Fused silu/swiglu -> fp8 quant; payload to LDS, scale to global.
@@ -1669,52 +1713,65 @@ def launch_gemm_a8w4_tdm(
                             ]
                             if pin:
                                 vgpr_keepalive(*pin)
+                    if const_expr(
+                        overlap_output_store and wm + 1 == EPILOGUE_HALF_WM
+                    ):
+                        issue_output_half(0)
+            if const_expr(overlap_output_store):
+                issue_output_half(EPILOGUE_HALF_WM)
             # -- Shared LDS -> TDM store to global --
             # dscnt-only barrier: the TDM store reads LDS, not the e8m0 scales
             # still in flight, so their storecnt wait moves past the store below.
-            if const_expr(stage1_quant_out and stage1_act):
-                rocdl.s_wait_dscnt(0)
-                rocdl.s_barrier_signal(-1)
-                rocdl.s_barrier_wait(-1)
+            if const_expr(overlap_output_store):
+                pass
             else:
-                workgroup_barrier()
-            if const_expr(stage1_act):
-                out_stride = i32_n // 2
-                out_col_off = blk_n64 // 2
-            else:
-                out_stride = c_stride
-                out_col_off = c_inner_off
-            if const_expr(stage1_quant_out and stage1_act):
-                oc_store = fx.Int8
-                c_iter = fx.recast_iter(fx.Int8, fx.get_iter(arg_c))
-            else:
-                oc_store = oc
-                c_iter = fx.get_iter(arg_c)
-            c_off_rt = c_outer_off * fx.Int64(out_stride) + out_col_off
-            if const_expr(STORE_PAD == 0):
-                gtC = global_view(c_iter, c_off_rt, (tile_m, STORE_N), (STORE_N, 1))
-                atomC = make_tdm_store(gtC, mn_oob, out_stride)
-                src = lds_view(
-                    fx.recast_iter(oc_store, base_ptr), (tile_m, STORE_N), (STORE_N, 1)
-                )
-            else:
-                # The LDS tile is (tile_m, STORE_PITCH) dense; the per-dim OOB
-                # extent clamps the inner axis to STORE_N so the pad never lands.
-                gtC = global_view(
-                    c_iter, c_off_rt, (tile_m, STORE_PITCH), (out_stride, 1)
-                )
-                atomC = fx.rocdl.make_tdm_atom(
-                    gtC,
-                    [mn_oob, STORE_N],
-                    strides=[out_stride, None],
-                    num_warps=num_waves,
-                )
-                src = lds_view(
-                    fx.recast_iter(oc_store, base_ptr),
-                    (tile_m, STORE_PITCH),
-                    (STORE_PITCH, 1),
-                )
-            fx.copy(atomC, src, gtC)
+                if const_expr(stage1_quant_out and stage1_act):
+                    rocdl.s_wait_dscnt(0)
+                    rocdl.s_barrier_signal(-1)
+                    rocdl.s_barrier_wait(-1)
+                else:
+                    workgroup_barrier()
+                if const_expr(stage1_act):
+                    out_stride = i32_n // 2
+                    out_col_off = blk_n64 // 2
+                else:
+                    out_stride = c_stride
+                    out_col_off = c_inner_off
+                if const_expr(stage1_quant_out and stage1_act):
+                    oc_store = fx.Int8
+                    c_iter = fx.recast_iter(fx.Int8, fx.get_iter(arg_c))
+                else:
+                    oc_store = oc
+                    c_iter = fx.get_iter(arg_c)
+                c_off_rt = c_outer_off * fx.Int64(out_stride) + out_col_off
+                if const_expr(STORE_PAD == 0):
+                    gtC = global_view(
+                        c_iter, c_off_rt, (tile_m, STORE_N), (STORE_N, 1)
+                    )
+                    atomC = make_tdm_store(gtC, mn_oob, out_stride)
+                    src = lds_view(
+                        fx.recast_iter(oc_store, base_ptr),
+                        (tile_m, STORE_N),
+                        (STORE_N, 1),
+                    )
+                else:
+                    # The LDS tile is (tile_m, STORE_PITCH) dense; the per-dim OOB
+                    # extent clamps the inner axis to STORE_N so the pad never lands.
+                    gtC = global_view(
+                        c_iter, c_off_rt, (tile_m, STORE_PITCH), (out_stride, 1)
+                    )
+                    atomC = fx.rocdl.make_tdm_atom(
+                        gtC,
+                        [mn_oob, STORE_N],
+                        strides=[out_stride, None],
+                        num_warps=num_waves,
+                    )
+                    src = lds_view(
+                        fx.recast_iter(oc_store, base_ptr),
+                        (tile_m, STORE_PITCH),
+                        (STORE_PITCH, 1),
+                    )
+                fx.copy(atomC, src, gtC)
             if const_expr(stage1_quant_out and stage1_act):
                 rocdl.s_wait_storecnt(0)
             tdm_ops.tensor_wait(0)
