@@ -1,0 +1,14 @@
+requested_kernel=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+kernel_regex=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+kernel_name_validation=trusted_without_database_lookup
+all_simd=0
+simd_ids=3
+output_dir_name=candidate
+test_command=python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py
+kernel_trace_status=0
+att_status=0
+kernel_trace_state=success
+att_state=success
+simd3_att_status=0
+final_output_dir=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/candidate
+final_archive=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/candidate.tar.gz

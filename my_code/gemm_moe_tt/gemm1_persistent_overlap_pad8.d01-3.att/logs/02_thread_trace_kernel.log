@@ -1,0 +1,86 @@
+Running advanced-thread-trace-moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1-simd3: rocprofv3 -i my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/input_kernel.yaml -- env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py
+W20260912 15:41:46.376532 124684162416192 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.031076 sec
+W20260912 15:41:46.376721 124684162416192 simple_timer.cpp:55] [rocprofv3] 'env -u FLYDSL_DUMP_DIR PYTORCH_ALLOC_CONF=expandable_segments:True GPU_ARCHS=gfx1250 ENABLE_CK=0 AITER_FORCE_GFX1250=1 FLYDSL_DUMP_IR=0 python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py' ::     0.000000 sec
+W20260912 15:41:46.432725 140310195908160 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030759 sec
+W20260912 15:41:46.432893 140310195908160 simple_timer.cpp:55] [rocprofv3] 'python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py' ::     0.000000 sec
+W20260912 15:41:46.527830 140499307015744 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.031981 sec
+W20260912 15:41:46.528024 140499307015744 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/offload-arch' ::     0.000000 sec
+W20260912 15:41:46.607576 131223753342592 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.029318 sec
+W20260912 15:41:46.607763 131223753342592 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000000 sec
+W20260912 15:41:46.607979 131223753342592 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/bin/offload-arch' ::     0.000216 sec
+W20260912 15:41:46.608010 131223753342592 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260912 15:41:46.608115 131223753342592 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260912 15:41:46.608169 131223753342592 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3
+W20260912 15:41:46.608171 131223753342592 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260912 15:41:46.608205 131223753342592 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000201 sec
+W20260912 15:41:46.608285 131223753342592 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000284 sec
+W20260912 15:41:47.963150 126330573561408 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030365 sec
+W20260912 15:41:47.963348 126330573561408 simple_timer.cpp:55] [rocprofv3] '/opt/venv/bin/python /opt/venv/bin/hipconfig --version' ::     0.000000 sec
+W20260912 15:41:48.035734 131395425619520 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030788 sec
+W20260912 15:41:48.035905 131395425619520 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000000 sec
+W20260912 15:41:48.035973 131395425619520 simple_timer.cpp:55] [rocprofv3] '/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/bin/hipconfig --version' ::     0.000068 sec
+W20260912 15:41:48.036007 131395425619520 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260912 15:41:48.036121 131395425619520 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260912 15:41:48.036170 131395425619520 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3
+W20260912 15:41:48.036172 131395425619520 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260912 15:41:48.036206 131395425619520 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000204 sec
+W20260912 15:41:48.036289 131395425619520 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000290 sec
+W20260912 15:41:48.102715 134715815554624 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030719 sec
+W20260912 15:41:48.102902 134715815554624 simple_timer.cpp:55] [rocprofv3] '/bin/sh -c cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260912 15:41:48.160728 138880194522688 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030352 sec
+W20260912 15:41:48.160925 138880194522688 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000000 sec
+W20260912 15:41:48.161063 138880194522688 simple_timer.cpp:55] [rocprofv3] 'cat /proc/sys/kernel/numa_balancing' ::     0.000138 sec
+W20260912 15:41:48.161095 138880194522688 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260912 15:41:48.161210 138880194522688 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260912 15:41:48.161267 138880194522688 tool.cpp:2859] [ATT-DEBUG] codeobj count=1 att_filenames count=0 output_path=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3
+W20260912 15:41:48.161269 138880194522688 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260912 15:41:48.161307 138880194522688 simple_timer.cpp:55] [rocprofv3] output generation ::     0.000218 sec
+W20260912 15:41:48.161413 138880194522688 simple_timer.cpp:55] [rocprofv3] tool finalization ::     0.000327 sec
+[aiter] import [module_aiter_core] under /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/repo_snapshot/aiter/jit/module_aiter_core.so
+W20260912 15:41:48.662510 140310195908160 tool.cpp:2476] HSA version 1.18.0 initialized (instance=0)
+W20260912 15:41:48.733365 124367747534400 simple_timer.cpp:55] [rocprofv3] tool initialization ::     0.030201 sec
+W20260912 15:41:48.733542 124367747534400 simple_timer.cpp:55] [rocprofv3] '/bin/sh /sbin/ldconfig -p' ::     0.000000 sec
+E20260912 15:41:51.716451 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_1.out
+E20260912 15:41:51.745047 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_2.out
+/data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/gemm_batch_isa_runner.py:1041: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rocm-npi-dev/rocm-npi-dev/_therock/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  hidden = torch.full(
+E20260912 15:41:51.972284 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_3.out
+E20260912 15:41:51.995508 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_4.out
+E20260912 15:41:52.002590 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_5.out
+E20260912 15:41:52.013922 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_6.out
+E20260912 15:41:52.034879 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_7.out
+E20260912 15:41:52.064267 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_8.out
+E20260912 15:41:52.092734 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_9.out
+E20260912 15:41:52.119704 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_10.out
+E20260912 15:41:52.139500 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_11.out
+E20260912 15:41:52.168852 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_12.out
+E20260912 15:41:52.249593 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_13.out
+E20260912 15:41:52.321766 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_14.out
+E20260912 15:41:52.358756 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_15.out
+E20260912 15:41:52.410213 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_16.out
+E20260912 15:41:52.426704 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_17.out
+E20260912 15:41:52.457635 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_18.out
+E20260912 15:41:52.512188 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_19.out
+E20260912 15:41:52.542233 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_20.out
+E20260912 15:41:52.545958 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_21.out
+E20260912 15:41:52.550957 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_22.out
+[att_launch_opt] code object: /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/code_objects/candidate.co
+[att_launch_opt] grid: (16, 16, 1)
+E20260912 15:41:52.767914 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_gfx1250_code_object_id_23.out
+E20260912 15:41:52.769729 140250110228160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_63085_shader_engine_0_3541.att
+E20260912 15:41:52.770316 140250110228160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_63085_shader_engine_1_3541.att
+E20260912 15:41:52.770837 140250110228160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_63085_shader_engine_2_3541.att
+E20260912 15:41:52.771380 140250110228160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_63085_shader_engine_3_3541.att
+[att_launch_opt] repository module audit passed
+W20260912 15:41:53.211197 140310195908160 simple_timer.cpp:55] [rocprofv3] 'python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py' ::     6.778304 sec
+E20260912 15:41:53.225457 140310195908160 output_stream.cpp:111] Opened result file: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_agent_info.csv
+W20260912 15:41:53.225519 140310195908160 tool.cpp:2850] [ATT-DEBUG] advanced_thread_trace block entered; att_library_path='/data/yanguahe/code/wk_sp1/decoder_new'
+W20260912 15:41:53.225790 140310195908160 tool.cpp:2854] [ATT-DEBUG] ATTDecoder constructed; valid=1
+W20260912 15:41:53.225833 140310195908160 tool.cpp:2859] [ATT-DEBUG] codeobj count=24 att_filenames count=1 output_path=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3
+W20260912 15:41:53.225836 140310195908160 tool.cpp:2885] [ATT-DEBUG] parse() begin dispatch_id=3541 shader_files=4 out_path=my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/ui_output_agent_63085_dispatch_3541
+W20260912 15:41:54.441773 140310195908160 tool.cpp:2892] [ATT-DEBUG] parse() OK dispatch_id=3541
+W20260912 15:41:54.441789 140310195908160 tool.cpp:2904] [ATT-DEBUG] advanced_thread_trace block complete
+W20260912 15:41:54.442417 140310195908160 simple_timer.cpp:55] [rocprofv3] output generation ::     1.217255 sec
+W20260912 15:41:54.444143 140310195908160 simple_timer.cpp:55] [rocprofv3] tool finalization ::     1.218988 sec
+advanced-thread-trace-moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1-simd3 exit status: 0
+ATT artifact found: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/.get_isa_runner_att_candidate_40703/thread_trace/kernel/rpf_v3/out_63085_shader_engine_1_3541.att

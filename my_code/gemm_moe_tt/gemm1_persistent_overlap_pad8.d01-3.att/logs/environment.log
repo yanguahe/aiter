@@ -1,0 +1,23 @@
+date: 2026-09-12T15:41:39+00:00
+host: heliosr-1b114-d01-3
+pwd: /data/yanguahe/code/wk_sp1/aiter
+HIP_VISIBLE_DEVICES: 0
+requested kernel: moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+capture all SIMDs: 0
+output directory name: candidate
+output directory: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/candidate
+output archive: my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/candidate.tar.gz
+python: /opt/venv/bin/python
+Python 3.12.3
+rocprofv3: /data/yanguahe/code/wk_sp1/rocprof-install/bin/rocprofv3
+             version: 1.1.0
+        git_revision: 3f3cbc315f8764cde8565a1cb29cf9673426d93c
+        library_arch: x86_64-linux-gnu
+         system_name: Linux
+    system_processor: x86_64
+      system_version: 6.14.0-37-generic
+         compiler_id: GNU
+    compiler_version: 13.3.0
+        rocm_version: 7.12.0
+
+test command: python3 /data/yanguahe/code/wk_sp1/aiter/my_code/moe_gemm1_act1_optimized/att_launch_opt.py
