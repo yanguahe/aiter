@@ -59,7 +59,8 @@ Selection and control:
   AITER_ATT_VALIDATE_ONLY=1           Validate ATT launches without tracing
 
 Stable cases:
-  baseline, optimized_v1, double_lds, persistent, persistent_overlap
+  baseline, optimized_v1, double_lds, persistent, persistent_overlap,
+  persistent_overlap_pad8
 EOF
 }
 
@@ -124,6 +125,7 @@ OPT_V1="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s"
 OPT_DOUBLE_LDS="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s"
 OPT_PERSISTENT="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s"
 OPT_PERSISTENT_OVERLAP="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s"
+OPT_PERSISTENT_OVERLAP_PAD8="$HERE/persistent_overlap_output_pad8.s"
 CANDIDATE=""
 
 if [[ -n "${AITER_HISTORY_CANDIDATE:-}" ]]; then
@@ -146,7 +148,14 @@ if [[ -n "${AITER_HISTORY_CANDIDATE:-}" ]]; then
   fi
 fi
 
-declare -a CASES=(baseline optimized_v1 double_lds persistent persistent_overlap)
+declare -a CASES=(
+  baseline
+  optimized_v1
+  double_lds
+  persistent
+  persistent_overlap
+  persistent_overlap_pad8
+)
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
 if [[ -n "$requested_cases" ]]; then
   IFS=',' read -r -a CASES <<<"$requested_cases"
@@ -161,6 +170,7 @@ case_source() {
     double_lds) printf '%s\n' "$OPT_DOUBLE_LDS" ;;
     persistent) printf '%s\n' "$OPT_PERSISTENT" ;;
     persistent_overlap) printf '%s\n' "$OPT_PERSISTENT_OVERLAP" ;;
+    persistent_overlap_pad8) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8" ;;
     candidate)
       if [[ -z "$CANDIDATE" ]]; then
         echo "case 'candidate' requires AITER_HISTORY_CANDIDATE" >&2
@@ -182,6 +192,7 @@ case_label() {
     double_lds) printf '%s\n' 'double-output-LDS' ;;
     persistent) printf '%s\n' 'persistent/full-drain' ;;
     persistent_overlap) printf '%s\n' 'persistent/output-drain-overlap' ;;
+    persistent_overlap_pad8) printf '%s\n' 'persistent/overlap/output-pad8' ;;
     candidate) printf '%s\n' 'candidate' ;;
     *) return 2 ;;
   esac
@@ -190,7 +201,7 @@ case_label() {
 case_grid_x() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_X:-}" ;;
     *) return 2 ;;
   esac
@@ -199,7 +210,7 @@ case_grid_x() {
 case_grid_y() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_Y:-}" ;;
     *) return 2 ;;
   esac

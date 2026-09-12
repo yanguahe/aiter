@@ -179,9 +179,9 @@ drain 仍值得单独检查；但这项 attribution 同时包含 queue backlog�
 建议新增：
 
 ```text
-my_code/moe_gemm1_act1_optimized/build_exactopt_port_variants.py
-my_code/moe_gemm1_act1_optimized/audit_exactopt_port.py
-my_code/moe_gemm1_act1_optimized/exactopt_port/
+my_code/moe_gemm1_act1_optimized/build_persistent_overlap_pad8.py
+my_code/moe_gemm1_act1_optimized/audit_persistent_overlap_pad8.py
+my_code/moe_gemm1_act1_optimized/
 ```
 
 候选命名：
@@ -228,7 +228,7 @@ bash my_code/reproduce_compare.sh
 
 ### 5.2 静态审计脚本
 
-`audit_exactopt_port.py` 至少检查：
+`audit_persistent_overlap_pad8.py` 至少检查：
 
 ```text
 kernel symbol
@@ -583,7 +583,7 @@ traversal 没有提升，所以本阶段排在 hotloop scheduling 之后。
 
 ```bash
 AITER_HISTORY_CASE_LIST=persistent_overlap,candidate \
-AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/exactopt_port/CANDIDATE.s \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/CANDIDATE.s \
 AITER_HISTORY_CANDIDATE_GRID_X=16 \
 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 ROUNDS=3 RUN_VERIFY=0 RUN_ATT=0 \
@@ -602,7 +602,7 @@ bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
 
 ```bash
 AITER_HISTORY_CASE_LIST=persistent_overlap,candidate \
-AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/exactopt_port/CANDIDATE.s \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/CANDIDATE.s \
 AITER_HISTORY_CANDIDATE_GRID_X=16 \
 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 ROUNDS=5 RUN_VERIFY=0 RUN_ATT=0 \
@@ -617,7 +617,7 @@ fused MoE median。换机器、SSH 失联后重连或机器重启时，必须在
 
 ```bash
 AITER_HISTORY_CASE_LIST=persistent_overlap,candidate \
-AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/exactopt_port/CANDIDATE.s \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/CANDIDATE.s \
 AITER_HISTORY_CANDIDATE_GRID_X=16 \
 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
@@ -684,3 +684,137 @@ LDS-ready barrier，且 output padding 降低 `s_wait_dscnt`，才有机会超�
   6 个 TDM descriptor in flight；TDM 可以在 descriptor 间切换；
 - MI455X whitepaper 第 10 页：每 WGP 独立 TDM、LDS/DRAM direct transfer、
   multicast 和 320 KiB LDS。
+
+## 17. 实施结果（2026-09-12，d01-3）
+
+本方案已通过独立生成脚本实施，保留原始
+`moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`
+作为同机 baseline，没有覆盖它。新增实现位于：
+
+```text
+my_code/moe_gemm1_act1_optimized/build_persistent_overlap_pad8.py
+my_code/moe_gemm1_act1_optimized/audit_persistent_overlap_pad8.py
+my_code/moe_gemm1_act1_optimized/
+```
+
+生成脚本固定检查 baseline、WPT1 reference 和 WPT2 reference 的 SHA256，并用
+exact-match transformation 生成候选。静态审计覆盖 184-byte ABI、4x4 cluster、
+LDS size、VGPR/SGPR metadata、TDM/WMMA/barrier 数量、reuse bit、output DS store
+数量以及 output-pad8 的 LDS 地址区间。output-pad8 的 8 个 double-buffered output
+区间互不重叠，最大结束地址为 `0x4c800`，低于 320 KiB 上限 `0x50000`。
+
+### 17.1 单变量和 reference 移植结论
+
+| 机制 | 正确性 | 性能结论 |
+|---|---|---|
+| `DISABLE_XDL_ARB_STALL=0` | random e2e 通过 | const0 从同轮 `543.621 us` 回退到 `547.213 us`，否决 |
+| compact output `DS_STORE_2ADDR_B64` | random e2e 通过 | `667.851 us`，比同轮 baseline `666.900 us` 慢 `0.14%`，否决 |
+| WPT2 exactopt standard/persistent | random e2e 通过 | 分别约 `725.643/726.269 us`，显著回退，否决 |
+| WPT1 exactopt persistent full-drain | random e2e 通过 | const0 `553.365 us`，比同轮 `541.249 us` 慢 `2.24%`，否决 |
+| WPT1 exactopt persistent overlap | random e2e 三轮通过 | random median `705.561 us`，比同轮 `665.764 us` 慢 `5.98%`，否决 |
+| output-pad8 | random/const0 e2e 通过 | 稳定提升，保留 |
+| output-pad8 + two-address DS store | random/const0 e2e 通过 | 与单独 pad8 基本持平，但实现更复杂，不作为 winner |
+
+完整 WPT1/WPT2 reference 的回退说明 `mg4/fc28`、WPT2 ownership 和 reuse topology
+不能作为一组直接照搬到当前 hand-written hotloop。已有汇编 hotloop 的 WMMA/DS/TDM
+调度与 compiler-generated reference 差异较大，单纯复用 reference 指令序列会丢失当前
+实现已有的优势。
+
+### 17.2 最终保留优化：output-pad8
+
+最终保留文件：
+
+```text
+my_code/moe_gemm1_act1_optimized/persistent_overlap_output_pad8.s
+SHA256=039ed787b1f136ee402b76e3bd0b7c9bf439148a0156d0fcca856ed6ab25ccad
+```
+
+它只修改 activated output LDS layout：
+
+```text
+row pitch       128 B -> 144 B
+half size       0x2000 -> 0x2400
+TDM tile_dim0   128 B -> 144 B
+global bound    128 B，不变
+```
+
+每行末尾新增的 16 B 只存在于 LDS，output TDM 通过 global bound/OOB 丢弃，global
+output layout 和数值接口不变。
+
+random MoE e2e 三轮结果：
+
+| case | GEMM1 samples | median | fused MoE median | 结果 |
+|---|---|---:|---:|---|
+| `persistent_overlap` | `673.716, 665.139, 671.912 us` | `671.912 us` | `2095.48 us` | 通过 |
+| `persistent_overlap_pad8` | `657.741, 663.908, 662.399 us` | `662.399 us` | `2088.09 us` | 通过，GEMM1 提升 `1.42%` |
+
+三轮均为：
+
+```text
+logits_diff=3.3980e-06
+rel_l2=2.6069e-03
+output_sha256=aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2
+```
+
+const0 MoE e2e 五轮结果：
+
+| case | GEMM1 samples | median | fused MoE median |
+|---|---|---:|---:|
+| `persistent_overlap` | `544.575, 540.821, 543.749, 544.576, 539.414 us` | `543.749 us` | `1785.69 us` |
+| `persistent_overlap_pad8` | `538.236, 535.033, 537.259, 535.153, 539.176 us` | `537.259 us` | `1777.31 us` |
+
+const0 GEMM1 median 提升 `1.19%`。
+
+### 17.3 ATT 结论
+
+为了降低单次 ATT 波动的影响，使用正反顺序抓取三组 baseline/pad8 trace。全 kernel
+GFXCLK cycle 中位数为：
+
+```text
+persistent_overlap       1,138,614 cycles
+persistent_overlap_pad8  1,113,445 cycles
+降低                       25,169 cycles = 2.21%
+```
+
+两条主要 output `s_wait_dscnt 0` 的累计 stall cycle 更稳定：
+
+```text
+baseline samples  81,855 / 80,491 / 80,932
+pad8 samples      27,509 / 27,422 / 25,985
+median reduction  80,932 -> 27,422 = 66.12%
+```
+
+这直接验证了 144-byte row pitch 的作用：改变相邻 row 的 64-bank 起点，显著降低
+output LDS store drain。全 kernel span 仍会受 input `s_wait_tensorcnt`、cluster barrier
+和 WMMA idle 波动影响，因此不能用单次 ATT 结果判断约 1% 的优化。
+
+### 17.4 benchmark 接入
+
+`benchmark_history.sh` 和其兼容入口 `benchmark_att_history.sh` 共享同一套 case table，
+新增稳定 case：
+
+```text
+persistent_overlap_pad8
+```
+
+复现命令：
+
+```bash
+python my_code/moe_gemm1_act1_optimized/build_persistent_overlap_pad8.py
+
+python my_code/moe_gemm1_act1_optimized/audit_persistent_overlap_pad8.py
+
+AITER_HISTORY_CASE_LIST=persistent_overlap,persistent_overlap_pad8 \
+ROUNDS=3 RUN_VERIFY=0 RUN_ATT=0 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+
+AITER_HISTORY_CASE_LIST=persistent_overlap,persistent_overlap_pad8 \
+ROUNDS=5 RUN_VERIFY=0 RUN_ATT=0 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
+
+AITER_HISTORY_CASE_LIST=persistent_overlap,persistent_overlap_pad8 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
+```
+
+更完整的逐候选数据和远端原始结果目录记录在
+`PERSISTENT_OVERLAP_PAD8_PORT_RESULTS.md`。

@@ -1,0 +1,119 @@
+{
+  "interval-print-limit": "8",
+  "interval information": [
+    {
+      "key": "desc",
+      "value": "Full persistent task"
+    }
+  ],
+  "kernel versions": [
+    {
+      "key": "version",
+      "value": "pad8_att_1",
+      "baseline": true,
+      "config": {
+        "sample points": [
+          {
+            "task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          },
+          {
+            "next_task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          }
+        ],
+        "se": "*",
+        "sm": "*",
+        "sl": "*",
+        "wv": "*",
+        "trace_dir": "my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154121Z_att/att/candidate/thread_trace/kernel/rpf_v3/ui_output_agent_*"
+      },
+      "specific_part": {
+        "interval_name": "Full persistent task",
+        "long_lat_thr": 100
+      }
+    },
+    {
+      "key": "version",
+      "value": "pad8_att_2",
+      "baseline": false,
+      "config": {
+        "sample points": [
+          {
+            "task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          },
+          {
+            "next_task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          }
+        ],
+        "se": "*",
+        "sm": "*",
+        "sl": "*",
+        "wv": "*",
+        "trace_dir": "my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154441Z_att/att/candidate/thread_trace/kernel/rpf_v3/ui_output_agent_*"
+      },
+      "specific_part": {
+        "interval_name": "Full persistent task",
+        "long_lat_thr": 100
+      }
+    },
+    {
+      "key": "version",
+      "value": "pad8_att_3",
+      "baseline": false,
+      "config": {
+        "sample points": [
+          {
+            "task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          },
+          {
+            "next_task_start": {
+              "instruction": [
+                "s_cmp_lt_u32 s28, 0x240",
+                "s_cbranch_scc0 12477",
+                "s_load_b64 s[2:3], s[0:1], 0x0 nv"
+              ]
+            }
+          }
+        ],
+        "se": "*",
+        "sm": "*",
+        "sl": "*",
+        "wv": "*",
+        "trace_dir": "my_code/moe_gemm1_act1_optimized/history_runs/heliosr-1b114-d01-3_20260912T154643Z_att/att/candidate/thread_trace/kernel/rpf_v3/ui_output_agent_*"
+      },
+      "specific_part": {
+        "interval_name": "Full persistent task",
+        "long_lat_thr": 100
+      }
+    }
+  ]
+}

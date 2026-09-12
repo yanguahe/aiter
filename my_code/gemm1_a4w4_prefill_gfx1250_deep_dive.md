@@ -1171,3 +1171,245 @@ exact 数据/数学路径：
 在“接口、功能、精度等价”的约束下，本轮应把
 `sync_mg4_fc28_apre_exactopt` 视为最终 exact 版本；hard/ReLU 的性能数字只
 用于量化 exact-SiLU epilogue 的潜在成本上限，不能作为等价替代。
+
+### 3.11 d01-3 ISA dump：`wave_id` 的实际计算方式
+
+为确认 `sync_mg4_fc28_apre_exactopt` 的最终 lowering，已在 d01-3 的
+`hyg_fyd1` 容器内重新开启 `FLYDSL_DUMP_IR=1`，生成以下 GEMM1 ISA：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/my_code/gemm1_exactopt_isa_d01_20260913/
+  a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e96_act1_cn4_prefetch_eb8_apre_sh_rcw_mg4_fc28_xdl0_reuse_ostore2p/
+  21_final_isa.s
+```
+
+该文件也已复制到本地相同的仓库相对路径。远端与本地 SHA256 一致：
+
+```text
+a895c9b97307629ffb34510671890dfc9207cd07a388fd959c8fd548698d8f4a
+```
+
+#### 3.11.1 结论：它是 workgroup-local logical wave index
+
+这个 kernel 中名为 `wave` 的值不是读取硬件内部的 physical wave slot ID，
+而是由 workgroup 内的 `workitem_id_x` 计算出的 logical wave index：
+
+```text
+wave_id = workitem_id_x // 32
+        = workitem_id_x >> 5
+```
+
+源码写法位于 `mxfp4_preshuffle_gfx1250_tdm.py:L397-L404`：
+
+```python
+tid = fx.thread_idx.x
+wave = rocdl.readfirstlane(T.i32, tid // WAVE)
+lane = tid % WAVE
+lane16 = lane % 16
+kgrp = lane // 16
+wave_m = wave // n_warp
+wave_n = wave % n_warp
+```
+
+其中本 specialization 有：
+
+```text
+WAVE   = 32
+n_warp = 2
+block  = 128 threads
+```
+
+因此一个 workgroup 恰好包含 4 个完整 Wave32。
+
+#### 3.11.2 metadata：`v0` 提供 X 维 workitem ID
+
+final ISA metadata 包含：
+
+```asm
+.amdhsa_wavefront_size32 1
+.amdhsa_system_vgpr_workitem_id 0
+```
+
+并在 YAML metadata 中给出：
+
+```text
+.reqd_workgroup_size = [128, 1, 1]
+.wavefront_size      = 32
+```
+
+结合 kernel 入口对 `v0` 的直接使用，可知系统提供的 X 维
+`workitem_id_x` 位于 `v0`。四个 logical waves 的 `v0` 范围是：
+
+| logical wave | 各 lane 的 `v0=workitem_id_x` |
+|---:|---|
+| 0 | `0..31` |
+| 1 | `32..63` |
+| 2 | `64..95` |
+| 3 | `96..127` |
+
+CDNA5 ISA Chapter 2 规定本硬件把最多 32 个 work-items 组成一个 Wave32；
+`V_READFIRSTLANE_B32` 的指令定义位于 CDNA5 ISA §15.8，它把最低 active lane
+中的 VGPR 值读入一个 SGPR。
+
+#### 3.11.3 ISA 第一步：取得当前 wave 的首 workitem ID
+
+kernel 入口执行：
+
+```asm
+v_readfirstlane_b32 s33, v0
+```
+
+它位于 `21_final_isa.s:L12`。此时尚未出现改变 `EXEC` 的分支，而且
+128-thread workgroup 是 4 个完整 Wave32，所以四个 waves 分别得到：
+
+```text
+s33 = {0, 32, 64, 96}
+```
+
+即：
+
+```text
+s33 = wave_first_workitem_id_x
+    = wave_id * 32
+```
+
+即使从 `V_READFIRSTLANE_B32` 的一般语义考虑，只要 wave 中还有任意 active
+lane，所有 lane 的 `workitem_id_x // 32` 都相同；因此这个值足以派生
+workgroup-local wave index。本例入口处则直接由最低 lane 给出上述 32 的倍数。
+
+#### 3.11.4 ISA 第二步：scalar 右移得到 `wave_id`
+
+binary-search/prologue 地址计算之后，ISA 执行：
+
+```asm
+s_lshr_b32 s49, s33, 5
+```
+
+它位于 `21_final_isa.s:L269`。所以：
+
+```text
+s49 = s33 >> 5
+    = first_workitem_id_x / 32
+    = wave_id
+```
+
+逐 wave 的寄存器值为：
+
+| logical wave | `v0` 范围 | `s33=readfirstlane(v0)` | `s49=s33>>5` |
+|---:|---|---:|---:|
+| 0 | `0..31` | 0 | 0 |
+| 1 | `32..63` | 32 | 1 |
+| 2 | `64..95` | 64 | 2 |
+| 3 | `96..127` | 96 | 3 |
+
+源码形式是：
+
+```text
+readfirstlane(workitem_id_x // 32)
+```
+
+final ISA 则等价地变换为：
+
+```text
+readfirstlane(workitem_id_x) >> 5
+```
+
+因此没有生成逐 lane 的：
+
+```asm
+v_lshrrev_b32 ..., 5, v0
+```
+
+除法先利用 `v_readfirstlane_b32` 转成 wave-uniform SGPR，再由 SALU
+`s_lshr_b32` 完成，避免每个 lane 单独执行 vector shift。
+
+#### 3.11.5 `lane`、`lane16`、`kgrp`、`wave_m` 与 `wave_n`
+
+ISA 在 `21_final_isa.s:L657-L673` 继续分解线程和 wave 坐标：
+
+```asm
+v_bfe_u32       v18, v0, 4, 1
+v_and_b32_e32   v1, 31, v0
+v_and_b32_e32   v210, 15, v0
+s_and_b32       s46, s49, 1
+s_lshr_b32      s33, s33, 6
+```
+
+其语义分别是：
+
+```text
+kgrp   = (workitem_id_x >> 4) & 1
+lane   = workitem_id_x & 31
+lane16 = workitem_id_x & 15
+
+wave_n = wave_id & 1
+wave_m = wave_id >> 1
+```
+
+最后一条没有直接使用 `s49`，而是复用尚保存
+`32*wave_id` 的 `s33`：
+
+```text
+s33 >> 6 = (32*wave_id) >> 6 = wave_id >> 1 = wave_m
+```
+
+这条指令执行后，`s33` 不再是首 workitem ID，而被覆写为 `wave_m`。
+
+最终 2×2 wave grid 为：
+
+| `wave_id=s49` | `wave_m=s33` | `wave_n=s46` |
+|---:|---:|---:|
+| 0 | 0 | 0 |
+| 1 | 0 | 1 |
+| 2 | 1 | 0 |
+| 3 | 1 | 1 |
+
+#### 3.11.6 WPT2 owner branch 对该结论的交叉验证
+
+在 `s33` 仍保存 wave 首 workitem ID 时，ISA 使用：
+
+```asm
+s_cmp_lt_u32 s33, 64
+s_cmp_gt_u32 s33, 63
+```
+
+见 `21_final_isa.s:L351-L354`。因为 `s33=32*wave_id`：
+
+```text
+s33 < 64  <=> wave_id < 2  <=> waves 0/1
+s33 > 63  <=> wave_id >=2  <=> waves 2/3
+```
+
+这正好对应 exactopt 的 WPT2 owner 分组：
+
+```text
+waves 0/1 -> A + ScaleA owner group
+waves 2/3 -> B + ScaleB owner group
+```
+
+ISA 还在 `L662` 使用：
+
+```asm
+s_cmp_eq_u32 s49, 0
+```
+
+选择 `wave_id==0` 的 wave 执行特定的 cluster-barrier 控制工作，进一步证明
+`s49` 就是源码中的 logical `wave`。
+
+综上，这个 specialization 的完整索引数据流为：
+
+```text
+v0 = workitem_id_x
+
+s33 = readfirstlane(v0)
+    = 32 * wave_id
+
+s49 = s33 >> 5
+    = wave_id
+
+lane   = v0 & 31
+lane16 = v0 & 15
+kgrp   = (v0 >> 4) & 1
+wave_n = s49 & 1
+wave_m = s49 >> 1
+```
