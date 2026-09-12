@@ -38,14 +38,15 @@ in progress.
 - `gemm_batch_isa_runner.py`, `gemm_isa_runner.py`: isolated copies of the
   validated runner used for testing older remote checkouts.
 - `compare_asm_variants.py`, `run_e2e_candidate.py`: standalone comparison and
-  full grouped-MoE e2e adapters for the three retained ISA versions.
+  full grouped-MoE e2e adapters used by all selected ISA versions.
 - `test_optimized.sh`: quick correctness and formal benchmark commands.
-- `benchmark_history.sh`: one-command comparison of the complete five-version
-  chain: safe baseline, optimized v1, double-output-LDS, persistent full-drain,
-  and persistent output-drain-overlap. It records the host, snapshot commit, clocks,
-  SHA256 values, validation, and timings under `history_runs/`.
-- `benchmark_att_history.sh`: builds the same history set and collects/analyzes
-  one ATT capture for each version under a timestamped `att_history/` directory.
+- `benchmark_history.sh`: unified same-machine comparison driver for the complete
+  five-version chain: safe baseline, optimized v1, double-output-LDS, persistent
+  full-drain, and persistent output-drain-overlap. Standalone, MoE e2e, and ATT
+  modes share one case table and grid definition. Each run records environment,
+  SHA256, raw logs, TSV data, and Markdown summaries under `history_runs/`.
+- `benchmark_att_history.sh`: compatibility wrapper for
+  `benchmark_history.sh att`; it contains no separate version or grid table.
 - `run_att_const0.sh`: collect and analyze one const0 ATT capture with
   `get_isa_runner_att.sh --ana-att`; trace output stays under this directory.
 - `att_launch_opt.py`: minimal one-launch ATT target that loads the precompiled
@@ -81,9 +82,8 @@ bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-const0
 bash my_code/moe_gemm1_act1_optimized/run_att_const0.sh
 bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-const0
 bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-random
-bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
-AITER_ATT_VALIDATE_ONLY=1 \
-  bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att-validate
 ```
 
 After reconnecting to a machine or after any system reconfiguration, recreate
@@ -122,12 +122,13 @@ the two persistent variants use `grid=(16,16,1)`. Standalone modes retain the
 original three-version interleaved comparison and then run a second interleaved
 comparison for the two persistent-grid variants.
 
-`benchmark_att_history.sh` uses the identical five-version list. Its ATT launch
-helper selects the standard grid for the first three versions and
-`grid=(16,16,1)` for both persistent versions.
-Set `AITER_ATT_VALIDATE_ONLY=1` to compile and launch all five code objects once
-without collecting rocprof ATT data; this validates the version list, launch
-geometry, snapshot imports, and kernel correctness path before a long trace run.
+The unified driver's ATT launch helper selects the standard grid for the first
+three versions and `grid=(16,16,1)` for both persistent versions. Use
+`att-validate` to compile and launch all five code objects once without
+collecting rocprof ATT data; this validates the version list, launch geometry,
+snapshot imports, and kernel correctness path before a long trace run. The old
+`benchmark_att_history.sh` command remains available as a compatibility wrapper,
+including its `AITER_ATT_VALIDATE_ONLY=1` behavior.
 
 Both scripts export `PYTHONPATH` and `AITER_META_DIR` to `repo_snapshot/`.
 Consequently, all repository Python/config/JIT-source dependencies are read
@@ -153,10 +154,12 @@ AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/candidate.s \
   bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-const0
 ```
 
-Collect comparable GFXCLK-cycle traces for the stable history set:
+Collect comparable GFXCLK-cycle traces for the stable history set, or validate
+all ATT launch paths without tracing:
 
 ```bash
-bash my_code/moe_gemm1_act1_optimized/benchmark_att_history.sh
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att-validate
 ```
 
 `test_optimized.sh` also accepts `AITER_OPT_ISA=/path/to/candidate.s`, so its
