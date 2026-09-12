@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Create the self-contained repository snapshot used by the benchmarks.
 
-Only committed Git content is copied. By default an existing snapshot remains
-pinned to its recorded commit; use --commit HEAD to intentionally refresh it.
-This avoids reading uncommitted changes or silently following a moving branch.
+Only committed Git content that is not excluded by the repository and my_code
+gitignore rules is copied. By default an existing snapshot remains pinned to
+its recorded commit; use --commit HEAD to intentionally refresh it. This avoids
+reading uncommitted source changes or silently following a moving branch.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ SOURCE_PATHS = (
     "op_tests/test_flydsl_grouped_gemm_gfx1250.py",
 )
 SNAPSHOT_METADATA = {"SOURCE_COMMIT", "SNAPSHOT_MANIFEST.json"}
+IGNORE_FILES = (REPO / ".gitignore", REPO / "my_code" / ".gitignore")
 PAYLOAD_DIGEST_FORMAT = "canonical-lf-v1"
 GIT_BINARY_PROBE_BYTES = 8000
 
@@ -60,6 +62,90 @@ def _canonical_payload(payload: bytes) -> bytes:
     if b"\0" in payload[:GIT_BINARY_PROBE_BYTES]:
         return payload
     return payload.replace(b"\r\n", b"\n")
+
+
+def _combined_ignore_rules() -> tuple[bytes, str]:
+    """Return root + my_code gitignore rules in Git precedence order."""
+
+    digest = hashlib.sha256()
+    chunks = []
+    for path in IGNORE_FILES:
+        if not path.is_file():
+            raise RuntimeError(f"snapshot ignore file is missing: {path}")
+        relative = path.relative_to(REPO).as_posix().encode("utf-8")
+        payload = _canonical_payload(path.read_bytes())
+        digest.update(len(relative).to_bytes(4, "little"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "little"))
+        digest.update(payload)
+        chunks.append(payload.rstrip(b"\n"))
+    return b"\n\n".join(chunks) + b"\n", digest.hexdigest()
+
+
+def _ignored_payload_paths(relative_paths: list[str]) -> tuple[set[str], str]:
+    """Use Git's ignore engine with the two requested rule files combined."""
+
+    rules, rules_digest = _combined_ignore_rules()
+    with tempfile.TemporaryDirectory(prefix=".snapshot_ignore_", dir=HERE) as temp:
+        probe = Path(temp)
+        subprocess.run(
+            ("git", "-C", str(probe), "init", "--quiet"),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        (probe / ".gitignore").write_bytes(rules)
+        empty_global_excludes = probe / ".empty_global_excludes"
+        empty_global_excludes.write_bytes(b"")
+        encoded = b"".join(path.encode("utf-8") + b"\0" for path in relative_paths)
+        result = subprocess.run(
+            (
+                "git",
+                "-C",
+                str(probe),
+                "-c",
+                f"core.excludesFile={empty_global_excludes}",
+                "check-ignore",
+                "--no-index",
+                "--stdin",
+                "-z",
+            ),
+            input=encoded,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode not in (0, 1):
+            raise RuntimeError(
+                "git check-ignore failed: "
+                + result.stderr.decode("utf-8", errors="replace").strip()
+            )
+        ignored = {
+            item.decode("utf-8")
+            for item in result.stdout.split(b"\0")
+            if item
+        }
+    return ignored, rules_digest
+
+
+def _remove_ignored_payload(root: Path) -> tuple[int, str]:
+    relative_paths = sorted(
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+    ignored, rules_digest = _ignored_payload_paths(relative_paths)
+    for relative in ignored:
+        path = root / relative
+        if path.is_file():
+            path.unlink()
+    for directory in sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        if not any(directory.iterdir()):
+            directory.rmdir()
+    return len(ignored), rules_digest
 
 
 def _tree_digest(
@@ -134,6 +220,8 @@ def _verify_snapshot() -> None:
     print(f"payload files: {file_count}")
     print(f"payload bytes: {total_bytes}")
     print(f"payload tree sha256: {digest}")
+    if "ignored_payload_file_count" in manifest:
+        print(f"ignored payload files: {int(manifest['ignored_payload_file_count'])}")
 
 
 def main() -> None:
@@ -186,6 +274,7 @@ def main() -> None:
         )
         _safe_extract(archive, tree)
 
+        ignored_count, ignore_rules_sha256 = _remove_ignored_payload(tree)
         digest, file_count, total_bytes, payload_files = _tree_digest(tree)
         (tree / "SOURCE_COMMIT").write_text(commit + "\n", encoding="ascii")
         manifest = {
@@ -196,6 +285,9 @@ def main() -> None:
             "payload_bytes": total_bytes,
             "payload_tree_sha256": digest,
             "payload_files": payload_files,
+            "ignore_files": [path.relative_to(REPO).as_posix() for path in IGNORE_FILES],
+            "ignore_rules_sha256": ignore_rules_sha256,
+            "ignored_payload_file_count": ignored_count,
         }
         (tree / "SNAPSHOT_MANIFEST.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -214,6 +306,7 @@ def main() -> None:
     print(f"payload files: {file_count}")
     print(f"payload bytes: {total_bytes}")
     print(f"payload tree sha256: {digest}")
+    print(f"ignored payload files: {ignored_count}")
 
 
 if __name__ == "__main__":

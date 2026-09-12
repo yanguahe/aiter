@@ -455,8 +455,9 @@ my_code/moe_gemm1_act1_optimized/repo_snapshot/
 ```
 
 The snapshot was produced by `sync_head_repo_snapshot.py` with `git archive`
-from the pinned commit below, so later HEAD changes and uncommitted changes in
-the shared top-level `aiter/` working tree cannot enter a benchmark. It contains:
+from the pinned commit below, then filtered by the repository `.gitignore`
+followed by `my_code/.gitignore`. Later HEAD changes, uncommitted changes, and
+ignored artifacts cannot enter a benchmark. It contains:
 
 - the complete tracked `aiter/` Python package, including configs and FlyDSL
   kernels;
@@ -467,9 +468,11 @@ Snapshot identity:
 
 ```text
 source commit       = 23c2caaafa5f1c6e6d5d9f756980fe004af4202c
-payload files       = 1855
-payload bytes       = 32368502
-payload tree SHA256 = a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a
+payload files       = 1854
+payload bytes       = 32173710
+payload tree SHA256 = 6cc4af3f44c057532d26926be67095f59047ff938d5ec23579844a333225aa9f
+ignored files       = 1
+ignore rules SHA256 = ccaeeb108ed3c692d46901ac58270ea12006e30c215304f2f9116638b09d54d5
 ```
 
 Recreate the existing pinned snapshot:

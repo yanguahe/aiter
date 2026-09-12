@@ -28,10 +28,12 @@ in progress.
   accepts the persistent physical `grid=(16,16,1)` with `cluster=(4,4,1)`.
 - `benchmark_persistent.sh`: one-command, same-machine e2e comparison of
   double-LDS, persistent, and persistent-overlap.
-- `sync_head_repo_snapshot.py`: copies the complete tracked `aiter/` package,
-  `csrc/` JIT sources, and the grouped-MoE e2e test from one committed revision
-  into `repo_snapshot/`, with an aggregate tree digest and source commit
-  manifest. An existing snapshot remains pinned unless `--commit` is given.
+- `sync_head_repo_snapshot.py`: copies the tracked `aiter/` package, `csrc/`
+  JIT sources, and the grouped-MoE e2e test from one committed revision after
+  applying the repository `.gitignore` followed by `my_code/.gitignore`.
+  The filtered payload is stored in `repo_snapshot/` with an aggregate tree
+  digest and source commit manifest. An existing snapshot remains pinned unless
+  `--commit` is given.
 - `repo_snapshot/`: self-contained pinned-commit repository dependencies used
   by both history scripts. No Python source under the top-level `aiter/` or
   `op_tests/` trees is imported by these benchmark runs. Snapshot verification
@@ -69,9 +71,10 @@ python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py --verify
 python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
 ```
 
-The first command verifies the pinned snapshot without reading Git. The second
-recreates the same pinned commit recorded in `SOURCE_COMMIT`; it must run on the
-host or local checkout, where Git is available. Only an explicit
+The snapshot `--verify` command checks the pinned payload without reading Git.
+The following snapshot command recreates the same pinned commit recorded in
+`SOURCE_COMMIT`; it must run on the host or local checkout, where Git is
+available. Only an explicit
 `--commit <revision>` changes the pinned revision. Benchmark commands run inside
 the `hyg_fyd1` container and never run Git.
 

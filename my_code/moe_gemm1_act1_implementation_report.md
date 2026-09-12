@@ -1017,7 +1017,7 @@ my_code/moe_gemm1_act1_optimized/repo_snapshot/
 my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
 ```
 
-快照通过 `git archive` 从固定 commit 生成，不会复制未提交的 working-tree 修改，也不会因为其他 agent 推进 HEAD 而自动变化。为覆盖 Python import、动态 import、配置查询以及 cold-cache JIT，快照包含：
+快照通过 `git archive` 从固定 commit 生成，不会复制未提交的 working-tree 修改，也不会因为其他 agent 推进 HEAD 而自动变化。归档解包后依次应用仓库根目录 `.gitignore` 和 `my_code/.gitignore`；后者的否定规则可以覆盖前者，因此 `!*.att`、`!*.log` 仍会保留，而 `*.png`、`*.db`、`*.out` 等忽略项不会写入 snapshot 或 manifest。为覆盖 Python import、动态 import、配置查询以及 cold-cache JIT，快照包含：
 
 ```text
 repo_snapshot/aiter/
@@ -1029,9 +1029,11 @@ repo_snapshot/op_tests/test_flydsl_grouped_gemm_gfx1250.py
 
 ```text
 source commit       = 23c2caaafa5f1c6e6d5d9f756980fe004af4202c
-payload files       = 1855
-payload bytes       = 32368502
-payload tree SHA256 = a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a
+payload files       = 1854
+payload bytes       = 32173710
+payload tree SHA256 = 6cc4af3f44c057532d26926be67095f59047ff938d5ec23579844a333225aa9f
+ignored files       = 1
+ignore rules SHA256 = ccaeeb108ed3c692d46901ac58270ea12006e30c215304f2f9116638b09d54d5
 ```
 
 生成和验证命令：

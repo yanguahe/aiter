@@ -1,7 +1,13 @@
 {
-  "payload_bytes": 32187447,
+  "ignore_files": [
+    ".gitignore",
+    "my_code/.gitignore"
+  ],
+  "ignore_rules_sha256": "ccaeeb108ed3c692d46901ac58270ea12006e30c215304f2f9116638b09d54d5",
+  "ignored_payload_file_count": 1,
+  "payload_bytes": 32173710,
   "payload_digest_format": "canonical-lf-v1",
-  "payload_file_count": 1855,
+  "payload_file_count": 1854,
   "payload_files": [
     "aiter/__init__.py",
     "aiter/aot/__init__.py",
@@ -1447,7 +1453,6 @@
     "csrc/include/norm.h",
     "csrc/include/opus/README.md",
     "csrc/include/opus/hip_minimal.hpp",
-    "csrc/include/opus/logo.png",
     "csrc/include/opus/opus.hpp",
     "csrc/include/opus/rmsnorm_opus_kernel.hpp",
     "csrc/include/pa.h",
@@ -1859,7 +1864,7 @@
     "csrc/pybind/vsa_sparse_attention_pybind.cu",
     "op_tests/test_flydsl_grouped_gemm_gfx1250.py"
   ],
-  "payload_tree_sha256": "1d8de7f79ea70b81c1ca84123fc40b2b6f08ee8f7e91c7aedaa9ae8d778a12a1",
+  "payload_tree_sha256": "6cc4af3f44c057532d26926be67095f59047ff938d5ec23579844a333225aa9f",
   "source_commit": "23c2caaafa5f1c6e6d5d9f756980fe004af4202c",
   "source_paths": [
     "aiter",
