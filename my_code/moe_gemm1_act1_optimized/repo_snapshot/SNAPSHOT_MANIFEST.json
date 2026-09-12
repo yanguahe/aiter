@@ -1,5 +1,6 @@
 {
-  "payload_bytes": 32368502,
+  "payload_bytes": 32187447,
+  "payload_digest_format": "canonical-lf-v1",
   "payload_file_count": 1855,
   "payload_files": [
     "aiter/__init__.py",
@@ -1858,7 +1859,7 @@
     "csrc/pybind/vsa_sparse_attention_pybind.cu",
     "op_tests/test_flydsl_grouped_gemm_gfx1250.py"
   ],
-  "payload_tree_sha256": "a61c24f2fc70e096b3605134b11ab5669a95b4762dda8a5bf66316882f96044a",
+  "payload_tree_sha256": "1d8de7f79ea70b81c1ca84123fc40b2b6f08ee8f7e91c7aedaa9ae8d778a12a1",
   "source_commit": "23c2caaafa5f1c6e6d5d9f756980fe004af4202c",
   "source_paths": [
     "aiter",

@@ -28,6 +28,8 @@ SOURCE_PATHS = (
     "op_tests/test_flydsl_grouped_gemm_gfx1250.py",
 )
 SNAPSHOT_METADATA = {"SOURCE_COMMIT", "SNAPSHOT_MANIFEST.json"}
+PAYLOAD_DIGEST_FORMAT = "canonical-lf-v1"
+GIT_BINARY_PROBE_BYTES = 8000
 
 
 def _run_git(*args: str) -> str:
@@ -51,6 +53,13 @@ def _safe_extract(archive: Path, destination: Path) -> None:
             ):
                 raise RuntimeError(f"unsafe archive member: {member.name!r}")
         handle.extractall(destination)
+
+
+def _canonical_payload(payload: bytes) -> bytes:
+    """Match Git's text checkout semantics without requiring Git at verify time."""
+    if b"\0" in payload[:GIT_BINARY_PROBE_BYTES]:
+        return payload
+    return payload.replace(b"\r\n", b"\n")
 
 
 def _tree_digest(
@@ -77,7 +86,7 @@ def _tree_digest(
         if not path.is_file():
             raise RuntimeError(f"snapshot payload file is missing: {relative_text}")
         relative = relative_text.encode("utf-8")
-        payload = path.read_bytes()
+        payload = _canonical_payload(path.read_bytes())
         digest.update(len(relative).to_bytes(4, "little"))
         digest.update(relative)
         digest.update(len(payload).to_bytes(8, "little"))
@@ -94,6 +103,12 @@ def _verify_snapshot() -> None:
     if not manifest_path.is_file() or not source_commit_path.is_file():
         raise SystemExit(f"snapshot metadata is missing under {SNAPSHOT}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    digest_format = manifest.get("payload_digest_format")
+    if digest_format != PAYLOAD_DIGEST_FORMAT:
+        raise SystemExit(
+            "snapshot manifest uses unsupported payload digest format: "
+            f"{digest_format!r}; expected {PAYLOAD_DIGEST_FORMAT!r}"
+        )
     payload_files = [str(item) for item in manifest.get("payload_files", ())]
     if not payload_files:
         raise SystemExit("snapshot manifest has no payload_files list")
@@ -176,6 +191,7 @@ def main() -> None:
         manifest = {
             "source_commit": commit,
             "source_paths": list(SOURCE_PATHS),
+            "payload_digest_format": PAYLOAD_DIGEST_FORMAT,
             "payload_file_count": file_count,
             "payload_bytes": total_bytes,
             "payload_tree_sha256": digest,

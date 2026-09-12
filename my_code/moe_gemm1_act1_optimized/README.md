@@ -34,7 +34,9 @@ in progress.
   manifest. An existing snapshot remains pinned unless `--commit` is given.
 - `repo_snapshot/`: self-contained pinned-commit repository dependencies used
   by both history scripts. No Python source under the top-level `aiter/` or
-  `op_tests/` trees is imported by these benchmark runs.
+  `op_tests/` trees is imported by these benchmark runs. Snapshot verification
+  uses a canonical-LF digest so the same payload verifies after Windows and
+  Linux Git checkouts.
 - `gemm_batch_isa_runner.py`, `gemm_isa_runner.py`: isolated copies of the
   validated runner used for testing older remote checkouts.
 - `compare_asm_variants.py`, `run_e2e_candidate.py`: standalone comparison and
@@ -104,6 +106,9 @@ bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
 
 This is also the script's default mode when no mode argument is supplied.
 Standalone timing is retained only as a faster diagnostic and tuning signal.
+The `ROUNDS`, `RUN_VERIFY`, and `RUN_ATT` aliases from `reproduce_compare.sh`
+are accepted in addition to the `AITER_HISTORY_*` names. For e2e modes, an
+explicit `ROUNDS` value also controls the number of alternating-order e2e rounds.
 
 The stable historical chain remains these three assembly versions:
 
