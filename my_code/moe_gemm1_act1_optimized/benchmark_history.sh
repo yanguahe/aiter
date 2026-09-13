@@ -60,7 +60,8 @@ Selection and control:
 
 Stable cases:
   baseline, optimized_v1, double_lds, persistent, persistent_overlap,
-  persistent_overlap_pad8
+  persistent_overlap_pad8, persistent_overlap_pad8_prefetch_stage0,
+  persistent_overlap_pad8_prefetch_stage01
 EOF
 }
 
@@ -126,6 +127,8 @@ OPT_DOUBLE_LDS="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_dou
 OPT_PERSISTENT="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s"
 OPT_PERSISTENT_OVERLAP="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s"
 OPT_PERSISTENT_OVERLAP_PAD8="$HERE/persistent_overlap_output_pad8.s"
+OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0="$HERE/persistent_overlap_pad8_prefetch_stage0.s"
+OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE01="$HERE/persistent_overlap_pad8_prefetch_stage01.s"
 CANDIDATE=""
 
 if [[ -n "${AITER_HISTORY_CANDIDATE:-}" ]]; then
@@ -155,6 +158,8 @@ declare -a CASES=(
   persistent
   persistent_overlap
   persistent_overlap_pad8
+  persistent_overlap_pad8_prefetch_stage0
+  persistent_overlap_pad8_prefetch_stage01
 )
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
 if [[ -n "$requested_cases" ]]; then
@@ -171,6 +176,8 @@ case_source() {
     persistent) printf '%s\n' "$OPT_PERSISTENT" ;;
     persistent_overlap) printf '%s\n' "$OPT_PERSISTENT_OVERLAP" ;;
     persistent_overlap_pad8) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8" ;;
+    persistent_overlap_pad8_prefetch_stage0) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0" ;;
+    persistent_overlap_pad8_prefetch_stage01) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE01" ;;
     candidate)
       if [[ -z "$CANDIDATE" ]]; then
         echo "case 'candidate' requires AITER_HISTORY_CANDIDATE" >&2
@@ -193,6 +200,8 @@ case_label() {
     persistent) printf '%s\n' 'persistent/full-drain' ;;
     persistent_overlap) printf '%s\n' 'persistent/output-drain-overlap' ;;
     persistent_overlap_pad8) printf '%s\n' 'persistent/overlap/output-pad8' ;;
+    persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 'persistent/overlap/prefetch-stage0' ;;
+    persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 'persistent/overlap/prefetch-stage0+1' ;;
     candidate) printf '%s\n' 'candidate' ;;
     *) return 2 ;;
   esac
@@ -201,7 +210,7 @@ case_label() {
 case_grid_x() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_X:-}" ;;
     *) return 2 ;;
   esac
@@ -210,7 +219,7 @@ case_grid_x() {
 case_grid_y() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_Y:-}" ;;
     *) return 2 ;;
   esac

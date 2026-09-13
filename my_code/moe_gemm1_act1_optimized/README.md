@@ -24,6 +24,18 @@ in progress.
 - `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`:
   final candidate; overlaps the prior output TDM drain with independent setup
   for the next logical tile and waits before the first input TDM/LDS reuse.
+- `persistent_overlap_output_pad8.s`: retained output-pad8 persistent-overlap
+  baseline.
+- `persistent_overlap_pad8_prefetch_stage0.s`: version A; prefetches the next
+  persistent task's K256 stage 0 before the current SiLU epilogue.
+- `persistent_overlap_pad8_prefetch_stage01.s`: version B; prefetches the next
+  persistent task's K256 stages 0 and 1.
+- `build_next_task_prefetch_variants.py`: deterministic generator for the two
+  next-task input-prefetch variants.
+- `audit_next_task_prefetch_variants.py`: validates their ABI, resource usage,
+  barrier/TDM structure, and requested in-flight window.
+- `PERSISTENT_NEXT_TASK_INPUT_PREFETCH_RESULTS.md`: implementation details,
+  correctness evidence, performance data, ATT cycles, and reproduction commands.
 - `moe_gemm1_cpp_launcher_persistent.cpp`: isolated C++ launch adapter that
   accepts the persistent physical `grid=(16,16,1)` with `cluster=(4,4,1)`.
 - `benchmark_persistent.sh`: one-command, same-machine e2e comparison of
@@ -45,8 +57,9 @@ in progress.
   full grouped-MoE e2e adapters used by all selected ISA versions.
 - `test_optimized.sh`: quick correctness and formal benchmark commands.
 - `benchmark_history.sh`: unified same-machine comparison driver for the complete
-  five-version chain: safe baseline, optimized v1, double-output-LDS, persistent
-  full-drain, and persistent output-drain-overlap. Standalone, MoE e2e, and ATT
+  eight-version chain: safe baseline, optimized v1, double-output-LDS, persistent
+  full-drain, persistent output-drain-overlap, output-pad8, and the two next-task prefetch
+  variants. Standalone, MoE e2e, and ATT
   modes share one case table and grid definition. Each run records environment,
   SHA256, raw logs, TSV data, and Markdown summaries under `history_runs/`.
 - `benchmark_att_history.sh`: compatibility wrapper for
@@ -67,6 +80,9 @@ in progress.
 ```bash
 python my_code/moe_gemm1_act1_optimized/build_optimized.py
 python my_code/moe_gemm1_act1_optimized/build_persistent_variants.py
+python my_code/moe_gemm1_act1_optimized/build_persistent_overlap_pad8.py
+python my_code/moe_gemm1_act1_optimized/build_next_task_prefetch_variants.py
+python my_code/moe_gemm1_act1_optimized/audit_next_task_prefetch_variants.py
 python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py --verify
 python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
 ```
@@ -119,20 +135,22 @@ The stable historical chain remains these three assembly versions:
 2. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`
 3. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`
 
-The persistent experiment adds two generated descendants of item 3:
+The persistent experiment adds five generated descendants of item 3:
 
 4. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s`
 5. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`
+6. `persistent_overlap_output_pad8.s`
+7. `persistent_overlap_pad8_prefetch_stage0.s`
+8. `persistent_overlap_pad8_prefetch_stage01.s`
 
 `benchmark_history.sh e2e-const0`, `e2e-random`, and `e2e-both` now run all
-five versions automatically. The first three use the standard production grid;
-the two persistent variants use `grid=(16,16,1)`. Standalone modes retain the
-original three-version interleaved comparison and then run a second interleaved
-comparison for the two persistent-grid variants.
+eight versions automatically. The first three use the standard production grid;
+the four persistent variants use `grid=(16,16,1)`. Standalone modes group cases
+by launch geometry before running each interleaved comparison.
 
 The unified driver's ATT launch helper selects the standard grid for the first
-three versions and `grid=(16,16,1)` for both persistent versions. Use
-`att-validate` to compile and launch all five code objects once without
+three versions and `grid=(16,16,1)` for all persistent versions. Use
+`att-validate` to compile and launch all eight code objects once without
 collecting rocprof ATT data; this validates the version list, launch geometry,
 snapshot imports, and kernel correctness path before a long trace run. The old
 `benchmark_att_history.sh` command remains available as a compatibility wrapper,

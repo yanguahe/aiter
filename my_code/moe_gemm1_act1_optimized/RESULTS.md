@@ -523,3 +523,50 @@ Validation summaries:
 my_code/moe_gemm1_act1_optimized/history_runs/20260910_085520_snapshot_e2e_const0_summary.log
 my_code/moe_gemm1_act1_optimized/history_runs/20260910_090211_att_validate_summary.log
 ```
+
+## Next-task stage-0/stage-1 input prefetch
+
+Two additional persistent variants were implemented from the design in
+`PERSISTENT_NEXT_TASK_INPUT_PREFETCH_ANALYSIS.md`:
+
+- `persistent_overlap_pad8_prefetch_stage0.s`
+- `persistent_overlap_pad8_prefetch_stage01.s`
+
+Both issue the next task's non-overlapping input TDM before the current task's
+SiLU epilogue. The early path also advances the complete expert-local scalar
+state, allowing the following task to skip its duplicated kernarg loads,
+logical-task mapping, expert rebasing, tensor-base setup, and stage descriptor
+construction. Version A reaches a maximum intended cross-task TDM window of
+three operations per wave; version B reaches four, below the experiment's
+requested limit of ten.
+
+The final d01-3 three-round, alternating-order e2e const0 comparison was:
+
+| Version | GEMM1 median | Gain vs output-pad8 | Fused MoE median | Correctness |
+|---|---:|---:|---:|---|
+| output-pad8 | `539.985 us` | baseline | `1778.07 us` | `logits_diff=0`, `rel_l2=0` |
+| prefetch stage 0 | `521.380 us` | `3.45%` | `1762.62 us` | `logits_diff=0`, `rel_l2=0` |
+| prefetch stage 0+1 | `519.797 us` | `3.74%` | `1762.78 us` | `logits_diff=0`, `rel_l2=0` |
+
+The final random e2e smoke run passed for both variants with
+`logits_diff=3.3980e-06`, `rel_l2=2.6069e-03`, and output SHA256
+`aed13e2b195f531e4dc52010fa2b643b2d59d7ce18ab56c479cc599658f41db2`.
+
+The final three-round random comparison measured:
+
+| Version | GEMM1 median | Gain vs output-pad8 | Fused MoE median |
+|---|---:|---:|---:|
+| output-pad8 | `660.315 us` | baseline | `2085.91 us` |
+| prefetch stage 0 | `640.804 us` | `2.95%` | `2080.21 us` |
+| prefetch stage 0+1 | `635.564 us` | `3.75%` | `2062.96 us` |
+
+Final ATT captures measured these maximum shader-cycle spans:
+
+| Version | Max GFXCLK cycles | Change vs output-pad8 |
+|---|---:|---:|
+| output-pad8 | `1,089,335` | baseline |
+| prefetch stage 0 | `1,062,649` | `-2.45%` |
+| prefetch stage 0+1 | `1,074,879` | `-1.33%` |
+
+Full implementation notes and commands are in
+`PERSISTENT_NEXT_TASK_INPUT_PREFETCH_RESULTS.md`.
