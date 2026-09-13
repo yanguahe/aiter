@@ -456,8 +456,9 @@ my_code/moe_gemm1_act1_optimized/repo_snapshot/
 
 The snapshot was produced by `sync_head_repo_snapshot.py` with `git archive`
 from the pinned commit below, then filtered by the repository `.gitignore`
-followed by `my_code/.gitignore`. Later HEAD changes, uncommitted changes, and
-ignored artifacts cannot enter a benchmark. It contains:
+followed by `my_code/.gitignore`. The script finally installs the explicit
+experiment-owned `repo_overlay/`; unrelated later HEAD changes, uncommitted
+changes, and ignored artifacts cannot enter a benchmark. It contains:
 
 - the complete tracked `aiter/` Python package, including configs and FlyDSL
   kernels;
@@ -469,11 +470,21 @@ Snapshot identity:
 ```text
 source commit       = 23c2caaafa5f1c6e6d5d9f756980fe004af4202c
 payload files       = 1854
-payload bytes       = 32173710
-payload tree SHA256 = 6cc4af3f44c057532d26926be67095f59047ff938d5ec23579844a333225aa9f
+payload bytes       = 32190284
+payload tree SHA256 = d2e5c94ee4ee98997c72e3138ef26d0ac08aa5af18ef2acb9fa33d7a2cb129d6
 ignored files       = 1
 ignore rules SHA256 = ccaeeb108ed3c692d46901ac58270ea12006e30c215304f2f9116638b09d54d5
 ```
+
+The overlay records clean Git content from commit
+`7014df32103c935e08597e67a240c5b060dafd48` for:
+
+- `aiter/ops/flydsl/kernels/moe_fused_route_quant_scatter.py`;
+- `aiter/ops/flydsl/moe_kernels.py`.
+
+It adds the three-kernel GEMM1 A/ScaleA producer while retaining the original
+route-indexed producer. Recreating the pinned snapshot reapplies this overlay
+and reproduces the digest above.
 
 Recreate the existing pinned snapshot:
 
@@ -574,3 +585,82 @@ Final ATT captures measured these maximum shader-cycle spans:
 
 Full implementation notes and commands are in
 `PERSISTENT_NEXT_TASK_INPUT_PREFETCH_RESULTS.md`.
+
+## Three-kernel GEMM1 A/ScaleA producer in the isolated e2e pipeline
+
+`benchmark_history.sh` now defaults to:
+
+```text
+AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=three_kernel
+```
+
+This producer launches:
+
+1. `moe_quant_token_fd7168_fp4_pk8`;
+2. `moe_invert_route_rows_tk6`;
+3. `moe_scatter_preshuffled_a_fd7168_r32_lds`.
+
+The historical route-indexed producer remains available with:
+
+```bash
+AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=legacy \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+```
+
+On d01-3, the default three-kernel path passed the full 20-iteration random e2e
+run:
+
+```text
+logits_diff=3.3980e-06
+rel_l2=2.6069e-03
+moe_output_hash128=1556fc617347e2dabc9cff19dbfd822b
+ref_output_hash128=1a5d22911ba167160b4f2c12092a5193
+pass=True
+```
+
+The profiler reported the three named kernels at `29.7 us`, `6.3 us`, and
+`80.2 us`, respectively, in that run. The legacy switch also passed random e2e
+with the same precision metrics and output/reference hashes, and its profiler
+showed the retained
+`moe_fused_quant_preshuffle_routeks_fd7168_r8_fp4_pk8_srctk6_noKS_apre`
+kernel.
+
+A subsequent default-producer const0 run was exact and measured:
+
+```text
+logits_diff=0
+rel_l2=0
+moe_output_hash128=21291d9023c8af8a6324fe20f346a967
+ref_output_hash128=21291d9023c8af8a6324fe20f346a967
+GEMM1=535.273 us
+fused MoE=1418.91 us
+```
+
+Run directories:
+
+```text
+my_code/moe_gemm1_act1_optimized/history_runs/
+  heliosr-1b114-d01-3_20260913T091808Z_e2e-random/  # three_kernel
+  heliosr-1b114-d01-3_20260913T091849Z_e2e-random/  # legacy
+  heliosr-1b114-d01-3_20260913T095137Z_e2e-const0/  # three_kernel
+```
+
+## Stage-0-prefetch thread trace
+
+Three new d01-3 ATT captures measured a median steady-task cost of
+`27,298.1 cycles`. Explicit wait stall is `7,109.0 cycles/task` (`26.04%`):
+
+| wait group | cycles/task | task share |
+|---|---:|---:|
+| `s_barrier_wait` | 4,034.7 | 14.78% |
+| `s_wait_dscnt` | 1,670.0 | 6.12% |
+| `s_wait_tensorcnt` | 1,390.1 | 5.09% |
+
+The dominant static wait is `0xad14 s_barrier_wait 0xfffd`, with
+`1,972.2 stall cycles/task` (`7.23%`). The next implementation plan prioritizes
+delayed stage-1 cross-task prefetch, descriptor work before the cluster wait,
+and rescheduling the two largest LDS-read drains.
+
+Detailed methodology, resource accounting, trace paths, and acceptance gates
+are in
+`PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_THREAD_TRACE_OPTIMIZATION_PLAN.md`.

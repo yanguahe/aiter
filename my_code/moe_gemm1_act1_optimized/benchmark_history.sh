@@ -29,6 +29,7 @@ RUN_REFERENCE_COMMAND="${AITER_HISTORY_RUN_REFERENCE_COMMAND:-1}"
 RUN_ATT="${AITER_HISTORY_RUN_ATT:-${LEGACY_RUN_ATT:-0}}"
 ATT_VALIDATE_ONLY="${AITER_ATT_VALIDATE_ONLY:-0}"
 VERIFY_SNAPSHOT="${AITER_HISTORY_VERIFY_SNAPSHOT:-1}"
+A_PRESHUFFLE_PRODUCER="${AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER:-three_kernel}"
 CLANG="${AITER_GFX1250_CLANG:-/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang}"
 CLANG_RUNTIME_LIB="${AITER_GFX1250_CLANG_RUNTIME_LIB:-/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib}"
 SYMBOL=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
@@ -57,6 +58,8 @@ Selection and control:
   AITER_HISTORY_CANDIDATE_GRID_Y=16
   AITER_HISTORY_RUN_ATT=1             Append ATT to another mode
   AITER_ATT_VALIDATE_ONLY=1           Validate ATT launches without tracing
+  AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=three_kernel|legacy
+                                       Select GEMM1 A/ScaleA producer (default: three_kernel)
 
 Stable cases:
   baseline, optimized_v1, double_lds, persistent, persistent_overlap,
@@ -119,6 +122,13 @@ require_flag AITER_HISTORY_RUN_REFERENCE_COMMAND "$RUN_REFERENCE_COMMAND"
 require_flag AITER_HISTORY_RUN_ATT "$RUN_ATT"
 require_flag AITER_ATT_VALIDATE_ONLY "$ATT_VALIDATE_ONLY"
 require_flag AITER_HISTORY_VERIFY_SNAPSHOT "$VERIFY_SNAPSHOT"
+case "$A_PRESHUFFLE_PRODUCER" in
+  three_kernel|legacy) ;;
+  *)
+    echo "AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER must be three_kernel or legacy, got '$A_PRESHUFFLE_PRODUCER'" >&2
+    exit 2
+    ;;
+esac
 
 BASELINE="$HERE/baseline_act1_independent.s"
 OPT_V1="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s"
@@ -304,6 +314,8 @@ declare -a COMMON_ENV=(
   AITER_LOG_MORE=1
   AITER_MOE_EXPERT_BALANCE=true
   AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1
+  AITER_FLYDSL_GEMM1_A_PRESHUFFLE=1
+  AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER="$A_PRESHUFFLE_PRODUCER"
 )
 
 declare -a TEST_SHAPE=(
@@ -357,6 +369,7 @@ print_context() {
   echo "run_reference_command=$RUN_REFERENCE_COMMAND"
   echo "run_att=$RUN_ATT"
   echo "att_validate_only=$ATT_VALIDATE_ONLY"
+  echo "gemm1_a_preshuffle_producer=$A_PRESHUFFLE_PRODUCER"
   echo "execution=inside-container"
   echo
   echo "case table:"

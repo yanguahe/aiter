@@ -44,9 +44,14 @@ in progress.
 - `sync_head_repo_snapshot.py`: copies the tracked `aiter/` package, `csrc/`
   JIT sources, and the grouped-MoE e2e test from one committed revision after
   applying the repository `.gitignore` followed by `my_code/.gitignore`.
-  The filtered payload is stored in `repo_snapshot/` with an aggregate tree
-  digest and source commit manifest. An existing snapshot remains pinned unless
+  It then installs the experiment-owned files from `repo_overlay/`. The final
+  payload is stored in `repo_snapshot/` with an aggregate tree digest, pinned
+  base commit, and overlay manifest. An existing snapshot remains pinned unless
   `--commit` is given.
+- `repo_overlay/`: reproducible overlay for the three-kernel GEMM1 A/ScaleA
+  preshuffle producer. It contains the two Python files copied from clean Git
+  content and retains the legacy route-indexed producer behind an environment
+  switch.
 - `repo_snapshot/`: self-contained pinned-commit repository dependencies used
   by both history scripts. No Python source under the top-level `aiter/` or
   `op_tests/` trees is imported by these benchmark runs. Snapshot verification
@@ -73,6 +78,12 @@ in progress.
   exact-kernel instruction/occupancy cycle ceilings for the const0 workload.
 - `PERSISTENT_MODE_THREAD_TRACE_ANALYSIS.md`: d01-3 all-SIMD ATT phase/stall
   breakdown and persistent-mode performance upper-bound estimate.
+- `analyze_stage0_thread_trace.py`: analyzes repeated stage-0-prefetch ATT
+  captures through the pinned `trace_segment_cycles.py` parser.
+- `persistent_overlap_pad8_prefetch_stage0_thread_trace_metrics.json`: compact
+  machine-readable results from the three d01-3 captures.
+- `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_THREAD_TRACE_OPTIMIZATION_PLAN.md`:
+  measured wait/latency/resource breakdown and the next implementation plan.
 - `att_const0_analyze.log`: preserved `--ana-att` output used by the cycle-limit
   analysis.
 
@@ -90,8 +101,8 @@ python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
 
 The snapshot `--verify` command checks the pinned payload without reading Git.
 The following snapshot command recreates the same pinned commit recorded in
-`SOURCE_COMMIT`; it must run on the host or local checkout, where Git is
-available. Only an explicit
+`SOURCE_COMMIT`, then reapplies `repo_overlay/`; it must run on the host or local
+checkout, where Git is available. Only an explicit
 `--commit <revision>` changes the pinned revision. Benchmark commands run inside
 the `hyg_fyd1` container and never run Git.
 
@@ -163,6 +174,23 @@ is not a hash of the GEMM1 intermediate tensor. `ref_output_hash128` hashes the
 corresponding PyTorch reference output after it has been converted to the same
 dtype as the tested output. The benchmark TSV and Markdown summary retain both
 values in separate columns.
+
+The GEMM1 A/ScaleA preshuffle producer is selected with:
+
+```bash
+# Default: quantize tokens once, invert route rows, then LDS-transpose/scatter.
+AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=three_kernel \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+
+# Retained historical route-indexed producer.
+AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=legacy \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+```
+
+`three_kernel` is the default. Its profiler names are
+`moe_quant_token_fd7168_fp4_pk8`, `moe_invert_route_rows_tk6`, and
+`moe_scatter_preshuffled_a_fd7168_r32_lds`. Both producer choices feed the same
+ABpreShuffle interface consumed by every assembly GEMM1 case.
 
 The unified driver's ATT launch helper selects the standard grid for the first
 three versions and `grid=(16,16,1)` for all benchmarked persistent versions. Use

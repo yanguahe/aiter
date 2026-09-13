@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Create the self-contained repository snapshot used by the benchmarks.
 
-Only committed Git content that is not excluded by the repository and my_code
-gitignore rules is copied. By default an existing snapshot remains pinned to
-its recorded commit; use --commit HEAD to intentionally refresh it. This avoids
-reading uncommitted source changes or silently following a moving branch.
+The base tree contains only committed Git content that is not excluded by the
+repository and my_code gitignore rules. The experiment-owned files in
+``repo_overlay`` are then copied over the base tree. By default an existing
+snapshot remains pinned to its recorded commit; use --commit HEAD to
+intentionally refresh the base. This avoids reading unrelated uncommitted source
+changes or silently following a moving branch.
 """
 
 from __future__ import annotations
@@ -23,11 +25,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 SNAPSHOT = HERE / "repo_snapshot"
+OVERLAY = HERE / "repo_overlay"
 SOURCE_PATHS = (
     "aiter",
     "csrc",
     "op_tests/test_flydsl_grouped_gemm_gfx1250.py",
 )
+OVERLAY_PATHS = (
+    "aiter/ops/flydsl/kernels/moe_fused_route_quant_scatter.py",
+    "aiter/ops/flydsl/moe_kernels.py",
+)
+OVERLAY_SOURCE_COMMIT = "7014df32103c935e08597e67a240c5b060dafd48"
 SNAPSHOT_METADATA = {"SOURCE_COMMIT", "SNAPSHOT_MANIFEST.json"}
 IGNORE_FILES = (REPO / ".gitignore", REPO / "my_code" / ".gitignore")
 PAYLOAD_DIGEST_FORMAT = "canonical-lf-v1"
@@ -146,6 +154,28 @@ def _remove_ignored_payload(root: Path) -> tuple[int, str]:
         if not any(directory.iterdir()):
             directory.rmdir()
     return len(ignored), rules_digest
+
+
+def _apply_local_overlays(root: Path) -> list[dict[str, str]]:
+    """Install the experiment-owned producer overlay after extracting Git."""
+
+    records = []
+    for relative in OVERLAY_PATHS:
+        source = OVERLAY / relative
+        destination = root / relative
+        if not source.is_file():
+            raise RuntimeError(f"snapshot overlay is missing: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        records.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(
+                    _canonical_payload(source.read_bytes())
+                ).hexdigest(),
+            }
+        )
+    return records
 
 
 def _tree_digest(
@@ -275,8 +305,11 @@ def main() -> None:
         _safe_extract(archive, tree)
 
         ignored_count, ignore_rules_sha256 = _remove_ignored_payload(tree)
+        overlay_records = _apply_local_overlays(tree)
         digest, file_count, total_bytes, payload_files = _tree_digest(tree)
-        (tree / "SOURCE_COMMIT").write_text(commit + "\n", encoding="ascii")
+        (tree / "SOURCE_COMMIT").write_text(
+            commit + "\n", encoding="ascii", newline="\n"
+        )
         manifest = {
             "source_commit": commit,
             "source_paths": list(SOURCE_PATHS),
@@ -288,6 +321,11 @@ def main() -> None:
             "ignore_files": [path.relative_to(REPO).as_posix() for path in IGNORE_FILES],
             "ignore_rules_sha256": ignore_rules_sha256,
             "ignored_payload_file_count": ignored_count,
+            "local_overlays": {
+                "source_commit": OVERLAY_SOURCE_COMMIT,
+                "source_root": str(OVERLAY.relative_to(REPO).as_posix()),
+                "files": overlay_records,
+            },
         }
         (tree / "SNAPSHOT_MANIFEST.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
