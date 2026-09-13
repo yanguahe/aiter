@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import runpy
 import sys
 from pathlib import Path
 
@@ -18,6 +17,75 @@ DEFAULT_ISA = (
     / "moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s"
 )
 TEST = SNAPSHOT_ROOT / "op_tests" / "test_flydsl_grouped_gemm_gfx1250.py"
+
+
+def _replace_exact(source: str, old: str, new: str) -> str:
+    count = source.count(old)
+    if count != 1:
+        raise RuntimeError(
+            f"expected exactly one snapshot source match, got {count}: {old!r}"
+        )
+    return source.replace(old, new, 1)
+
+
+def _patched_test_source() -> str:
+    """Patch hash reporting in memory without modifying the pinned snapshot."""
+
+    source = TEST.read_text(encoding="utf-8")
+    source = _replace_exact(
+        source,
+        "def _tensor_sha256(tensor: torch.Tensor) -> str:\n"
+        "    raw = (\n"
+        "        tensor.detach()\n"
+        "        .contiguous()\n"
+        "        .view(torch.uint8)\n"
+        "        .cpu()\n"
+        "        .numpy()\n"
+        "        .tobytes()\n"
+        "    )\n"
+        "    return hashlib.sha256(raw).hexdigest()",
+        "def _tensor_hash128(tensor: torch.Tensor) -> str:\n"
+        "    raw = (\n"
+        "        tensor.detach()\n"
+        "        .contiguous()\n"
+        "        .view(torch.uint8)\n"
+        "        .cpu()\n"
+        "        .numpy()\n"
+        "        .tobytes()\n"
+        "    )\n"
+        "    return hashlib.blake2b(raw, digest_size=16).hexdigest()",
+    )
+    source = _replace_exact(
+        source,
+        "    output_sha256 = _tensor_sha256(out)",
+        "    moe_output_hash128 = _tensor_hash128(out)\n"
+        "    ref_output_hash128 = _tensor_hash128(ref)",
+    )
+    source = _replace_exact(
+        source,
+        '    print(f"[sanity {tag}] output_sha256={output_sha256}", flush=True)',
+        '    print(f"[sanity {tag}] moe_output_hash128={moe_output_hash128}", flush=True)\n'
+        '    print(f"[sanity {tag}] ref_output_hash128={ref_output_hash128}", flush=True)',
+    )
+    source = _replace_exact(
+        source,
+        '        "output_sha256": output_sha256,',
+        '        "moe_output_hash128": moe_output_hash128,\n'
+        '        "ref_output_hash128": ref_output_hash128,',
+    )
+    if "output_sha256" in source or "_tensor_sha256" in source:
+        raise RuntimeError("legacy SHA256 output hash remains in patched test source")
+    return source
+
+
+def _run_patched_test() -> None:
+    namespace = {
+        "__name__": "__main__",
+        "__file__": str(TEST),
+        "__package__": None,
+        "__cached__": None,
+    }
+    exec(compile(_patched_test_source(), str(TEST), "exec"), namespace)
 
 
 def _audit_repository_module_paths() -> None:
@@ -201,7 +269,7 @@ def main() -> None:
             flush=True,
         )
     sys.argv = [str(TEST), *test_args]
-    runpy.run_path(str(TEST), run_name="__main__")
+    _run_patched_test()
     _audit_repository_module_paths()
 
 

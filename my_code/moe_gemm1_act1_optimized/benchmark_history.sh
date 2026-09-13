@@ -60,8 +60,7 @@ Selection and control:
 
 Stable cases:
   baseline, optimized_v1, double_lds, persistent, persistent_overlap,
-  persistent_overlap_pad8, persistent_overlap_pad8_prefetch_stage0,
-  persistent_overlap_pad8_prefetch_stage01
+  persistent_overlap_pad8, persistent_overlap_pad8_prefetch_stage0
 EOF
 }
 
@@ -128,7 +127,6 @@ OPT_PERSISTENT="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_per
 OPT_PERSISTENT_OVERLAP="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s"
 OPT_PERSISTENT_OVERLAP_PAD8="$HERE/persistent_overlap_output_pad8.s"
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0="$HERE/persistent_overlap_pad8_prefetch_stage0.s"
-OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE01="$HERE/persistent_overlap_pad8_prefetch_stage01.s"
 CANDIDATE=""
 
 if [[ -n "${AITER_HISTORY_CANDIDATE:-}" ]]; then
@@ -159,7 +157,6 @@ declare -a CASES=(
   persistent_overlap
   persistent_overlap_pad8
   persistent_overlap_pad8_prefetch_stage0
-  persistent_overlap_pad8_prefetch_stage01
 )
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
 if [[ -n "$requested_cases" ]]; then
@@ -177,7 +174,6 @@ case_source() {
     persistent_overlap) printf '%s\n' "$OPT_PERSISTENT_OVERLAP" ;;
     persistent_overlap_pad8) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8" ;;
     persistent_overlap_pad8_prefetch_stage0) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0" ;;
-    persistent_overlap_pad8_prefetch_stage01) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE01" ;;
     candidate)
       if [[ -z "$CANDIDATE" ]]; then
         echo "case 'candidate' requires AITER_HISTORY_CANDIDATE" >&2
@@ -201,7 +197,6 @@ case_label() {
     persistent_overlap) printf '%s\n' 'persistent/output-drain-overlap' ;;
     persistent_overlap_pad8) printf '%s\n' 'persistent/overlap/output-pad8' ;;
     persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 'persistent/overlap/prefetch-stage0' ;;
-    persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 'persistent/overlap/prefetch-stage0+1' ;;
     candidate) printf '%s\n' 'candidate' ;;
     *) return 2 ;;
   esac
@@ -210,7 +205,7 @@ case_label() {
 case_grid_x() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_X:-}" ;;
     *) return 2 ;;
   esac
@@ -219,7 +214,7 @@ case_grid_x() {
 case_grid_y() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage01) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_Y:-}" ;;
     *) return 2 ;;
   esac
@@ -333,7 +328,7 @@ standalone_tsv="$out_dir/standalone.tsv"
 e2e_tsv="$out_dir/e2e.tsv"
 att_tsv="$out_dir/att.tsv"
 printf 'data\tgrid\tcase\treturn_code\tmedian_us\tmean_us\tmin_us\tmax_us\tsamples\n' >"$standalone_tsv"
-printf 'data\tround\torder\tcase\tgrid\treturn_code\tgemm1_us\tgemm2_us\tmoe_e2e_us\tlogits_diff\trel_l2\tpass\toutput_sha256\n' >"$e2e_tsv"
+printf 'data\tround\torder\tcase\tgrid\treturn_code\tgemm1_us\tgemm2_us\tmoe_e2e_us\tlogits_diff\trel_l2\tpass\tmoe_output_hash128\tref_output_hash128\n' >"$e2e_tsv"
 printf 'case\tgrid\treturn_code\tcode_object\tisa_sha256\n' >"$att_tsv"
 
 snapshot_commit() {
@@ -519,7 +514,7 @@ run_e2e_case() {
   local isa grid_x grid_y grid_label log rc
   local -a const_args=()
   local -a grid_args=()
-  local gemm1 gemm2 moe_e2e logits rel pass hash
+  local gemm1 gemm2 moe_e2e logits rel pass moe_hash ref_hash
 
   isa="$(case_source "$name")"
   grid_x="$(case_grid_x "$name")"
@@ -550,13 +545,16 @@ run_e2e_case() {
   logits="$(sed -n 's/.*logits_diff=\([^ ]*\).*/\1/p' "$log" | tail -1)"
   rel="$(sed -n 's/.*rel_l2=\([^ ]*\).*/\1/p' "$log" | tail -1)"
   pass="$(awk -F'|' '/^\|[[:space:]]*a4w4/{gsub(/[[:space:]]/,"",$12); print $12}' "$log" | tail -1)"
-  hash="$(sed -n 's/.*output_sha256=//p' "$log" | tail -1)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  moe_hash="$(sed -n 's/.*moe_output_hash128=//p' "$log" | tail -1)"
+  ref_hash="$(sed -n 's/.*ref_output_hash128=//p' "$log" | tail -1)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$data" "$round" "$order" "$name" "$grid_label" "$rc" \
     "${gemm1:-NA}" "${gemm2:-NA}" "${moe_e2e:-NA}" \
-    "${logits:-NA}" "${rel:-NA}" "${pass:-NA}" "${hash:-NA}" \
+    "${logits:-NA}" "${rel:-NA}" "${pass:-NA}" \
+    "${moe_hash:-NA}" "${ref_hash:-NA}" \
     >>"$e2e_tsv"
-  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" || "$pass" != True ]]; then
+  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" || "$pass" != True \
+        || ! "$moe_hash" =~ ^[0-9a-f]{32}$ || ! "$ref_hash" =~ ^[0-9a-f]{32}$ ]]; then
     echo "e2e correctness, benchmark, or timing extraction failed for $name" >&2
     exit 4
   fi
@@ -690,9 +688,12 @@ if e2e_rows:
         out.write(
             "| data | case | grid | GEMM1 samples (us) | GEMM1 median us | "
             "GEMM1 vs first case | MoE e2e samples (us) | MoE e2e median us | "
-            "MoE e2e vs first case | pass | logits_diff | rel_l2 | hash |\n"
+            "MoE e2e vs first case | pass | logits_diff | rel_l2 | "
+            "MoE output hash128 | ref output hash128 |\n"
         )
-        out.write("|---|---|---|---|---:|---:|---|---:|---:|:---:|---:|---:|---|\n")
+        out.write(
+            "|---|---|---|---|---:|---:|---|---:|---:|:---:|---:|---:|---|---|\n"
+        )
         for data in data_order:
             present = [name for name in case_order if (data, name) in grouped]
             first = present[0]
@@ -718,7 +719,8 @@ if e2e_rows:
                     f"{', '.join(f'{value:.2f}' for value in moe_e2e)} | "
                     f"{e2e_med:.2f} | {e2e_gain:+.2f}% | {last['pass']} | "
                     f"{last['logits_diff']} | {last['rel_l2']} | "
-                    f"{last['output_sha256']} |\n"
+                    f"{last['moe_output_hash128']} | "
+                    f"{last['ref_output_hash128']} |\n"
                 )
 
 summary_parts = [

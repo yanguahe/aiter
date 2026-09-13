@@ -532,6 +532,10 @@ Two additional persistent variants were implemented from the design in
 - `persistent_overlap_pad8_prefetch_stage0.s`
 - `persistent_overlap_pad8_prefetch_stage01.s`
 
+The stage-0+1 version is retained for historical comparison but has been
+removed from `benchmark_history.sh`'s named/default case set. It remains
+available through the generic `AITER_HISTORY_CANDIDATE` path.
+
 Both issue the next task's non-overlapping input TDM before the current task's
 SiLU epilogue. The early path also advances the complete expert-local scalar
 state, allowing the following task to skip its duplicated kernarg loads,

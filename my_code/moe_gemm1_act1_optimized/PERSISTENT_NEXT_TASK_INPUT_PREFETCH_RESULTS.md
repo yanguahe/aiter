@@ -84,8 +84,9 @@ allocated.
 - `audit_next_task_prefetch_variants.py`: static ABI/resource/TDM/barrier audit.
 - `persistent_overlap_pad8_prefetch_stage0.s`: version A.
 - `persistent_overlap_pad8_prefetch_stage01.s`: version B.
-- `benchmark_history.sh`: both versions are selectable in standalone, e2e, and
-  ATT modes.
+- `benchmark_history.sh`: version A is a named benchmark case. Version B is
+  retained as an experimental artifact and can be run through the generic
+  `AITER_HISTORY_CANDIDATE` path.
 
 ## Reproduction commands
 
@@ -118,7 +119,9 @@ Run full MoE random correctness with each assembly replacing the FlyDSL GEMM1
 inside the normal e2e flow:
 
 ```bash
-AITER_HISTORY_CASE_LIST=persistent_overlap_pad8_prefetch_stage0,persistent_overlap_pad8_prefetch_stage01 \
+AITER_HISTORY_CASE_LIST=persistent_overlap_pad8_prefetch_stage0,candidate \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/persistent_overlap_pad8_prefetch_stage01.s \
+AITER_HISTORY_CANDIDATE_GRID_X=16 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 ROUNDS=1 RUN_VERIFY=1 RUN_ATT=0 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
 ```
@@ -127,7 +130,9 @@ Run the canonical same-machine const0 performance comparison against the
 output-pad8 baseline:
 
 ```bash
-AITER_HISTORY_CASE_LIST=persistent_overlap_pad8,persistent_overlap_pad8_prefetch_stage0,persistent_overlap_pad8_prefetch_stage01 \
+AITER_HISTORY_CASE_LIST=persistent_overlap_pad8,persistent_overlap_pad8_prefetch_stage0,candidate \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/persistent_overlap_pad8_prefetch_stage01.s \
+AITER_HISTORY_CANDIDATE_GRID_X=16 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 ROUNDS=3 RUN_VERIFY=1 RUN_ATT=0 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
 ```
@@ -135,7 +140,9 @@ bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
 Run the corresponding random-data comparison:
 
 ```bash
-AITER_HISTORY_CASE_LIST=persistent_overlap_pad8,persistent_overlap_pad8_prefetch_stage0,persistent_overlap_pad8_prefetch_stage01 \
+AITER_HISTORY_CASE_LIST=persistent_overlap_pad8,persistent_overlap_pad8_prefetch_stage0,candidate \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/persistent_overlap_pad8_prefetch_stage01.s \
+AITER_HISTORY_CANDIDATE_GRID_X=16 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 ROUNDS=3 RUN_VERIFY=1 RUN_ATT=0 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
 ```
@@ -143,7 +150,9 @@ bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
 Collect and analyze ATT for the two new variants:
 
 ```bash
-AITER_HISTORY_CASE_LIST=persistent_overlap_pad8_prefetch_stage0,persistent_overlap_pad8_prefetch_stage01 \
+AITER_HISTORY_CASE_LIST=persistent_overlap_pad8_prefetch_stage0,candidate \
+AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/persistent_overlap_pad8_prefetch_stage01.s \
+AITER_HISTORY_CANDIDATE_GRID_X=16 AITER_HISTORY_CANDIDATE_GRID_Y=16 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
 ```
 

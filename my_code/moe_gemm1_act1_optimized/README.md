@@ -29,7 +29,8 @@ in progress.
 - `persistent_overlap_pad8_prefetch_stage0.s`: version A; prefetches the next
   persistent task's K256 stage 0 before the current SiLU epilogue.
 - `persistent_overlap_pad8_prefetch_stage01.s`: version B; prefetches the next
-  persistent task's K256 stages 0 and 1.
+  persistent task's K256 stages 0 and 1. It is retained as an experimental
+  artifact but is no longer part of `benchmark_history.sh`'s named case set.
 - `build_next_task_prefetch_variants.py`: deterministic generator for the two
   next-task input-prefetch variants.
 - `audit_next_task_prefetch_variants.py`: validates their ABI, resource usage,
@@ -57,9 +58,9 @@ in progress.
   full grouped-MoE e2e adapters used by all selected ISA versions.
 - `test_optimized.sh`: quick correctness and formal benchmark commands.
 - `benchmark_history.sh`: unified same-machine comparison driver for the complete
-  eight-version chain: safe baseline, optimized v1, double-output-LDS, persistent
-  full-drain, persistent output-drain-overlap, output-pad8, and the two next-task prefetch
-  variants. Standalone, MoE e2e, and ATT
+  seven-version benchmark chain: safe baseline, optimized v1, double-output-LDS,
+  persistent full-drain, persistent output-drain-overlap, output-pad8, and the
+  stage-0 next-task prefetch variant. Standalone, MoE e2e, and ATT
   modes share one case table and grid definition. Each run records environment,
   SHA256, raw logs, TSV data, and Markdown summaries under `history_runs/`.
 - `benchmark_att_history.sh`: compatibility wrapper for
@@ -143,14 +144,29 @@ The persistent experiment adds five generated descendants of item 3:
 7. `persistent_overlap_pad8_prefetch_stage0.s`
 8. `persistent_overlap_pad8_prefetch_stage01.s`
 
-`benchmark_history.sh e2e-const0`, `e2e-random`, and `e2e-both` now run all
-eight versions automatically. The first three use the standard production grid;
-the four persistent variants use `grid=(16,16,1)`. Standalone modes group cases
-by launch geometry before running each interleaved comparison.
+`benchmark_history.sh e2e-const0`, `e2e-random`, and `e2e-both` now run seven
+versions automatically. The first three use the standard production grid; the
+four benchmarked persistent variants use `grid=(16,16,1)`. The retained
+stage-0+1 kernel can still be measured through `AITER_HISTORY_CANDIDATE`.
+Standalone modes group cases by launch geometry before running each interleaved
+comparison.
+
+The e2e runner reports two BLAKE2b-128 digests after correctness evaluation:
+
+```text
+[sanity ...] moe_output_hash128=<32 hexadecimal characters>
+[sanity ...] ref_output_hash128=<32 hexadecimal characters>
+```
+
+`moe_output_hash128` hashes the final fused MoE output returned by the test. It
+is not a hash of the GEMM1 intermediate tensor. `ref_output_hash128` hashes the
+corresponding PyTorch reference output after it has been converted to the same
+dtype as the tested output. The benchmark TSV and Markdown summary retain both
+values in separate columns.
 
 The unified driver's ATT launch helper selects the standard grid for the first
-three versions and `grid=(16,16,1)` for all persistent versions. Use
-`att-validate` to compile and launch all eight code objects once without
+three versions and `grid=(16,16,1)` for all benchmarked persistent versions. Use
+`att-validate` to compile and launch all seven named code objects once without
 collecting rocprof ATT data; this validates the version list, launch geometry,
 snapshot imports, and kernel correctness path before a long trace run. The old
 `benchmark_att_history.sh` command remains available as a compatibility wrapper,
