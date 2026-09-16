@@ -223,7 +223,7 @@ declare -a CASES=(
   persistent_overlap_pad8_prefetch_stage0_b64_clear
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt
-  ab4_scale_half_tdm_full_setup_wait6
+  # ab4_scale_half_tdm_full_setup_wait6
 )
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
 if [[ -n "$requested_cases" ]]; then
