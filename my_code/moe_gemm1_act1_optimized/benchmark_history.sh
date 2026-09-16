@@ -42,6 +42,10 @@ A_PRESHUFFLE_PRODUCER="${AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER:-three_kernel}
 CLANG="${AITER_GFX1250_CLANG:-/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang}"
 CLANG_RUNTIME_LIB="${AITER_GFX1250_CLANG_RUNTIME_LIB:-/opt/venv/lib/python3.12/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/lib}"
 SYMBOL=moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1
+# Fixed E96/T16384/topk6 balanced workload used by compare_asm_variants.py.
+# These match the effective-metric accounting in the pinned e2e test.
+STANDALONE_GEMM1_EXECUTED_FLOPS=8658654068736
+STANDALONE_GEMM1_EFFECTIVE_RW_BYTES=3224371200
 
 usage() {
   cat <<'EOF'
@@ -410,8 +414,8 @@ run_log="$out_dir/run.log"
 standalone_tsv="$out_dir/standalone.tsv"
 e2e_tsv="$out_dir/e2e.tsv"
 att_tsv="$out_dir/att.tsv"
-printf 'data\tgrid\tcase\treturn_code\tmedian_us\tmean_us\tmin_us\tmax_us\tsamples\n' >"$standalone_tsv"
-printf 'data\tround\torder\tcase\tgrid\treturn_code\tgemm1_us\tgemm2_us\tmoe_e2e_us\tlogits_diff\trel_l2\tpass\tmoe_output_hash128\tref_output_hash128\n' >"$e2e_tsv"
+printf 'data\tgrid\tcase\treturn_code\tmedian_us\tmean_us\tmin_us\tmax_us\teffective_rw_tbps\texecuted_tflops\tsamples\n' >"$standalone_tsv"
+printf 'data\tround\torder\tcase\tgrid\treturn_code\tgemm1_us\tgemm2_us\tmoe_e2e_us\tlogits_diff\trel_l2\tpass\tmoe_output_hash128\tref_output_hash128\tgemm1_tflops\tgemm1_rw_tbps\tgemm2_tflops\tgemm2_rw_tbps\n' >"$e2e_tsv"
 printf 'case\tgrid\treturn_code\tcode_object\tisa_sha256\n' >"$att_tsv"
 
 snapshot_commit() {
@@ -494,6 +498,7 @@ run_standalone_group() {
   local -a grid_args=()
   local -a validation_args=(--validation-repeats "$VALIDATION_REPEATS")
   local name source_path grid_x grid_y log rc line median mean min max samples stem
+  local effective_rw_tbps executed_tflops
   local expected_validations actual_validations
 
   for name in "${group_cases[@]}"; do
@@ -555,8 +560,22 @@ run_standalone_group() {
       echo "failed to extract standalone timing for $name" >&2
       exit 4
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$data" "$grid_key" "$name" "$rc" "$median" "$mean" "$min" "$max" "$samples" \
+    IFS=$'\t' read -r effective_rw_tbps executed_tflops < <(
+      python3 - "$median" "$STANDALONE_GEMM1_EFFECTIVE_RW_BYTES" \
+        "$STANDALONE_GEMM1_EXECUTED_FLOPS" <<'PY'
+import sys
+
+latency_us = float(sys.argv[1])
+effective_rw_bytes = float(sys.argv[2])
+executed_flops = float(sys.argv[3])
+tbps = effective_rw_bytes / latency_us / 1e6 / (1.024**4)
+tflops = executed_flops / latency_us / 1e6
+print(f"{tbps:.6f}\t{tflops:.6f}")
+PY
+    )
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$data" "$grid_key" "$name" "$rc" "$median" "$mean" "$min" "$max" \
+      "$effective_rw_tbps" "$executed_tflops" "$samples" \
       >>"$standalone_tsv"
   done
 }
@@ -595,6 +614,57 @@ run_standalone() {
   done
 }
 
+extract_precision_metrics() {
+  local log="$1"
+  python3 - "$log" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+
+def cells(line: str) -> list[str]:
+    return [part.strip() for part in line.strip().strip("|").split("|")]
+
+
+lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+header = None
+row = None
+for line in lines:
+    if not line.lstrip().startswith("|"):
+        continue
+    values = cells(line)
+    if "data_format" in values and "gemm1 executed" in values:
+        header = values
+        continue
+    if header and values and values[0] == "a4w4" and len(values) == len(header):
+        row = dict(zip(header, values))
+
+if row is None:
+    print("NA\tNA\tNA\tNA\tNA\tNA\tNA")
+    raise SystemExit(0)
+
+
+def rate(column: str, unit: str) -> str:
+    match = re.search(r"([0-9][0-9,]*(?:\.[0-9]+)?)\s+" + re.escape(unit), row[column])
+    return "NA" if match is None else match.group(1).replace(",", "")
+
+
+print(
+    "\t".join(
+        (
+            row["logits_diff"],
+            row["rel_l2"],
+            row["pass"],
+            rate("gemm1 executed", "TFLOP/s"),
+            rate("gemm1 effective R+W", "TB/s"),
+            rate("gemm2 executed", "TFLOP/s"),
+            rate("gemm2 effective R+W", "TB/s"),
+        )
+    )
+)
+PY
+}
+
 run_e2e_case() {
   local data="$1"
   local round="$2"
@@ -604,6 +674,7 @@ run_e2e_case() {
   local -a const_args=()
   local -a grid_args=()
   local gemm1 gemm2 moe_e2e logits rel pass moe_hash ref_hash
+  local gemm1_tflops gemm1_rw gemm2_tflops gemm2_rw
 
   isa="$(case_source "$name")"
   grid_x="$(case_grid_x "$name")"
@@ -631,18 +702,21 @@ run_e2e_case() {
   gemm1="$(sed -n 's/.*gemm1: device_time_avg=\([0-9.]*\) us.*/\1/p' "$log" | tail -1)"
   gemm2="$(sed -n 's/.*gemm2: device_time_avg=\([0-9.]*\) us.*/\1/p' "$log" | tail -1)"
   moe_e2e="$(sed -n 's/.*fused_moe end-to-end us = \([0-9.]*\).*/\1/p' "$log" | tail -1)"
-  logits="$(sed -n 's/.*logits_diff=\([^ ]*\).*/\1/p' "$log" | tail -1)"
-  rel="$(sed -n 's/.*rel_l2=\([^ ]*\).*/\1/p' "$log" | tail -1)"
-  pass="$(awk -F'|' '/^\|[[:space:]]*a4w4/{gsub(/[[:space:]]/,"",$12); print $12}' "$log" | tail -1)"
   moe_hash="$(sed -n 's/.*moe_output_hash128=//p' "$log" | tail -1)"
   ref_hash="$(sed -n 's/.*ref_output_hash128=//p' "$log" | tail -1)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  IFS=$'\t' read -r logits rel pass gemm1_tflops gemm1_rw gemm2_tflops gemm2_rw \
+    < <(extract_precision_metrics "$log")
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$data" "$round" "$order" "$name" "$grid_label" "$rc" \
     "${gemm1:-NA}" "${gemm2:-NA}" "${moe_e2e:-NA}" \
     "${logits:-NA}" "${rel:-NA}" "${pass:-NA}" \
     "${moe_hash:-NA}" "${ref_hash:-NA}" \
+    "${gemm1_tflops:-NA}" "${gemm1_rw:-NA}" \
+    "${gemm2_tflops:-NA}" "${gemm2_rw:-NA}" \
     >>"$e2e_tsv"
-  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" ]]; then
+  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" \
+        || "$gemm1_tflops" == NA || "$gemm1_rw" == NA \
+        || "$gemm2_tflops" == NA || "$gemm2_rw" == NA ]]; then
     echo "e2e launch or timing extraction failed for $name" >&2
     exit 4
   fi
@@ -989,13 +1063,18 @@ with standalone_path.open(newline="", encoding="utf-8") as handle:
     standalone_rows = list(csv.DictReader(handle, delimiter="\t"))
 if standalone_rows:
     with (out_dir / "standalone_summary.md").open("w", encoding="utf-8") as out:
-        out.write("| data | grid | case | median us | mean us | min us | max us | samples |\n")
-        out.write("|---|---|---|---:|---:|---:|---:|---|\n")
+        out.write(
+            "| data | grid | case | median us | mean us | min us | max us | "
+            "GEMM1 effective R+W (TB/s) | GEMM1 executed (TFLOP/s) | samples |\n"
+        )
+        out.write("|---|---|---|---:|---:|---:|---:|---:|---:|---|\n")
         for row in standalone_rows:
             out.write(
                 f"| {row['data']} | {row['grid']} | {row['case']} | "
                 f"{float(row['median_us']):.3f} | {float(row['mean_us']):.3f} | "
                 f"{float(row['min_us']):.3f} | {float(row['max_us']):.3f} | "
+                f"{float(row['effective_rw_tbps']):.3f} | "
+                f"{float(row['executed_tflops']):.1f} | "
                 f"{row['samples']} |\n"
             )
 
@@ -1009,12 +1088,13 @@ if e2e_rows:
     with (out_dir / "e2e_summary.md").open("w", encoding="utf-8") as out:
         out.write(
             "| data | case | grid | GEMM1 samples (us) | GEMM1 median us | "
-            "GEMM1 vs first case | MoE e2e samples (us) | MoE e2e median us | "
-            "MoE e2e vs first case | pass | logits_diff | rel_l2 | "
+            "GEMM1 vs first case | GEMM1 effective R+W (TB/s) | "
+            "GEMM1 executed (TFLOP/s) | MoE e2e samples (us) | "
+            "MoE e2e median us | MoE e2e vs first case | pass | logits_diff | rel_l2 | "
             "MoE output hash128 | ref output hash128 |\n"
         )
         out.write(
-            "|---|---|---|---|---:|---:|---|---:|---:|:---:|---:|---:|---|---|\n"
+            "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|:---:|---:|---:|---|---|\n"
         )
         for data in data_order:
             present = [name for name in case_order if (data, name) in grouped]
@@ -1031,6 +1111,12 @@ if e2e_rows:
                 moe_e2e = [float(row["moe_e2e_us"]) for row in rows]
                 gemm1_med = statistics.median(gemm1)
                 e2e_med = statistics.median(moe_e2e)
+                gemm1_rw = statistics.median(
+                    float(row["gemm1_rw_tbps"]) for row in rows
+                )
+                gemm1_tflops = statistics.median(
+                    float(row["gemm1_tflops"]) for row in rows
+                )
                 gemm1_gain = (first_gemm1 - gemm1_med) / first_gemm1 * 100.0
                 e2e_gain = (first_e2e - e2e_med) / first_e2e * 100.0
                 last = rows[-1]
@@ -1038,6 +1124,7 @@ if e2e_rows:
                     f"| {data} | {name} | {last['grid']} | "
                     f"{', '.join(f'{value:.3f}' for value in gemm1)} | "
                     f"{gemm1_med:.3f} | {gemm1_gain:+.2f}% | "
+                    f"{gemm1_rw:.3f} | {gemm1_tflops:.1f} | "
                     f"{', '.join(f'{value:.2f}' for value in moe_e2e)} | "
                     f"{e2e_med:.2f} | {e2e_gain:+.2f}% | {last['pass']} | "
                     f"{last['logits_diff']} | {last['rel_l2']} | "
