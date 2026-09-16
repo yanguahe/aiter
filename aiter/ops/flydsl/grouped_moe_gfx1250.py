@@ -564,6 +564,13 @@ def _grouped_a8w4_tdm_moe(
     _gemm1_a_preshuffle = _is_fp4 and _as_bool(
         os.environ.get("AITER_FLYDSL_GEMM1_A_PRESHUFFLE"), False
     )
+    # Stage2 consumes expert-specific grouped rows, so it cannot reuse the
+    # stage1 token-once producer.  It can still opt into the same physical
+    # A/ScaleA layout when its quant producer and GEMM2 consumer switch
+    # together.
+    _gemm2_a_preshuffle = _is_fp4 and _as_bool(
+        os.environ.get("AITER_FLYDSL_GEMM2_A_PRESHUFFLE"), False
+    )
     a1_payload, a1_scale = flydsl_moe_fused_quant_preshuffle(
         hidden_states.reshape(1, token_num, model_dim),
         1,
@@ -693,6 +700,10 @@ def _grouped_a8w4_tdm_moe(
             topids_to_rows=topids_to_rows,
             source_topk=0,
             num_valid_routes=_ep_nvr,
+            a_preshuffle=_gemm2_a_preshuffle,
+            m_tile_map=psum,
+            n_experts=E,
+            expert_tile_m=_align_m,
         )
 
     grouped_out = torch.empty((1, contiguous_m, model_dim), dtype=dtype, device=device)
@@ -722,6 +733,7 @@ def _grouped_a8w4_tdm_moe(
         cluster_n=cluster_n,
         waves_per_tensor_tdm=waves_per_tensor_tdm,
         next_stage_prefetch=next_stage_prefetch,
+        a_preshuffle=_gemm2_a_preshuffle,
     )
 
     if kernel_bench_callable is not None:
@@ -824,6 +836,7 @@ def _grouped_a8w4_tdm_moe(
                     cluster_n=cluster_n,
                     waves_per_tensor_tdm=waves_per_tensor_tdm,
                     next_stage_prefetch=next_stage_prefetch,
+                    a_preshuffle=_gemm2_a_preshuffle,
                 ),
             )
         )

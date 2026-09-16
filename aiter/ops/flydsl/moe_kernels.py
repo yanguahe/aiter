@@ -2953,6 +2953,27 @@ def _get_compiled_scatter_preshuffled_a_lds(feat_dim: int):
 
 
 @functools.cache
+def _get_compiled_quant_preshuffled_a_rowgroup(
+    feat_dim: int,
+    n_experts: int,
+    expert_tile_m: int,
+    rows_per_wave: int,
+    prefetch_depth: int,
+):
+    from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
+        build_moe_quant_preshuffled_a_rowgroup_module,
+    )
+
+    return build_moe_quant_preshuffled_a_rowgroup_module(
+        feat_dim=feat_dim,
+        n_experts=n_experts,
+        expert_tile_m=expert_tile_m,
+        rows_per_wave=rows_per_wave,
+        prefetch_depth=prefetch_depth,
+    )
+
+
+@functools.cache
 def _get_compiled_fused_quant_preshuffle_route_ksplit(
     feat_dim: int,
     wmma_rep: int,
@@ -2961,6 +2982,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
     remap_rows: bool = False,
     ksplit: bool = True,
     a_preshuffle: bool = False,
+    compact_output: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_fused_quant_preshuffle_route_ksplit_module,
@@ -2974,6 +2996,7 @@ def _get_compiled_fused_quant_preshuffle_route_ksplit(
         remap_rows=remap_rows,
         ksplit=ksplit,
         a_preshuffle=a_preshuffle,
+        compact_output=compact_output,
     )
 
 
@@ -2995,6 +3018,9 @@ def flydsl_moe_fused_quant_preshuffle(
         torch.Tensor | None
     ) = None,  # (1,) int32; route-branch only: skip routes >= this (EP dead-tail)
     a_preshuffle: bool = False,
+    m_tile_map: torch.Tensor | None = None,
+    n_experts: int = 0,
+    expert_tile_m: int = 0,
 ):
     """Fused grouped quant + e8m0 scale-preshuffle in one kernel pass.
 
@@ -3123,6 +3149,135 @@ def flydsl_moe_fused_quant_preshuffle(
                 ptr_arg(out_payload.view(-1)),
                 ptr_arg(out_scale.view(-1)),
                 ptr_arg(rows_to_tokens),
+                scatter_grid,
+                stream=torch.cuda.current_stream(),
+            )
+            return out_payload, out_scale
+        # Stage2 A-preshuffle path.  Quantize routed grouped rows into compact
+        # row-major route buffers first, then use the existing 32-row LDS
+        # scatter to produce coalesced A/ScaleA preshuffled output.  Directly
+        # writing the final preshuffled layout makes consecutive MX blocks from
+        # one warp land 256B apart and roughly doubles producer time.
+        if (
+            a_preshuffle
+            and quant_mode == "fp4"
+            and source_topk == 0
+            and not remap_rows
+            and feat_dim % 128 == 0
+            and n_rows % 32 == 0
+            and numel * Pb < 0x80000000
+            and numel * Ws < 0x80000000
+            and n_rows * Pb < 0x80000000
+            and n_rows * Ws < 0x80000000
+        ):
+            producer_mode = os.environ.get(
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER", "rowgroup"
+            ).strip().lower()
+            if producer_mode not in ("rowgroup", "three_kernel"):
+                raise ValueError(
+                    "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER must be "
+                    f"'rowgroup' or 'three_kernel', got {producer_mode!r}"
+                )
+            if producer_mode == "rowgroup":
+                rows_per_wave = int(
+                    os.environ.get("AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW", "2")
+                )
+                prefetch_depth = int(
+                    os.environ.get("AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH", "2")
+                )
+                rows_per_block = warps_per_block * rows_per_wave
+                if rows_per_wave not in (1, 2, 4, 8):
+                    raise ValueError(
+                        "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW must be one of "
+                        f"1, 2, 4, 8; got {rows_per_wave}"
+                    )
+                if prefetch_depth not in (1, 2, 4, 8):
+                    raise ValueError(
+                        "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH must be one of "
+                        f"1, 2, 4, 8; got {prefetch_depth}"
+                    )
+                k_blocks_per_wave = 8 // rows_per_wave
+                loop_iters = (feat_dim // 32) // k_blocks_per_wave
+                rowgroup_supported = (
+                    m_tile_map is not None
+                    and n_experts > 0
+                    and expert_tile_m > 0
+                    and feat_dim % 256 == 0
+                    and (feat_dim // 32) % k_blocks_per_wave == 0
+                    and loop_iters % prefetch_depth == 0
+                    and expert_tile_m % rows_per_block == 0
+                    and n_rows * feat_dim * 2 < 0x80000000
+                )
+                if rowgroup_supported:
+                    launch_rowgroup = _get_compiled_quant_preshuffled_a_rowgroup(
+                        feat_dim=feat_dim,
+                        n_experts=int(n_experts),
+                        expert_tile_m=int(expert_tile_m),
+                        rows_per_wave=rows_per_wave,
+                        prefetch_depth=prefetch_depth,
+                    )
+                    rowgroup_grid = (n_rows + rows_per_block - 1) // rows_per_block
+                    launch_rowgroup(
+                        ptr_arg(grouped_in.contiguous().view(-1)),
+                        ptr_arg(out_payload.view(-1)),
+                        ptr_arg(out_scale.view(-1)),
+                        ptr_arg(
+                            m_tile_map.to(device=device, dtype=torch.int32).reshape(-1)
+                        ),
+                        n_rows,
+                        rowgroup_grid,
+                        stream=torch.cuda.current_stream(),
+                    )
+                    return out_payload, out_scale
+
+            use_ksplit = grid_blocks < _ROUTEKS_KSPLIT_GRID_THRESHOLD
+            route_payload = torch.empty(
+                (numel, Pb), dtype=torch.uint8, device=device
+            )
+            route_scale = torch.empty(
+                (numel, Ws), dtype=torch.uint8, device=device
+            )
+            rows_to_routes = torch.full(
+                (n_rows,), -1, dtype=torch.int32, device=device
+            )
+            launch_compact = _get_compiled_fused_quant_preshuffle_route_ksplit(
+                feat_dim=feat_dim,
+                wmma_rep=wmma_rep,
+                quant_mode=quant_mode,
+                source_topk=0,
+                remap_rows=False,
+                ksplit=use_ksplit,
+                a_preshuffle=False,
+                compact_output=True,
+            )
+            launch_compact(
+                ptr_arg(grouped_in.contiguous().view(-1)),
+                ptr_arg(route_payload.view(-1)),
+                ptr_arg(route_scale.view(-1)),
+                ptr_arg(topids_to_rows_i32),
+                ptr_arg(row_starts_i32),
+                route_max_m_arg,
+                numel,
+                ptr_arg(num_valid_routes_i32),
+                grid_blocks,
+                stream=torch.cuda.current_stream(),
+            )
+            invert_grid = (numel + 255) // 256
+            _get_compiled_invert_route_rows(0)(
+                ptr_arg(topids_to_rows_i32),
+                ptr_arg(rows_to_routes),
+                numel,
+                ptr_arg(num_valid_routes_i32),
+                invert_grid,
+                stream=torch.cuda.current_stream(),
+            )
+            scatter_grid = (n_rows + 31) // 32
+            _get_compiled_scatter_preshuffled_a_lds(feat_dim)(
+                ptr_arg(route_payload.view(-1)),
+                ptr_arg(route_scale.view(-1)),
+                ptr_arg(out_payload.view(-1)),
+                ptr_arg(out_scale.view(-1)),
+                ptr_arg(rows_to_routes),
                 scatter_grid,
                 stream=torch.cuda.current_stream(),
             )
