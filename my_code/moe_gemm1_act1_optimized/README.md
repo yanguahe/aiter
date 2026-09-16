@@ -1,242 +1,155 @@
-# Optimized MoE GEMM1 experiment
+# Retained MoE GEMM1 optimization chain
 
-This directory is intentionally self-contained so it does not modify the
-existing assembly kernel, runner, or `aiter/` package files while other work is
-in progress.
+This directory is the self-contained workspace for the gfx1250 E96/T16384
+MoE GEMM1 assembly experiment. It retains the two active cases, the useful
+performance-improving lineage that produced them, and the runner/snapshot files
+required to reproduce MoE e2e and ATT runs.
 
-## Contents
+## Active cases
 
-- `baseline_act1_independent.s`: known-correct independent-load baseline.
-- `build_optimized.py`: restores the original 4x4 multicast descriptors and
-  generates the packed/software-pipelined SiLU epilogue.
-- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`: generated
-  optimized assembly. It deliberately retains the canonical kernel symbol so
-  the isolated runner can use the audited 184-byte ABI/profile.
-- `build_double_output_lds_variant.py`: derives the retained double-output-LDS
-  implementation from the optimized-v1 assembly.
-- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`:
-  retained output-LDS baseline with disjoint output staging.
-- `build_persistent_variants.py`: derives the persistent and cross-task
-  output-drain-overlap variants from the validated double-output-LDS kernel.
-- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s`:
-  cluster-granular persistent task loop with a safe full drain at every task
-  boundary.
-- `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`:
-  final candidate; overlaps the prior output TDM drain with independent setup
-  for the next logical tile and waits before the first input TDM/LDS reuse.
-- `persistent_overlap_output_pad8.s`: retained output-pad8 persistent-overlap
-  baseline.
-- `persistent_overlap_pad8_prefetch_stage0.s`: version A; prefetches the next
-  persistent task's K256 stage 0 before the current SiLU epilogue.
-- `persistent_overlap_pad8_prefetch_stage01.s`: version B; prefetches the next
-  persistent task's K256 stages 0 and 1. It is retained as an experimental
-  artifact but is no longer part of `benchmark_history.sh`'s named case set.
-- `build_next_task_prefetch_variants.py`: deterministic generator for the two
-  next-task input-prefetch variants.
-- `audit_next_task_prefetch_variants.py`: validates their ABI, resource usage,
-  barrier/TDM structure, and requested in-flight window.
-- `PERSISTENT_NEXT_TASK_INPUT_PREFETCH_RESULTS.md`: implementation details,
-  correctness evidence, performance data, ATT cycles, and reproduction commands.
-- `moe_gemm1_cpp_launcher_persistent.cpp`: isolated C++ launch adapter that
-  accepts the persistent physical `grid=(16,16,1)` with `cluster=(4,4,1)`.
-- `benchmark_persistent.sh`: one-command, same-machine e2e comparison of
-  double-LDS, persistent, and persistent-overlap.
-- `sync_head_repo_snapshot.py`: copies the tracked `aiter/` package, `csrc/`
-  JIT sources, and the grouped-MoE e2e test from one committed revision after
-  applying the repository `.gitignore` followed by `my_code/.gitignore`.
-  It then installs the experiment-owned files from `repo_overlay/`. The final
-  payload is stored in `repo_snapshot/` with an aggregate tree digest, pinned
-  base commit, and overlay manifest. An existing snapshot remains pinned unless
-  `--commit` is given.
-- `repo_overlay/`: reproducible overlay for the three-kernel GEMM1 A/ScaleA
-  preshuffle producer. It contains the two Python files copied from clean Git
-  content and retains the legacy route-indexed producer behind an environment
-  switch.
-- `repo_snapshot/`: self-contained pinned-commit repository dependencies used
-  by both history scripts. No Python source under the top-level `aiter/` or
-  `op_tests/` trees is imported by these benchmark runs. Snapshot verification
-  uses a canonical-LF digest so the same payload verifies after Windows and
-  Linux Git checkouts.
-- `gemm_batch_isa_runner.py`, `gemm_isa_runner.py`: isolated copies of the
-  validated runner used for testing older remote checkouts.
-- `compare_asm_variants.py`, `run_e2e_candidate.py`: standalone comparison and
-  full grouped-MoE e2e adapters used by all selected ISA versions.
-- `test_optimized.sh`: quick correctness and formal benchmark commands.
-- `benchmark_history.sh`: unified same-machine comparison driver for the complete
-  seven-version benchmark chain: safe baseline, optimized v1, double-output-LDS,
-  persistent full-drain, persistent output-drain-overlap, output-pad8, and the
-  stage-0 next-task prefetch variant. Standalone, MoE e2e, and ATT
-  modes share one case table and grid definition. Each run records environment,
-  SHA256, raw logs, TSV data, and Markdown summaries under `history_runs/`.
-- `benchmark_att_history.sh`: compatibility wrapper for
-  `benchmark_history.sh att`; it contains no separate version or grid table.
-- `run_att_const0.sh`: collect and analyze one const0 ATT capture with
-  `get_isa_runner_att.sh --ana-att`; trace output stays under this directory.
-- `att_launch_opt.py`: minimal one-launch ATT target that loads the precompiled
-  `act1_opt.co`, avoiding clang/COMGR execution inside rocprof.
-- `HARDWARE_CYCLE_LIMIT.md`: derives the MXFP4 compute, memory/TDM/LDS, and
-  exact-kernel instruction/occupancy cycle ceilings for the const0 workload.
-- `PERSISTENT_MODE_THREAD_TRACE_ANALYSIS.md`: d01-3 all-SIMD ATT phase/stall
-  breakdown and persistent-mode performance upper-bound estimate.
-- `analyze_stage0_thread_trace.py`: analyzes repeated stage-0-prefetch ATT
-  captures through the pinned `trace_segment_cycles.py` parser.
-- `persistent_overlap_pad8_prefetch_stage0_thread_trace_metrics.json`: compact
-  machine-readable results from the three d01-3 captures.
-- `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_THREAD_TRACE_OPTIMIZATION_PLAN.md`:
-  measured wait/latency/resource breakdown and the next implementation plan.
-- `att_const0_analyze.log`: preserved `--ana-att` output used by the cycle-limit
-  analysis.
+### `ab4_scale_half_tdm_full_setup_wait6`
 
-## Regenerate
+```text
+persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_
+ab4_scale_half_tdm_full_setup_loop_wait6.s
+SHA256=02dffd3a7f6ca015a25d52e8a2273c6cd49deed57bde4f0f758c1a97c7c70c06
+```
+
+This is the correctness-qualified resident 2+3, full-setup, wait6 kernel.
+
+### `ab4_no_scale_tdm_wait4`
+
+```text
+persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_
+ab4_no_scale_tdm_full_setup_loop_wait4.s
+SHA256=bcf2675b551551462f9073e2936a25187da031321a9a649a8a88fb5234709393
+```
+
+This is a performance diagnostic. It removes the 56 ScaleA/ScaleB TDM loads
+and retimes `s_wait_tensorcnt 0x6 -> 0x4` and `0x3 -> 0x2`. Const0 happens to
+produce the reference zero output, but this does not establish random-data
+correctness.
+
+## Retained performance lineage
+
+| case | assembly | reason retained |
+|---|---|---|
+| `baseline` | `baseline_act1_independent.s` | safe starting point |
+| `optimized_v1` | `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s` | multicast and packed/pipelined SiLU gain |
+| `double_lds` | `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s` | output-LDS overlap gain |
+| `persistent` | `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s` | structural parent of persistent overlap |
+| `persistent_overlap` | `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s` | overlaps task setup with output drain |
+| `persistent_overlap_pad8` | `persistent_overlap_output_pad8.s` | output LDS bank-padding gain |
+| `persistent_overlap_pad8_prefetch_stage0` | `persistent_overlap_pad8_prefetch_stage0.s` | next-task stage-0 prefetch gain |
+| `persistent_overlap_pad8_prefetch_stage0_b64_clear` | `persistent_overlap_pad8_prefetch_stage0_b64_clear.s` | packed accumulator clear |
+| `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full.s` | full SQC instruction prefetch gain |
+| `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt.s` | accepted all-input `NT_RT` gain |
+| `ab4_scale_half_tdm_full_setup_wait6` | active kernel above | retained correct 2+3 target |
+| `ab4_no_scale_tdm_wait4` | diagnostic above | retained faster const0 endpoint |
+
+Rejected probes, incorrect kernels, slower tail variants, raw historical ATT
+directories, and old per-run logs were removed. Their conclusions remain in
+the retained Markdown reports.
+
+## Rebuild
+
+Run from the repository root:
 
 ```bash
 python my_code/moe_gemm1_act1_optimized/build_optimized.py
+python my_code/moe_gemm1_act1_optimized/build_double_output_lds_variant.py
 python my_code/moe_gemm1_act1_optimized/build_persistent_variants.py
 python my_code/moe_gemm1_act1_optimized/build_persistent_overlap_pad8.py
 python my_code/moe_gemm1_act1_optimized/build_next_task_prefetch_variants.py
-python my_code/moe_gemm1_act1_optimized/audit_next_task_prefetch_variants.py
-python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py --verify
-python my_code/moe_gemm1_act1_optimized/sync_head_repo_snapshot.py
+python my_code/moe_gemm1_act1_optimized/build_b64_accum_clear_variant.py
+python my_code/moe_gemm1_act1_optimized/build_b64_instruction_prefetch_variants.py
+python my_code/moe_gemm1_act1_optimized/build_combined_tdm_hint_variants.py
+python my_code/moe_gemm1_act1_optimized/build_ab_quarter_scale_half_tdm_variant.py
+python my_code/moe_gemm1_act1_optimized/build_no_scale_tdm_wait4_variant.py
 ```
 
-The snapshot `--verify` command checks the pinned payload without reading Git.
-The following snapshot command recreates the same pinned commit recorded in
-`SOURCE_COMMIT`, then reapplies `repo_overlay/`; it must run on the host or local
-checkout, where Git is available. Only an explicit
-`--commit <revision>` changes the pinned revision. Benchmark commands run inside
-the `hyg_fyd1` container and never run Git.
+Each generator checks the expected parent SHA256 before writing its retained
+output. `SHA256SUMS` records the retained artifact hashes.
 
-## Test
+## Benchmark
 
-```bash
-bash my_code/moe_gemm1_act1_optimized/test_optimized.sh quick-random
-bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-random
-bash my_code/moe_gemm1_act1_optimized/test_optimized.sh perf-const0
-bash my_code/moe_gemm1_act1_optimized/run_att_const0.sh
-bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-const0
-bash my_code/moe_gemm1_act1_optimized/benchmark_persistent.sh e2e-random
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att-validate
-```
+The default `benchmark_history.sh` case list contains the correctness-qualified
+retained lineage through `ab4_scale_half_tdm_full_setup_wait6`.
 
-After reconnecting to a machine or after any system reconfiguration, recreate
-the local performance baseline before judging a new candidate:
+Compare the two active cases with const0 input:
 
 ```bash
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-const0
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-random
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
-```
-
-The canonical performance number for this task is the `gemm1` profiler row
-from the full MoE const0 flow:
-
-```bash
+AITER_HISTORY_CASE_LIST=ab4_scale_half_tdm_full_setup_wait6,ab4_no_scale_tdm_wait4 \
+ROUNDS=3 RUN_VERIFY=0 RUN_ATT=0 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
 ```
 
-This is also the script's default mode when no mode argument is supplied.
-Standalone timing is retained only as a faster diagnostic and tuning signal.
-The `ROUNDS`, `RUN_VERIFY`, and `RUN_ATT` aliases from `reproduce_compare.sh`
-are accepted in addition to the `AITER_HISTORY_*` names. For e2e modes, an
-explicit `ROUNDS` value also controls the number of alternating-order e2e rounds.
-
-The stable historical chain remains these three assembly versions:
-
-1. `baseline_act1_independent.s`
-2. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s`
-3. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_double_lds.s`
-
-The persistent experiment adds five generated descendants of item 3:
-
-4. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent.s`
-5. `moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s`
-6. `persistent_overlap_output_pad8.s`
-7. `persistent_overlap_pad8_prefetch_stage0.s`
-8. `persistent_overlap_pad8_prefetch_stage01.s`
-
-`benchmark_history.sh e2e-const0`, `e2e-random`, and `e2e-both` now run seven
-versions automatically. The first three use the standard production grid; the
-four benchmarked persistent variants use `grid=(16,16,1)`. The retained
-stage-0+1 kernel can still be measured through `AITER_HISTORY_CANDIDATE`.
-Standalone modes group cases by launch geometry before running each interleaved
-comparison.
-
-The e2e runner reports two BLAKE2b-128 digests after correctness evaluation:
-
-```text
-[sanity ...] moe_output_hash128=<32 hexadecimal characters>
-[sanity ...] ref_output_hash128=<32 hexadecimal characters>
-```
-
-`moe_output_hash128` hashes the final fused MoE output returned by the test. It
-is not a hash of the GEMM1 intermediate tensor. `ref_output_hash128` hashes the
-corresponding PyTorch reference output after it has been converted to the same
-dtype as the tested output. The benchmark TSV and Markdown summary retain both
-values in separate columns.
-
-The GEMM1 A/ScaleA preshuffle producer is selected with:
+Run only the correct wait6 case with random verification:
 
 ```bash
-# Default: quantize tokens once, invert route rows, then LDS-transpose/scatter.
-AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=three_kernel \
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
-
-# Retained historical route-indexed producer.
-AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=legacy \
+AITER_HISTORY_CASE_LIST=ab4_scale_half_tdm_full_setup_wait6 \
+ROUNDS=3 RUN_VERIFY=1 RUN_ATT=0 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
 ```
 
-`three_kernel` is the default. Its profiler names are
-`moe_quant_token_fd7168_fp4_pk8`, `moe_invert_route_rows_tk6`, and
-`moe_scatter_preshuffled_a_fd7168_r32_lds`. Both producer choices feed the same
-ABpreShuffle interface consumed by every assembly GEMM1 case.
+The canonical timing is the GEMM1 profiler row from the full MoE e2e run.
+Performance numbers are valid only when all GPUs/KFD are idle before and after
+the command. Correctness-only runs do not require an idle GPU.
 
-The unified driver's ATT launch helper selects the standard grid for the first
-three versions and `grid=(16,16,1)` for all benchmarked persistent versions. Use
-`att-validate` to compile and launch all seven named code objects once without
-collecting rocprof ATT data; this validates the version list, launch geometry,
-snapshot imports, and kernel correctness path before a long trace run. The old
-`benchmark_att_history.sh` command remains available as a compatibility wrapper,
-including its `AITER_ATT_VALIDATE_ONLY=1` behavior.
+## ATT
 
-Both scripts export `PYTHONPATH` and `AITER_META_DIR` to `repo_snapshot/`.
-Consequently, all repository Python/config/JIT-source dependencies are read
-from paths below `my_code/moe_gemm1_act1_optimized/`; only system dependencies
-such as PyTorch, FlyDSL, ROCm, clang, and rocprof remain external.
-
-The current acceptance number is the `gemm1` profiler row produced by
-`benchmark_persistent.sh e2e-const0`. The script records the host, current
-clocks, ISA/launcher SHA256 values, exact test output, and all three timings in
-one timestamped `history_runs/` log.
-
-`perf-const0` first reproduces the exact historical command against
-`moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_opt.s` (the version that
-measured `515.603 us` on the earlier b8-3 configuration), then runs the
-same-input interleaved comparison.  Set
-`AITER_HISTORY_RUN_REFERENCE_COMMAND=0` to skip this duplicate measurement.
-
-Add one experimental ISA to the same interleaved comparison without editing
-the script:
+Validate the launch without tracing:
 
 ```bash
-AITER_HISTORY_CANDIDATE=my_code/moe_gemm1_act1_optimized/candidate.s \
-  bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh perf-const0
-```
-
-Collect comparable GFXCLK-cycle traces for the stable history set, or validate
-all ATT launch paths without tracing:
-
-```bash
-bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
+AITER_HISTORY_CASE_LIST=ab4_scale_half_tdm_full_setup_wait6 \
+RUN_VERIFY=1 \
 bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att-validate
 ```
 
-`test_optimized.sh` also accepts `AITER_OPT_ISA=/path/to/candidate.s`, so its
-standalone and e2e modes can be reused without replacing the default kernel.
+Capture all four SIMD owner paths for either active case:
 
-The optimized epilogue swaps each `G0,U0,G1,U1` accumulator group into
-contiguous gate/up pairs, uses `v_pk_mul_f32` and `v_dual_*`, and pipelines the
-next eight-output batch through the current batch's `EXP/RCP` latency slots.
-The first `tensor_store_from_lds` remains followed by `s_wait_tensorcnt 0x0`
-before LDS reuse.
+```bash
+AITER_HISTORY_CASE_LIST=ab4_scale_half_tdm_full_setup_wait6 \
+AITER_ATT_SIMD_LIST=0,1,2,3 \
+RUN_VERIFY=0 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh att
+```
+
+Replace the case name with `ab4_no_scale_tdm_wait4` for the diagnostic.
+
+The ATT path:
+
+- uses the normal MoE e2e launcher;
+- performs an untraced preflight build and launch;
+- selects the known eighth GEMM1 invocation directly;
+- captures SIMD0-3 sequentially with `att_shader_engine_mask=0x1`;
+- isolates clang from rocprof injection;
+- applies a hard timeout to each capture;
+- verifies the `.att`, `code.json`, and wave JSON outputs;
+- repairs output permissions on success or failure.
+
+## Retained reports
+
+- `RESULTS.md`: initial optimized-v1 result.
+- `PERSISTENT_MODE_THREAD_TRACE_ANALYSIS.md`: persistent-mode analysis.
+- `PERSISTENT_OVERLAP_PAD8_PORT_README.md` and
+  `PERSISTENT_OVERLAP_PAD8_PORT_RESULTS.md`: output-pad8 implementation/results.
+- `PERSISTENT_NEXT_TASK_INPUT_PREFETCH_ANALYSIS.md` and
+  `PERSISTENT_NEXT_TASK_INPUT_PREFETCH_RESULTS.md`: stage-0 prefetch design/results.
+- `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_THREAD_TRACE_OPTIMIZATION_PLAN.md`:
+  stage-0 trace-derived plan.
+- `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_PERFORMANCE_HISTORY.md`: accepted and
+  rejected optimization history.
+- `RESIDENT_2PLUS3_FULL_SETUP_WAIT6_THREAD_TRACE_ANALYSIS.md`: wait6 all-SIMD
+  bottleneck analysis.
+- `RESIDENT_2PLUS3_NO_SCALE_TDM_WAIT4_THREAD_TRACE_ANALYSIS.md`: no-Scale-TDM
+  performance and all-SIMD bottleneck analysis.
+
+## Self-contained runtime dependencies
+
+- `repo_snapshot/` contains the pinned repository payload used by the e2e
+  runner.
+- `repo_overlay/` contains the experiment-owned A/ScaleA preshuffle overlay.
+- `sync_head_repo_snapshot.py` verifies or deliberately rebuilds that snapshot.
+- `run_e2e_candidate.py`, `compare_asm_variants.py`, the runner copies, and
+  `moe_gemm1_cpp_launcher_persistent.cpp` provide the isolated launch path.

@@ -10,7 +10,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "persistent_overlap_output_pad8.s"
 OUTPUT_STAGE0 = HERE / "persistent_overlap_pad8_prefetch_stage0.s"
-OUTPUT_STAGE01 = HERE / "persistent_overlap_pad8_prefetch_stage01.s"
 EXPECTED_SOURCE_SHA256 = (
     "039ed787b1f136ee402b76e3bd0b7c9bf439148a0156d0fcca856ed6ab25ccad"
 )
@@ -357,14 +356,13 @@ def main() -> None:
             f"expected {EXPECTED_SOURCE_SHA256}, got {actual}"
         )
     source = SOURCE.read_text(encoding="utf-8")
-    for stage_count, output in ((1, OUTPUT_STAGE0), (2, OUTPUT_STAGE01)):
-        output.write_text(
-            build_variant(source, stage_count=stage_count),
-            encoding="utf-8",
-            newline="\n",
-        )
-        print(f"wrote {output}")
-        print(f"sha256={sha256(output)}")
+    OUTPUT_STAGE0.write_text(
+        build_variant(source, stage_count=1),
+        encoding="utf-8",
+        newline="\n",
+    )
+    print(f"wrote {OUTPUT_STAGE0}")
+    print(f"sha256={sha256(OUTPUT_STAGE0)}")
 
 
 if __name__ == "__main__":

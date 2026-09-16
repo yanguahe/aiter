@@ -9,7 +9,6 @@ REPO_ROOT="${REPO_ROOT:-$(cd -- "$HERE/../.." && pwd)}"
 SNAPSHOT_ROOT="$HERE/repo_snapshot"
 COMPARE="$HERE/compare_asm_variants.py"
 E2E="$HERE/run_e2e_candidate.py"
-ATT_LAUNCH="$HERE/att_launch_opt.py"
 SNAPSHOT_TOOL="$HERE/sync_head_repo_snapshot.py"
 
 LEGACY_ROUNDS="${ROUNDS:-}"
@@ -28,6 +27,16 @@ RUN_VERIFY="${AITER_HISTORY_RUN_VERIFY:-${LEGACY_RUN_VERIFY:-1}}"
 RUN_REFERENCE_COMMAND="${AITER_HISTORY_RUN_REFERENCE_COMMAND:-1}"
 RUN_ATT="${AITER_HISTORY_RUN_ATT:-${LEGACY_RUN_ATT:-0}}"
 ATT_VALIDATE_ONLY="${AITER_ATT_VALIDATE_ONLY:-0}"
+ATT_E2E_ITERS="${AITER_ATT_E2E_ITERS:-2}"
+ATT_KERNEL_ITERATION_RANGE="${AITER_ATT_KERNEL_ITERATION_RANGE:-[8]}"
+ATT_SIMD_LIST="${AITER_ATT_SIMD_LIST:-0,1,2,3}"
+ATT_TARGET_CU="${AITER_ATT_TARGET_CU:-1}"
+ATT_SHADER_ENGINE_MASK="${AITER_ATT_SHADER_ENGINE_MASK:-0x1}"
+ATT_BUFFER_SIZE="${AITER_ATT_BUFFER_SIZE:-0x10000000}"
+ATT_TIMEOUT_SECONDS="${AITER_ATT_TIMEOUT_SECONDS:-300}"
+ATT_DECODER_DIR="${AITER_ATT_LIBRARY_PATH:-/data/yanguahe/code/wk_sp1/decoder_new}"
+ROCPROF_ENV="${AITER_ROCPROF_ENV:-/data/yanguahe/code/wk_sp1/rocprof_env.sh}"
+ROCPROF_BIN_DIR="${AITER_ROCPROF_BIN_DIR:-/data/yanguahe/code/wk_sp1/rocprof-install/bin}"
 VERIFY_SNAPSHOT="${AITER_HISTORY_VERIFY_SNAPSHOT:-1}"
 A_PRESHUFFLE_PRODUCER="${AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER:-three_kernel}"
 CLANG="${AITER_GFX1250_CLANG:-/data/yanguahe/code/wk_sp1/llvm-project/mlir_install/bin/clang}"
@@ -46,7 +55,7 @@ Modes:
   e2e-random     Full MoE random correctness and profiler benchmark
   e2e-const0     Full MoE const0 correctness and profiler benchmark (default)
   e2e-both       Full MoE random and const0 benchmarks
-  att            Compile, capture, and analyze ATT for every selected case
+  att            Preflight and capture/decode ATT for every selected case
   att-validate   Compile and launch every ATT code object without tracing
   list           Print the selected case table without running a GPU workload
 
@@ -58,12 +67,24 @@ Selection and control:
   AITER_HISTORY_CANDIDATE_GRID_Y=16
   AITER_HISTORY_RUN_ATT=1             Append ATT to another mode
   AITER_ATT_VALIDATE_ONLY=1           Validate ATT launches without tracing
+  AITER_ATT_E2E_ITERS=2               MoE e2e iterations used by ATT (default: 2)
+  AITER_ATT_KERNEL_ITERATION_RANGE='[8]'
+                                       Directly select the known GEMM1 invocation
+  AITER_ATT_SIMD_LIST=0,1,2,3         Capture SIMDs sequentially
+  AITER_ATT_TIMEOUT_SECONDS=300       Hard timeout for each capture
   AITER_FLYDSL_GEMM1_A_PRESHUFFLE_PRODUCER=three_kernel|legacy
                                        Select GEMM1 A/ScaleA producer (default: three_kernel)
 
 Stable cases:
   baseline, optimized_v1, double_lds, persistent, persistent_overlap,
-  persistent_overlap_pad8, persistent_overlap_pad8_prefetch_stage0
+  persistent_overlap_pad8, persistent_overlap_pad8_prefetch_stage0,
+  persistent_overlap_pad8_prefetch_stage0_b64_clear,
+  persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full,
+  persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt,
+  ab4_scale_half_tdm_full_setup_wait6
+
+Experimental selectable cases (not run by default):
+  ab4_no_scale_tdm_wait4
 EOF
 }
 
@@ -83,6 +104,9 @@ case "$MODE" in
     exit 2
     ;;
 esac
+if [[ "$MODE" == att-validate ]]; then
+  ATT_VALIDATE_ONLY=1
+fi
 
 require_positive_integer() {
   local name="$1"
@@ -122,6 +146,30 @@ require_flag AITER_HISTORY_RUN_REFERENCE_COMMAND "$RUN_REFERENCE_COMMAND"
 require_flag AITER_HISTORY_RUN_ATT "$RUN_ATT"
 require_flag AITER_ATT_VALIDATE_ONLY "$ATT_VALIDATE_ONLY"
 require_flag AITER_HISTORY_VERIFY_SNAPSHOT "$VERIFY_SNAPSHOT"
+require_positive_integer AITER_ATT_E2E_ITERS "$ATT_E2E_ITERS"
+require_nonnegative_integer AITER_ATT_TARGET_CU "$ATT_TARGET_CU"
+require_positive_integer AITER_ATT_TIMEOUT_SECONDS "$ATT_TIMEOUT_SECONDS"
+if [[ ! "$ATT_KERNEL_ITERATION_RANGE" =~ ^\[[0-9]+([:-][0-9]+)?\]$ ]]; then
+  echo "AITER_ATT_KERNEL_ITERATION_RANGE must look like [8], [8:8], or [8-8], got '$ATT_KERNEL_ITERATION_RANGE'" >&2
+  exit 2
+fi
+if [[ ! "$ATT_SHADER_ENGINE_MASK" =~ ^0x[0-9A-Fa-f]+$ ]]; then
+  echo "AITER_ATT_SHADER_ENGINE_MASK must be hexadecimal, got '$ATT_SHADER_ENGINE_MASK'" >&2
+  exit 2
+fi
+if [[ ! "$ATT_BUFFER_SIZE" =~ ^0x[0-9A-Fa-f]+$ ]]; then
+  echo "AITER_ATT_BUFFER_SIZE must be hexadecimal, got '$ATT_BUFFER_SIZE'" >&2
+  exit 2
+fi
+IFS=',' read -r -a ATT_SIMDS <<<"$ATT_SIMD_LIST"
+declare -A seen_att_simd=()
+for att_simd in "${ATT_SIMDS[@]}"; do
+  if [[ ! "$att_simd" =~ ^[0-3]$ || -n "${seen_att_simd[$att_simd]:-}" ]]; then
+    echo "AITER_ATT_SIMD_LIST must contain unique comma-separated SIMD IDs 0..3, got '$ATT_SIMD_LIST'" >&2
+    exit 2
+  fi
+  seen_att_simd[$att_simd]=1
+done
 case "$A_PRESHUFFLE_PRODUCER" in
   three_kernel|legacy) ;;
   *)
@@ -137,6 +185,11 @@ OPT_PERSISTENT="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_per
 OPT_PERSISTENT_OVERLAP="$HERE/moe_gemm1_mxfp4_ABpreShuffle_256x256_4x4_batch_ps_act1_persistent_overlap.s"
 OPT_PERSISTENT_OVERLAP_PAD8="$HERE/persistent_overlap_output_pad8.s"
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0="$HERE/persistent_overlap_pad8_prefetch_stage0.s"
+OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear.s"
+OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full.s"
+OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt.s"
+OPT_AB4_SCALE_HALF_TDM_FULL_SETUP_WAIT6="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_ab4_scale_half_tdm_full_setup_loop_wait6.s"
+OPT_AB4_NO_SCALE_TDM_WAIT4="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_ab4_no_scale_tdm_full_setup_loop_wait4.s"
 CANDIDATE=""
 
 if [[ -n "${AITER_HISTORY_CANDIDATE:-}" ]]; then
@@ -167,6 +220,10 @@ declare -a CASES=(
   persistent_overlap
   persistent_overlap_pad8
   persistent_overlap_pad8_prefetch_stage0
+  persistent_overlap_pad8_prefetch_stage0_b64_clear
+  persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full
+  persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt
+  ab4_scale_half_tdm_full_setup_wait6
 )
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
 if [[ -n "$requested_cases" ]]; then
@@ -184,6 +241,11 @@ case_source() {
     persistent_overlap) printf '%s\n' "$OPT_PERSISTENT_OVERLAP" ;;
     persistent_overlap_pad8) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8" ;;
     persistent_overlap_pad8_prefetch_stage0) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0" ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR" ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL" ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT" ;;
+    ab4_scale_half_tdm_full_setup_wait6) printf '%s\n' "$OPT_AB4_SCALE_HALF_TDM_FULL_SETUP_WAIT6" ;;
+    ab4_no_scale_tdm_wait4) printf '%s\n' "$OPT_AB4_NO_SCALE_TDM_WAIT4" ;;
     candidate)
       if [[ -z "$CANDIDATE" ]]; then
         echo "case 'candidate' requires AITER_HISTORY_CANDIDATE" >&2
@@ -207,6 +269,11 @@ case_label() {
     persistent_overlap) printf '%s\n' 'persistent/output-drain-overlap' ;;
     persistent_overlap_pad8) printf '%s\n' 'persistent/overlap/output-pad8' ;;
     persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 'persistent/overlap/prefetch-stage0' ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear' ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear/iprefetch-full' ;;
+    persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear/iprefetch-full/all-nt-rt' ;;
+    ab4_scale_half_tdm_full_setup_wait6) printf '%s\n' 'persistent/2+3/resident/full-setup/wait6' ;;
+    ab4_no_scale_tdm_wait4) printf '%s\n' 'persistent/2+3/no-Scale-TDM/wait4 diagnostic' ;;
     candidate) printf '%s\n' 'candidate' ;;
     *) return 2 ;;
   esac
@@ -215,7 +282,7 @@ case_label() {
 case_grid_x() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_X:-}" ;;
     *) return 2 ;;
   esac
@@ -224,7 +291,7 @@ case_grid_x() {
 case_grid_y() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_Y:-}" ;;
     *) return 2 ;;
   esac
@@ -299,7 +366,7 @@ for name in "${CASES[@]}"; do
     exit 2
   fi
 done
-for required in "$COMPARE" "$E2E" "$ATT_LAUNCH" "$REPO_ROOT/my_code/get_isa_runner_att.sh"; do
+for required in "$COMPARE" "$E2E" "$REPO_ROOT/my_code/analyze_att_capture.py"; do
   if [[ ! -f "$required" ]]; then
     echo "missing benchmark dependency: $required" >&2
     exit 2
@@ -335,6 +402,10 @@ host="$(hostname -s)"
 out_rel="my_code/moe_gemm1_act1_optimized/history_runs/${host}_${timestamp}_${MODE}"
 out_dir="$REPO_ROOT/$out_rel"
 mkdir -p "$out_dir"
+cleanup_output_permissions() {
+  chmod -R a+rwX "$out_dir" 2>/dev/null || true
+}
+trap cleanup_output_permissions EXIT
 run_log="$out_dir/run.log"
 standalone_tsv="$out_dir/standalone.tsv"
 e2e_tsv="$out_dir/e2e.tsv"
@@ -369,6 +440,13 @@ print_context() {
   echo "run_reference_command=$RUN_REFERENCE_COMMAND"
   echo "run_att=$RUN_ATT"
   echo "att_validate_only=$ATT_VALIDATE_ONLY"
+  echo "att_e2e_iters=$ATT_E2E_ITERS"
+  echo "att_kernel_iteration_range=$ATT_KERNEL_ITERATION_RANGE"
+  echo "att_simd_list=$ATT_SIMD_LIST"
+  echo "att_target_cu=$ATT_TARGET_CU"
+  echo "att_shader_engine_mask=$ATT_SHADER_ENGINE_MASK"
+  echo "att_buffer_size=$ATT_BUFFER_SIZE"
+  echo "att_timeout_seconds=$ATT_TIMEOUT_SECONDS"
   echo "gemm1_a_preshuffle_producer=$A_PRESHUFFLE_PRODUCER"
   echo "execution=inside-container"
   echo
@@ -380,10 +458,8 @@ print_context() {
     "$HERE/benchmark_history.sh" \
     "$COMPARE" \
     "$E2E" \
-    "$ATT_LAUNCH" \
     "$SNAPSHOT_ROOT/SOURCE_COMMIT" \
-    "$SNAPSHOT_ROOT/SNAPSHOT_MANIFEST.json" \
-    "$REPO_ROOT/my_code/get_isa_runner_att.sh"
+    "$SNAPSHOT_ROOT/SNAPSHOT_MANIFEST.json"
   for name in "${CASES[@]}"; do
     sha256sum "$(case_source "$name")"
   done
@@ -566,9 +642,14 @@ run_e2e_case() {
     "${logits:-NA}" "${rel:-NA}" "${pass:-NA}" \
     "${moe_hash:-NA}" "${ref_hash:-NA}" \
     >>"$e2e_tsv"
-  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" || "$pass" != True \
-        || ! "$moe_hash" =~ ^[0-9a-f]{32}$ || ! "$ref_hash" =~ ^[0-9a-f]{32}$ ]]; then
-    echo "e2e correctness, benchmark, or timing extraction failed for $name" >&2
+  if [[ "$rc" -ne 0 || -z "$gemm1" || -z "$gemm2" || -z "$moe_e2e" ]]; then
+    echo "e2e launch or timing extraction failed for $name" >&2
+    exit 4
+  fi
+  if [[ "$RUN_VERIFY" == 1 && ( "$pass" != True \
+        || ! "$moe_hash" =~ ^[0-9a-f]{32}$ \
+        || ! "$ref_hash" =~ ^[0-9a-f]{32}$ ) ]]; then
+    echo "e2e correctness verification failed for $name" >&2
     exit 4
   fi
 }
@@ -610,9 +691,182 @@ compile_code_object() {
   printf '%s\n' "$code_object"
 }
 
+prepare_att_runtime() {
+  att_runtime="$att_root/runtime"
+  att_site="$att_runtime/site"
+  att_clean_clang="$att_runtime/clang_clean_for_att.sh"
+  mkdir -p "$att_site"
+
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -Eeuo pipefail' \
+    'unset LD_PRELOAD' \
+    'unset HSA_TOOLS_LIB' \
+    'unset ROCP_TOOL_LIBRARIES' \
+    'unset ROCPROFILER_TOOL_LIBRARIES' \
+    'unset ROCPROFILER_LIBRARY_CTOR' \
+    "exec $(printf '%q' "$CLANG") \"\$@\"" \
+    >"$att_clean_clang"
+  chmod a+rx "$att_clean_clang"
+
+  cat >"$att_site/sitecustomize.py" <<'PY'
+import os
+import subprocess
+from pathlib import Path
+
+from my_code.isa_runner import gemm_isa_runner
+from my_code.isa_runner import moe_cpp_backend
+
+clean_clang = Path(os.environ["AITER_ATT_CLEAN_CLANG"]).resolve()
+if not clean_clang.is_file():
+    raise RuntimeError(f"ATT clean clang wrapper is missing: {clean_clang}")
+gemm_isa_runner.DEFAULT_CLANG = clean_clang
+
+_tool_environment = (
+    "LD_PRELOAD",
+    "HSA_TOOLS_LIB",
+    "ROCP_TOOL_LIBRARIES",
+    "ROCPROFILER_TOOL_LIBRARIES",
+    "ROCPROFILER_LIBRARY_CTOR",
+)
+
+
+def _clean_command_version(command):
+    environment = os.environ.copy()
+    for name in _tool_environment:
+        environment.pop(name, None)
+    try:
+        process = subprocess.run(
+            list(command),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+        )
+    except OSError as exc:
+        return f"unavailable: {exc}"
+    return (
+        f"exit={process.returncode}\nstdout:\n{process.stdout}"
+        f"stderr:\n{process.stderr}"
+    )
+
+
+moe_cpp_backend._command_version = _clean_command_version
+PY
+
+  AITER_ATT_CLEAN_CLANG="$att_clean_clang" \
+  PYTHONPATH="$att_site${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - <<'PY'
+import os
+from pathlib import Path
+from my_code.isa_runner import gemm_isa_runner
+
+expected = Path(os.environ["AITER_ATT_CLEAN_CLANG"]).resolve()
+actual = gemm_isa_runner.DEFAULT_CLANG.resolve()
+if actual != expected:
+    raise SystemExit(f"sitecustomize preflight failed: expected {expected}, got {actual}")
+print(f"ATT clean clang preflight passed: {actual}")
+PY
+}
+
+write_att_yaml() {
+  local yaml="$1"
+  local output_directory="$2"
+  local simd="$3"
+  cat >"$yaml" <<YAML
+jobs:
+ -
+  kernel_include_regex: '^${SYMBOL}$'
+  kernel_exclude_regex:
+  kernel_iteration_range: "${ATT_KERNEL_ITERATION_RANGE}"
+  output_file: out
+  output_directory: ${output_directory}
+  output_format: [csv]
+  truncate_kernels: false
+  sys_trace: false
+  advanced_thread_trace: true
+  att_target_cu: ${ATT_TARGET_CU}
+  att_shader_engine_mask: "${ATT_SHADER_ENGINE_MASK}"
+  att_simd_select: "${simd}"
+  att_buffer_size: "${ATT_BUFFER_SIZE}"
+  att_library_path: ["${ATT_DECODER_DIR}"]
+YAML
+}
+
+run_att_e2e_command() {
+  local source_path="$1"
+  local grid_x="$2"
+  local grid_y="$3"
+  local log="$4"
+  local yaml="${5:-}"
+  local -a grid_args=()
+  local restore_errexit=0
+  local -a command=(
+    env -u FLYDSL_DUMP_DIR
+    "PYTHONPATH=$att_site${PYTHONPATH:+:$PYTHONPATH}"
+    "AITER_ATT_CLEAN_CLANG=$att_clean_clang"
+    "AITER_MOE_CPP_CACHE_DIR=$att_runtime/moe_cpp_cache"
+    PYTORCH_ALLOC_CONF=expandable_segments:True
+    GPU_ARCHS=gfx1250
+    AITER_FORCE_GFX1250=1
+    HIP_VISIBLE_DEVICES=0
+    "${COMMON_ENV[@]}"
+    python3 -u "$E2E" --isa "$source_path"
+  )
+  if [[ -n "$grid_x" ]]; then
+    grid_args=(--grid-x "$grid_x" --grid-y "$grid_y")
+  fi
+  command+=(
+    "${grid_args[@]}" --
+    --scenario bench
+    "${TEST_SHAPE[@]}"
+    --iters "$ATT_E2E_ITERS"
+    --const-init 0
+  )
+
+  if [[ "$-" == *e* ]]; then
+    restore_errexit=1
+  fi
+  set +e
+  if [[ -z "$yaml" ]]; then
+    timeout --signal=TERM --kill-after=20s "$ATT_TIMEOUT_SECONDS" \
+      "${command[@]}" 2>&1 | tee "$log"
+  else
+    (
+      set -e
+      source "$ROCPROF_ENV"
+      export PATH="$ROCPROF_BIN_DIR:$PATH"
+      export ROCPROF_ATT_LIBRARY_PATH="$ATT_DECODER_DIR"
+      timeout --signal=TERM --kill-after=20s "$ATT_TIMEOUT_SECONDS" \
+        rocprofv3 -i "$yaml" -- "${command[@]}"
+    ) 2>&1 | tee "$log"
+  fi
+  local rc=${PIPESTATUS[0]}
+  if [[ "$restore_errexit" == 1 ]]; then
+    set -e
+  fi
+  return "$rc"
+}
+
+validate_att_artifacts() {
+  local capture_root="$1"
+  local att_count code_count wave_count
+  att_count="$(find "$capture_root" -type f -name '*.att' -size +0c | wc -l)"
+  code_count="$(find "$capture_root" -type f -path '*/ui_output_agent_*/code.json' -size +0c | wc -l)"
+  wave_count="$(find "$capture_root" -type f -path '*/ui_output_agent_*/se*_sm*_sl*_wv*.json' -size +0c | wc -l)"
+  if [[ "$att_count" -lt 1 || "$code_count" -ne 1 || "$wave_count" -lt 1 ]]; then
+    echo "incomplete ATT output under $capture_root: att=$att_count code=$code_count waves=$wave_count" >&2
+    return 1
+  fi
+  echo "ATT artifacts verified: att=$att_count code=$code_count waves=$wave_count root=$capture_root"
+}
+
 run_att_case() {
   local name="$1"
-  local source_path grid_x grid_y grid_label code_object isa_sha log rc
+  local source_path grid_x grid_y grid_label code_object isa_sha log rc simd
+  local yaml capture_root case_root
   source_path="$(case_source "$name")"
   grid_x="$(case_grid_x "$name")"
   grid_y="$(case_grid_y "$name")"
@@ -621,30 +875,63 @@ run_att_case() {
   echo "===== ATT case=$name grid=$grid_label ====="
   echo "$isa_sha  $source_path"
   code_object="$(compile_code_object "$source_path" "$name")"
-  log="$out_dir/att_${name}.log"
-  set +e
+  case_root="$att_root/$name"
+  mkdir -p "$case_root/logs" "$case_root/thread_trace"
+
   if [[ "$ATT_VALIDATE_ONLY" == 1 ]]; then
-    AITER_ATT_CODE_OBJECT="$code_object" \
-    AITER_ATT_GRID_X="$grid_x" \
-    AITER_ATT_GRID_Y="$grid_y" \
-    HIP_VISIBLE_DEVICES=0 \
-      python3 "$ATT_LAUNCH" 2>&1 | tee "$log"
-    rc=${PIPESTATUS[0]}
+    log="$case_root/logs/validate_e2e.log"
+    set +e
+    run_att_e2e_command "$source_path" "$grid_x" "$grid_y" "$log"
+    rc=$?
+    set -e
   else
-    AITER_ATT_CODE_OBJECT="$code_object" \
-    AITER_ATT_GRID_X="$grid_x" \
-    AITER_ATT_GRID_Y="$grid_y" \
-    TRACE_ROOT="$att_root_rel" \
-    HIP_VISIBLE_DEVICES=0 \
-      bash "$REPO_ROOT/my_code/get_isa_runner_att.sh" \
-        "$SYMBOL" \
-        "$name" \
-        "python3 $ATT_LAUNCH" \
-        --ana-att \
-        2>&1 | tee "$log"
-    rc=${PIPESTATUS[0]}
+    rc=0
+    log="$case_root/logs/preflight_e2e.log"
+    set +e
+    run_att_e2e_command "$source_path" "$grid_x" "$grid_y" "$log"
+    rc=$?
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+      echo "ATT preflight failed for $name with return code $rc" >&2
+    fi
+    for simd in "${ATT_SIMDS[@]}"; do
+      if [[ "$rc" -ne 0 ]]; then
+        break
+      fi
+      capture_root="$case_root/thread_trace/simd${simd}/kernel/rpf_v3"
+      yaml="$case_root/input_simd${simd}.yaml"
+      log="$case_root/logs/capture_simd${simd}.log"
+      rm -rf "$capture_root"
+      mkdir -p "$capture_root"
+      write_att_yaml "$yaml" "$capture_root" "$simd"
+      set +e
+      run_att_e2e_command "$source_path" "$grid_x" "$grid_y" "$log" "$yaml"
+      rc=$?
+      set -e
+      if [[ "$rc" -ne 0 ]]; then
+        echo "ATT capture failed for $name SIMD$simd with return code $rc" >&2
+        break
+      fi
+      if ! validate_att_artifacts "$capture_root" | tee -a "$log"; then
+        rc=1
+        break
+      fi
+    done
+    if [[ "$rc" -eq 0 && "$ATT_SHADER_ENGINE_MASK" == 0xf ]]; then
+      set +e
+      python3 "$REPO_ROOT/my_code/analyze_att_capture.py" \
+        --dir "$case_root" --no-plot \
+        2>&1 | tee "$case_root/logs/analyze_att_capture.log"
+      rc=${PIPESTATUS[0]}
+      set -e
+    elif [[ "$rc" -eq 0 ]]; then
+      printf '%s\n' \
+        "Skipping analyze_att_capture.py because ATT_SHADER_ENGINE_MASK=$ATT_SHADER_ENGINE_MASK does not capture all SEs." \
+        "The decoded code.json and wave JSON files were verified for every requested SIMD." \
+        | tee "$case_root/logs/analyze_att_capture.log"
+    fi
   fi
-  set -e
+
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$name" "$grid_label" "$rc" "$code_object" "$isa_sha" >>"$att_tsv"
   if [[ "$rc" -ne 0 ]]; then
@@ -654,10 +941,32 @@ run_att_case() {
 }
 
 run_att() {
-  local name
+  local name lock_file
   att_root_rel="$out_rel/att"
   att_root="$REPO_ROOT/$att_root_rel"
   mkdir -p "$att_root/code_objects"
+
+  if [[ ! -f "$ROCPROF_ENV" ]]; then
+    echo "missing rocprof environment: $ROCPROF_ENV" >&2
+    exit 5
+  fi
+  if [[ ! -x "$ROCPROF_BIN_DIR/rocprofv3" ]]; then
+    echo "missing rocprofv3: $ROCPROF_BIN_DIR/rocprofv3" >&2
+    exit 5
+  fi
+  if [[ ! -s "$ATT_DECODER_DIR/librocprof-trace-decoder.so" ]]; then
+    echo "missing pinned ATT decoder: $ATT_DECODER_DIR/librocprof-trace-decoder.so" >&2
+    exit 5
+  fi
+
+  lock_file="/tmp/aiter_moe_gemm1_att_${UID}.lock"
+  exec {att_lock_fd}>"$lock_file"
+  if ! flock -n "$att_lock_fd"; then
+    echo "another benchmark_history.sh ATT capture owns $lock_file" >&2
+    exit 5
+  fi
+
+  prepare_att_runtime
   for name in "${CASES[@]}"; do
     run_att_case "$name"
   done
@@ -785,7 +1094,6 @@ run_all() {
       run_att
       ;;
     att-validate)
-      ATT_VALIDATE_ONLY=1
       run_att
       ;;
   esac
