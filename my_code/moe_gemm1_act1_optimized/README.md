@@ -1,11 +1,24 @@
 # Retained MoE GEMM1 optimization chain
 
 This directory is the self-contained workspace for the gfx1250 E96/T16384
-MoE GEMM1 assembly experiment. It retains the two active cases, the useful
-performance-improving lineage that produced them, and the runner/snapshot files
-required to reproduce MoE e2e and ATT runs.
+MoE GEMM1 assembly experiment. It retains the correctness-qualified optimization
+lineage, selected diagnostic cases, and the runner/snapshot files required to
+reproduce MoE e2e and ATT runs.
 
 ## Active cases
+
+### `tensor_wait_after_wmma`
+
+```text
+persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_
+static_state_hoist_descriptor_b64_tensor_wait_after_wmma.s
+SHA256=02320b67ae67a8349f7942a31f89e3f2f3de6efe130e937d04d1d4bdb9273b2d
+```
+
+This is the current correctness-qualified all-`NT_RT` endpoint. It retains the
+production ABI and numerical sequence while overlapping each K-ring
+`s_wait_tensorcnt 0x2` with four independent WMMAs. Two clean nine-round a07-3
+comparisons reproduced a `0.39-0.40%` GEMM1 improvement over `descriptor_b64`.
 
 ### `ab4_scale_half_tdm_full_setup_wait6`
 
@@ -44,6 +57,10 @@ correctness.
 | `persistent_overlap_pad8_prefetch_stage0_b64_clear` | `persistent_overlap_pad8_prefetch_stage0_b64_clear.s` | packed accumulator clear |
 | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full.s` | full SQC instruction prefetch gain |
 | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt.s` | accepted all-input `NT_RT` gain |
+| `incremental_all_ptr` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_incremental_all_ptr.s` | exact persistent tensor-pointer recurrence |
+| `static_state_hoist` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist.s` | hoists immutable per-wave state |
+| `descriptor_b64` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist_descriptor_b64.s` | compact next-task descriptor initialization |
+| `tensor_wait_after_wmma` | `persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist_descriptor_b64_tensor_wait_after_wmma.s` | overlaps K-ring TDM completion with four WMMAs |
 | `ab4_scale_half_tdm_full_setup_wait6` | active kernel above | retained correct 2+3 target |
 | `ab4_no_scale_tdm_wait4` | diagnostic above | retained faster const0 endpoint |
 
@@ -64,6 +81,10 @@ python my_code/moe_gemm1_act1_optimized/build_next_task_prefetch_variants.py
 python my_code/moe_gemm1_act1_optimized/build_b64_accum_clear_variant.py
 python my_code/moe_gemm1_act1_optimized/build_b64_instruction_prefetch_variants.py
 python my_code/moe_gemm1_act1_optimized/build_combined_tdm_hint_variants.py
+python my_code/moe_gemm1_act1_optimized/build_incremental_all_ptr_variant.py
+python my_code/moe_gemm1_act1_optimized/build_static_state_hoist_variant.py
+python my_code/moe_gemm1_act1_optimized/build_descriptor_b64_variant.py
+python my_code/moe_gemm1_act1_optimized/build_tensor_wait_after_wmma_variant.py
 python my_code/moe_gemm1_act1_optimized/build_ab_quarter_scale_half_tdm_variant.py
 python my_code/moe_gemm1_act1_optimized/build_no_scale_tdm_wait4_variant.py
 ```
@@ -74,7 +95,24 @@ output. `SHA256SUMS` records the retained artifact hashes.
 ## Benchmark
 
 The default `benchmark_history.sh` case list contains the correctness-qualified
-retained lineage through `ab4_scale_half_tdm_full_setup_wait6`.
+retained lineage through `tensor_wait_after_wmma`. The resident 2+3 cases remain
+explicitly selectable.
+
+Compare the current endpoint with its immediate parent:
+
+```bash
+AITER_HISTORY_CASE_LIST=descriptor_b64,tensor_wait_after_wmma \
+ROUNDS=9 RUN_VERIFY=1 RUN_ATT=0 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-const0
+```
+
+Run random MoE e2e verification for the current endpoint:
+
+```bash
+AITER_HISTORY_CASE_LIST=tensor_wait_after_wmma \
+ROUNDS=1 RUN_VERIFY=1 RUN_ATT=0 \
+bash my_code/moe_gemm1_act1_optimized/benchmark_history.sh e2e-random
+```
 
 Compare the two active cases with const0 input:
 
@@ -140,6 +178,8 @@ The ATT path:
   stage-0 trace-derived plan.
 - `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_PERFORMANCE_HISTORY.md`: accepted and
   rejected optimization history.
+- `PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_ALL_NT_RT_THREAD_TRACE_OPTIMIZATION_PLAN.md`:
+  four-SIMD ATT analysis and Experiments 1-28 leading to the retained endpoint.
 - `RESIDENT_2PLUS3_FULL_SETUP_WAIT6_THREAD_TRACE_ANALYSIS.md`: wait6 all-SIMD
   bottleneck analysis.
 - `RESIDENT_2PLUS3_NO_SCALE_TDM_WAIT4_THREAD_TRACE_ANALYSIS.md`: no-Scale-TDM

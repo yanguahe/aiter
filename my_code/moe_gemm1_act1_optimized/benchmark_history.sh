@@ -85,6 +85,10 @@ Stable cases:
   persistent_overlap_pad8_prefetch_stage0_b64_clear,
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full,
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt,
+  incremental_all_ptr,
+  static_state_hoist,
+  descriptor_b64,
+  tensor_wait_after_wmma,
   ab4_scale_half_tdm_full_setup_wait6
 
 Experimental selectable cases (not run by default):
@@ -193,6 +197,10 @@ OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0="$HERE/persistent_overlap_pad8_prefe
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear.s"
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full.s"
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt.s"
+OPT_INCREMENTAL_ALL_PTR="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_incremental_all_ptr.s"
+OPT_STATIC_STATE_HOIST="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist.s"
+OPT_DESCRIPTOR_B64="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist_descriptor_b64.s"
+OPT_TENSOR_WAIT_AFTER_WMMA="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_static_state_hoist_descriptor_b64_tensor_wait_after_wmma.s"
 OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT_EXACTOPT_WPT2_OWNER="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner.s"
 OPT_AB4_SCALE_HALF_TDM_FULL_SETUP_WAIT6="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_ab4_scale_half_tdm_full_setup_loop_wait6.s"
 OPT_AB4_NO_SCALE_TDM_WAIT4="$HERE/persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_ab4_no_scale_tdm_full_setup_loop_wait4.s"
@@ -229,6 +237,10 @@ declare -a CASES=(
   persistent_overlap_pad8_prefetch_stage0_b64_clear
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full
   persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt
+  incremental_all_ptr
+  static_state_hoist
+  descriptor_b64
+  tensor_wait_after_wmma
   # ab4_scale_half_tdm_full_setup_wait6
 )
 requested_cases="${AITER_HISTORY_CASE_LIST:-${CASE_LIST:-}}"
@@ -250,6 +262,10 @@ case_source() {
     persistent_overlap_pad8_prefetch_stage0_b64_clear) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR" ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL" ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT" ;;
+    incremental_all_ptr) printf '%s\n' "$OPT_INCREMENTAL_ALL_PTR" ;;
+    static_state_hoist) printf '%s\n' "$OPT_STATIC_STATE_HOIST" ;;
+    descriptor_b64) printf '%s\n' "$OPT_DESCRIPTOR_B64" ;;
+    tensor_wait_after_wmma) printf '%s\n' "$OPT_TENSOR_WAIT_AFTER_WMMA" ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner) printf '%s\n' "$OPT_PERSISTENT_OVERLAP_PAD8_PREFETCH_STAGE0_B64_CLEAR_IPREFETCH_FULL_ALL_NT_RT_EXACTOPT_WPT2_OWNER" ;;
     ab4_scale_half_tdm_full_setup_wait6) printf '%s\n' "$OPT_AB4_SCALE_HALF_TDM_FULL_SETUP_WAIT6" ;;
     ab4_no_scale_tdm_wait4) printf '%s\n' "$OPT_AB4_NO_SCALE_TDM_WAIT4" ;;
@@ -279,6 +295,10 @@ case_label() {
     persistent_overlap_pad8_prefetch_stage0_b64_clear) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear' ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear/iprefetch-full' ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear/iprefetch-full/all-nt-rt' ;;
+    incremental_all_ptr) printf '%s\n' 'persistent/overlap/all-nt-rt/incremental-all-pointers' ;;
+    static_state_hoist) printf '%s\n' 'persistent/overlap/all-nt-rt/static-state-hoist' ;;
+    descriptor_b64) printf '%s\n' 'persistent/overlap/all-nt-rt/static-state-hoist/descriptor-b64' ;;
+    tensor_wait_after_wmma) printf '%s\n' 'persistent/overlap/all-nt-rt/tensor-wait-after-wmma' ;;
     persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner) printf '%s\n' 'persistent/overlap/prefetch-stage0/b64-clear/iprefetch-full/all-nt-rt/exactopt-wpt2-adjacent' ;;
     ab4_scale_half_tdm_full_setup_wait6) printf '%s\n' 'persistent/2+3/resident/full-setup/wait6' ;;
     ab4_no_scale_tdm_wait4) printf '%s\n' 'persistent/2+3/no-Scale-TDM/wait4 diagnostic' ;;
@@ -290,7 +310,7 @@ case_label() {
 case_grid_x() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|incremental_all_ptr|static_state_hoist|descriptor_b64|tensor_wait_after_wmma|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_X:-}" ;;
     *) return 2 ;;
   esac
@@ -299,7 +319,7 @@ case_grid_x() {
 case_grid_y() {
   case "$1" in
     baseline|optimized_v1|double_lds) printf '%s\n' '' ;;
-    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
+    persistent|persistent_overlap|persistent_overlap_pad8|persistent_overlap_pad8_prefetch_stage0|persistent_overlap_pad8_prefetch_stage0_b64_clear|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt|incremental_all_ptr|static_state_hoist|descriptor_b64|tensor_wait_after_wmma|persistent_overlap_pad8_prefetch_stage0_b64_clear_iprefetch_full_all_nt_rt_exactopt_wpt2_owner|ab4_scale_half_tdm_full_setup_wait6|ab4_no_scale_tdm_wait4) printf '%s\n' 16 ;;
     candidate) printf '%s\n' "${AITER_HISTORY_CANDIDATE_GRID_Y:-}" ;;
     *) return 2 ;;
   esac
