@@ -101,6 +101,8 @@ def launch_gemm_a8w4_tdm(
     wmma_reuse: Constexpr[int] = 0,
     delay_acc_zero: Constexpr[int] = 0,
     overlap_output_store: Constexpr[int] = 0,
+    output_store_split_wm: Constexpr[int] = 0,
+    output_store_wave_split: Constexpr[int] = 0,
 ):
     """Launch the grouped contiguous-M a8w4 MoE GEMM for gfx1250.
 
@@ -182,6 +184,26 @@ def launch_gemm_a8w4_tdm(
             == (256, 5, 1, 1)
         )
     )
+    gemm2_schedule = all(
+        (
+            a_is_fp4,
+            K == 3072,
+            tile_n == 256,
+            tile_k == 256,
+            num_buffers == 4,
+            next_stage_on == 1,
+            tile_m == 256,
+            m_warp == 2,
+            n_warp == 2,
+            stage1_act == 0,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            cluster_n == 4,
+            num_waves_per_tensor_tdm in (1, 2),
+            n_experts > 0,
+        )
+    )
     assert epilogue_batch_wn in (1, 2, 4, 8)
     assert not a_preshuffle or a_is_fp4
     assert schedule_hints in (0, 1)
@@ -205,16 +227,26 @@ def launch_gemm_a8w4_tdm(
     assert wmma_reuse in (0, 1, 2, 3)
     assert delay_acc_zero in (0, 1)
     assert overlap_output_store in (0, 1)
+    assert output_store_wave_split in (0, 1)
     assert not overlap_output_store or (
-        fp4_prefill_schedule and stage1_act == 1 and stage1_quant_out == 0
+        (fp4_prefill_schedule and stage1_act == 1 and stage1_quant_out == 0)
+        or gemm2_schedule
     )
+    assert not output_store_wave_split or (
+        overlap_output_store and gemm2_schedule and stage1_act == 0
+    )
+    if overlap_output_store:
+        if output_store_split_wm == 0:
+            output_store_split_wm = (tile_m // m_warp // WMMA_M) // 2
+        assert 0 < output_store_split_wm < (tile_m // m_warp // WMMA_M)
     if silu_poly9:
         epilogue_batch_wn = 1
     if not fp4_prefill_schedule:
         epilogue_batch_wn = 1
-        schedule_hints = 0
         relax_cluster_wrap_dscnt = 0
+    if not (fp4_prefill_schedule or gemm2_schedule):
         direct_global_scales = 0
+        schedule_hints = 0
     assert (tile_n // n_warp // WMMA_N) % epilogue_batch_wn == 0
     cluster_m = 4 if fp4_prefill_schedule else 1
     cache_tag = (
@@ -254,6 +286,8 @@ def launch_gemm_a8w4_tdm(
         wmma_reuse,
         delay_acc_zero,
         overlap_output_store,
+        output_store_split_wm,
+        output_store_wave_split,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -343,7 +377,10 @@ def launch_gemm_a8w4_tdm(
         _silu_approx = "_silu_relu"
     _wmma_reuse = ("", "_reuse", "_reusea", "_reuseb")[wmma_reuse]
     _delay_zero = "_daz" if delay_acc_zero else ""
-    _overlap_store = "_ostore2p" if overlap_output_store else ""
+    _overlap_store = (
+        f"_ostore2p_s{output_store_split_wm}" if overlap_output_store else ""
+    )
+    _output_wave_split = "_ow2" if output_store_wave_split else ""
     _kname = (
         f"a8w4_tdm_{_afp}"
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
@@ -352,7 +389,7 @@ def launch_gemm_a8w4_tdm(
         f"{_epilogue_batch}{_a_preshuffle}{_schedule_hints}"
         f"{_relax_cluster_wrap}{_direct_scales}{_transitive_sync}{_early_timeout}{_m_major}"
         f"{_sched_shape}{_xdl_arb}"
-        f"{_silu_approx}{_wmma_reuse}{_delay_zero}{_overlap_store}"
+        f"{_silu_approx}{_wmma_reuse}{_delay_zero}{_overlap_store}{_output_wave_split}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -1436,18 +1473,28 @@ def launch_gemm_a8w4_tdm(
             )
             oc = fx.Float16 if out_is_f16 else fx.BFloat16
 
-            EPILOGUE_HALF_WM = wmma_m_rep // 2
-            EPILOGUE_HALF_ROWS = EPILOGUE_HALF_WM * 16
+            OUTPUT_SPLIT_WM = output_store_split_wm
 
-            def issue_output_half(wm_base):
-                """Store completed M rows while later exact-SiLU rows activate."""
+            def issue_output_slice(wm_base, wm_count):
+                """Store completed M rows while later accumulator rows stage."""
+                slice_rows = wm_count * 16
                 workgroup_barrier()
-                if wave_n == 0:
-                    row_start = wmb + wm_base * 16
+                if output_store_wave_split or wave_n == 0:
+                    if const_expr(output_store_wave_split):
+                        assert slice_rows % n_warp == 0
+                        owned_rows = slice_rows // n_warp
+                        row_start = wmb + wm_base * 16 + wave_n * owned_rows
+                    else:
+                        owned_rows = slice_rows
+                        row_start = wmb + wm_base * 16
                     remaining = mn_oob - row_start
                     slice_oob = (remaining > 0).select(remaining, 0)
-                    out_stride = i32_n // 2
-                    out_col_off = blk_n64 // 2
+                    if const_expr(stage1_act):
+                        out_stride = i32_n // 2
+                        out_col_off = blk_n64 // 2
+                    else:
+                        out_stride = c_stride
+                        out_col_off = c_inner_off
                     c_iter = fx.get_iter(arg_c)
                     c_off_rt = (
                         (c_outer_off + fx.Int64(row_start)) * fx.Int64(out_stride)
@@ -1456,7 +1503,7 @@ def launch_gemm_a8w4_tdm(
                     gt_half = global_view(
                         c_iter,
                         c_off_rt,
-                        (EPILOGUE_HALF_ROWS, STORE_PITCH),
+                        (owned_rows, STORE_PITCH),
                         (out_stride, 1),
                     )
                     atom_half = fx.rocdl.make_tdm_atom(
@@ -1468,7 +1515,7 @@ def launch_gemm_a8w4_tdm(
                     src_half = lds_view(
                         fx.recast_iter(oc, base_ptr)
                         + fx.index_cast(T.index, row_start * STORE_PITCH),
-                        (EPILOGUE_HALF_ROWS, STORE_PITCH),
+                        (owned_rows, STORE_PITCH),
                         (STORE_PITCH, 1),
                     )
                     fx.copy(atom_half, src_half, gt_half)
@@ -1714,11 +1761,13 @@ def launch_gemm_a8w4_tdm(
                             if pin:
                                 vgpr_keepalive(*pin)
                     if const_expr(
-                        overlap_output_store and wm + 1 == EPILOGUE_HALF_WM
+                        overlap_output_store and wm + 1 == OUTPUT_SPLIT_WM
                     ):
-                        issue_output_half(0)
+                        issue_output_slice(0, OUTPUT_SPLIT_WM)
             if const_expr(overlap_output_store):
-                issue_output_half(EPILOGUE_HALF_WM)
+                issue_output_slice(
+                    OUTPUT_SPLIT_WM, wmma_m_rep - OUTPUT_SPLIT_WM
+                )
             # -- Shared LDS -> TDM store to global --
             # dscnt-only barrier: the TDM store reads LDS, not the e8m0 scales
             # still in flight, so their storecnt wait moves past the store below.

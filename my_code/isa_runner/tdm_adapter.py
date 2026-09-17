@@ -28,9 +28,11 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import inspect
 import json
 import os
 import random
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,7 +80,7 @@ _REL_L2_TOL = 1e-6
 
 
 def arena_bytes(tile_m, tile_n, tile_k, num_buffers, m_warp=1, n_warp=4,
-                a_is_fp4=0) -> int:
+                a_is_fp4=0, a_preshuffle=False, stage1_act=0) -> int:
     """Dynamic LDS the kernel allocates, mirroring the frontend's arena math.
 
     The descriptor's group_segment_fixed_size is 0 because the arena is a
@@ -89,15 +91,20 @@ def arena_bytes(tile_m, tile_n, tile_k, num_buffers, m_warp=1, n_warp=4,
     """
     a_pack = 2 if a_is_fp4 else 1
     a_row_b = tile_k // a_pack
-    stage_a = ((tile_m * (a_row_b + 16) + 15) // 16) * 16
+    pack_tk = tile_k // 2
+    a_lds_outer = tile_m // 16 if a_preshuffle else tile_m
+    a_lds_row = pack_tk * 16 if a_preshuffle else a_row_b + 16
+    stage_a = ((a_lds_outer * a_lds_row + 15) // 16) * 16
     stage_b = (((tile_n // 16) * ((tile_k // 2) * 16) + 15) // 16) * 16
     wmma_m_rep = (tile_m // m_warp) // 16
-    as_supers = tile_m // wmma_m_rep
-    as_inner = (tile_k // 128) * wmma_m_rep
+    as_supers = tile_m // 32 if a_preshuffle else m_warp
+    as_inner = tile_k // 4 if a_preshuffle else (tile_k // 128) * wmma_m_rep * 16
     stage_sa = ((as_supers * as_inner * 4 + 15) // 16) * 16
     stage_sb = (((tile_n // 32) * (tile_k // 4) * 4 + 15) // 16) * 16
     pitch = ((stage_a + stage_b + stage_sa + stage_sb + 511) // 512) * 512
-    c_store = ((tile_m * tile_n * 2 + 127) // 128) * 128
+    store_n = tile_n // 2 if stage1_act else tile_n
+    store_pad = 16 if not stage1_act else 0
+    c_store = ((tile_m * (store_n + store_pad) * 2 + 127) // 128) * 128
     arena = max(num_buffers * pitch, c_store)
     if tile_m <= 64:  # zero-fill loop rounds the arena to 16 B * block
         zblk = 16 * (m_warp * n_warp * 32)
@@ -137,8 +144,11 @@ class Capture:
             "tiles": self.tiles,
         }
 
-    def pack_kernargs(self) -> list:
+    def pack_kernargs(self) -> list | bytes:
         """Build the ctypes arg list in kernarg order."""
+        payload = getattr(self, "_kernarg_payload", None)
+        if payload is not None:
+            return payload
         out = []
         for name, kind, _off in KERNARG_LAYOUT:
             v = self.args.get(name, 0)
@@ -357,7 +367,7 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     # which shows up as a NaN result, not as an error. Hold the tensors from
     # the wrapper, which still has them as tensors.
     keepalive: list[Any] = []
-    from aiter.ops.flydsl import batched_gemm_mxfp4 as bgm
+    from aiter.ops.flydsl import grouped_gemm_mxfp4 as bgm
     from aiter.ops.flydsl import grouped_moe_gfx1250 as grouped_mod
     from aiter.ops.flydsl import moe_kernels as moe_kernels_mod
 
@@ -403,11 +413,41 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
 
     real_launch = tdm_mod.launch_gemm_a8w4_tdm
 
-    def spy(arg_c, arg_a, arg_b, arg_scale_a, arg_scale_b, i32_m, stream, N, K,
-            tile_m, tile_n, tile_k, m_warp, n_warp, out_is_f16, num_buffers,
-            a_is_fp4, arg_m_tile_map, n_experts, stage1_act, has_bias, arg_bias,
-            f32_swiglu_limit, stage1_quant_out=0, quant_wmma_rep=1,
-            arg_quant_scale=None, **kw):
+    launch_signature = inspect.signature(
+        getattr(real_launch, "func", real_launch)
+    )
+
+    def spy(*launch_args, **launch_kwargs):
+        bound = launch_signature.bind(*launch_args, **launch_kwargs)
+        bound.apply_defaults()
+        p = bound.arguments
+        arg_c = p["arg_c"]
+        arg_a = p["arg_a"]
+        arg_b = p["arg_b"]
+        arg_scale_a = p["arg_scale_a"]
+        arg_scale_b = p["arg_scale_b"]
+        i32_m = p["i32_m"]
+        N = p["N"]
+        K = p["K"]
+        tile_m = p["tile_m"]
+        tile_n = p["tile_n"]
+        tile_k = p["tile_k"]
+        m_warp = p["m_warp"]
+        n_warp = p["n_warp"]
+        out_is_f16 = p["out_is_f16"]
+        num_buffers = p["num_buffers"]
+        a_is_fp4 = p["a_is_fp4"]
+        arg_m_tile_map = p["arg_m_tile_map"]
+        n_experts = p["n_experts"]
+        stage1_act = p["stage1_act"]
+        has_bias = p["has_bias"]
+        arg_bias = p["arg_bias"]
+        f32_swiglu_limit = p["f32_swiglu_limit"]
+        stage1_quant_out = p["stage1_quant_out"]
+        quant_wmma_rep = p["quant_wmma_rep"]
+        arg_quant_scale = p["arg_quant_scale"]
+        cluster_n = p["cluster_n"]
+        cluster_m = int(p.get("cluster_m", 0)) or (4 if stage1_act == 1 else 1)
         act = {0: "noact", 1: "silu", 2: "swiglu"}.get(stage1_act, f"act{stage1_act}")
         name = (f"gemm_a8w4_tdm_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
                 f"_b{num_buffers}_e{n_experts}"
@@ -424,6 +464,8 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
         want_activated = which == "gemm1"
         if (stage1_act != 0) == want_activated and not records:
             out_tensor = _find_output_tensor(arg_c, keepalive)
+            scale_a_tensor = _find_output_tensor(arg_scale_a, keepalive)
+            scale_b_tensor = _find_output_tensor(arg_scale_b, keepalive)
             keepalive.append(out_tensor)
 
             # Establish known padding before the real production dispatch.
@@ -434,7 +476,11 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
 
             record = Capture(
                 kernel=name,
-                grid=(m_tiles * n_tiles, 1, 1),
+                grid=(
+                    ((m_tiles + cluster_m - 1) // cluster_m) * n_tiles,
+                    cluster_m,
+                    1,
+                ),
                 block=(block, 1, 1),
                 args={
                     "arg_c": _ptr_of(arg_c), "arg_a": _ptr_of(arg_a),
@@ -449,8 +495,17 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                 },
                 out_ptr=_ptr_of(arg_c),
                 out_nbytes=0,
-                lds_bytes=arena_bytes(tile_m, tile_n, tile_k, num_buffers,
-                                      m_warp, n_warp, a_is_fp4),
+                lds_bytes=arena_bytes(
+                    tile_m,
+                    tile_n,
+                    tile_k,
+                    num_buffers,
+                    m_warp,
+                    n_warp,
+                    a_is_fp4,
+                    bool(p.get("a_preshuffle", False)),
+                    stage1_act,
+                ),
                 seed=seed,
                 deterministic_route_map=bool(deterministic_route_map),
                 deterministic_route_map_applied=bool(
@@ -461,53 +516,50 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
                        "n_warp": n_warp},
             )
             record._out_tensor = out_tensor
+            from my_code.isa_runner import gemm_batch_isa_runner as batch
+            from my_code.isa_runner.moe_cpp_backend import (
+                pack_pipeline_moe_kernargs,
+            )
+
+            c_shape = tuple(int(value) for value in out_tensor.shape)
+            c_strides = tuple(int(value) for value in out_tensor.stride()[:2])
+            sa_shape = tuple(int(value) for value in scale_a_tensor.shape)
+            sa_strides = tuple(int(value) for value in scale_a_tensor.stride()[:2])
+            record._kernarg_payload = pack_pipeline_moe_kernargs(
+                packer=batch.pack_moe_kernargs,
+                ptr_c=_ptr_of(arg_c),
+                ptr_a=_ptr_of(arg_a),
+                ptr_b=_ptr_of(arg_b),
+                ptr_scale_a=_ptr_of(arg_scale_a),
+                ptr_scale_b=_ptr_of(arg_scale_b),
+                ptr_m_tile_map=_ptr_of(arg_m_tile_map),
+                c_shape=c_shape,
+                c_strides=c_strides,
+                sa_shape=sa_shape,
+                sa_strides=sa_strides,
+                sb_size0=int(scale_b_tensor.shape[0]),
+                i32_m=int(i32_m),
+                i32_n=int(N),
+                swiglu_limit=float(f32_swiglu_limit),
+                situ_beta=float(p["f32_situ_beta"]),
+                situ_linear_beta=float(p["f32_situ_linear_beta"]),
+            )
             record.out_nbytes = out_tensor.numel() * out_tensor.element_size()
             record._route_rows = route_state["rows"]
             record._route_experts = route_state["experts"]
-            launch_kw = dict(kw)
+            production_args = dict(p)
 
             def production_launch():
-                return real_launch(
-                    arg_c,
-                    arg_a,
-                    arg_b,
-                    arg_scale_a,
-                    arg_scale_b,
-                    i32_m,
-                    torch.cuda.current_stream(out_tensor.device),
-                    N,
-                    K,
-                    tile_m,
-                    tile_n,
-                    tile_k,
-                    m_warp,
-                    n_warp,
-                    out_is_f16,
-                    num_buffers,
-                    a_is_fp4,
-                    arg_m_tile_map,
-                    n_experts,
-                    stage1_act,
-                    has_bias,
-                    arg_bias,
-                    f32_swiglu_limit,
-                    stage1_quant_out,
-                    quant_wmma_rep,
-                    arg_quant_scale,
-                    **launch_kw,
-                )
+                call_args = dict(production_args)
+                call_args["stream"] = torch.cuda.current_stream(out_tensor.device)
+                return real_launch(**call_args)
 
             record._production_launch = production_launch
             records.append(record)
         else:
             record = None
 
-        result = real_launch(
-            arg_c, arg_a, arg_b, arg_scale_a, arg_scale_b, i32_m, stream, N, K,
-            tile_m, tile_n, tile_k, m_warp, n_warp, out_is_f16, num_buffers,
-            a_is_fp4, arg_m_tile_map, n_experts, stage1_act, has_bias, arg_bias,
-            f32_swiglu_limit, stage1_quant_out, quant_wmma_rep, arg_quant_scale,
-            **kw)
+        result = real_launch(*launch_args, **launch_kwargs)
         if record is not None:
             # Capture the selected GEMM immediately. Waiting for run_moe to
             # return is too late because later fused stages may reuse or modify
@@ -521,7 +573,7 @@ def capture_launches(which: str = "gemm1", *, tokens: int = 4096,
     bgm.flydsl_grouped_gemm_a8w4_masked = grouped_spy
     moe_kernels_mod.flydsl_moe_topids_to_rows = route_spy
     grouped_mod.contiguous_psum_remap = psum_remap_spy
-    # batched_gemm_mxfp4 imports launch_gemm_a8w4_tdm inside the function body,
+    # grouped_gemm_mxfp4 imports launch_gemm_a8w4_tdm inside the function body,
     # so the module-level patch above is picked up on the next call.
     try:
         _run_production_moe(tokens, experts, topk, model_dim, inter_dim, seed)
@@ -564,13 +616,13 @@ def _run_production_moe(tokens, experts, topk, model_dim, inter_dim, seed):
     """
     import test_flydsl_grouped_gemm_gfx1250 as t
 
-    t.set_data_format("a8w4")
+    t.set_data_format("a4w4")
     return t.run_moe(
-        "a8w4",
+        "a4w4",
         experts=experts, tokens=tokens, topk=topk, model_dim=model_dim,
-        inter_dim=inter_dim, layout="gugu",
+        inter_dim=inter_dim,
         activation=t.ActivationType.Silu,
-        seed=seed,
+        use_bias=False,
         # eager path (bench=False) so each stage launches once, unwrapped by a
         # CUDA graph -- the spy has to see a real dispatch.
         bench=False, iters=1, warmup=0, raise_on_fail=False,
@@ -806,9 +858,20 @@ def replay(cap: Capture, isa_source: str | Path, *, kernel: str | None = None,
         )
 
     torch_stream = torch.cuda.current_stream(live.device)
+    isa_path = Path(isa_source)
+    fixed_lds_match = re.search(
+        r"\.amdhsa_group_segment_fixed_size\s+(\d+)",
+        isa_path.read_text(encoding="utf-8"),
+    )
+    fixed_lds_bytes = int(fixed_lds_match.group(1)) if fixed_lds_match else 0
+    dynamic_lds_bytes = (
+        lds_bytes
+        if lds_bytes is not None
+        else (0 if fixed_lds_bytes else cap.lds_bytes)
+    )
     spec = KernelLaunchSpec(
         grid=cap.grid, block=cap.block,
-        shared_mem_bytes=(lds_bytes if lds_bytes is not None else cap.lds_bytes),
+        shared_mem_bytes=dynamic_lds_bytes,
         stream=int(torch_stream.cuda_stream),
         device=device,
     )

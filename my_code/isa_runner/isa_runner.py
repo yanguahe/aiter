@@ -319,13 +319,17 @@ class KernelLaunchSpec:
     device: int = 0
 
 
-def _pack_args(args: Iterable[Any]) -> ctypes.Array:
+def _pack_args(args: Iterable[Any] | bytes | bytearray) -> ctypes.Array:
     """Pack kernel args into one kernarg buffer with natural alignment.
 
     Accepts torch tensors and ints (pointers/scalars) plus explicit ctypes
     values; use ctypes when the width matters, since a bare Python int is
     ambiguous and is packed as a 4-byte int32 here.
     """
+    if isinstance(args, (bytes, bytearray)):
+        payload = bytes(args) or b"\0"
+        return (ctypes.c_char * len(payload)).from_buffer_copy(payload)
+
     blob = bytearray()
 
     def put(value, align: int):
@@ -383,7 +387,12 @@ class IsaModule:
             self._functions[name] = fn
         return self._functions[name]
 
-    def launch(self, name: str, args: Sequence[Any], spec: KernelLaunchSpec):
+    def launch(
+        self,
+        name: str,
+        args: Sequence[Any] | bytes | bytearray,
+        spec: KernelLaunchSpec,
+    ):
         fn = self.function(name)
         buf = _pack_args(args)
         size = ctypes.c_size_t(len(buf))
@@ -401,7 +410,9 @@ class IsaModule:
     def synchronize(self):
         self._hip.check(self._hip.lib.hipDeviceSynchronize())
 
-    def benchmark(self, name: str, args: Sequence[Any], spec: KernelLaunchSpec,
+    def benchmark(self, name: str,
+                  args: Sequence[Any] | bytes | bytearray,
+                  spec: KernelLaunchSpec,
                   *, iters: int = 100, warmup: int = 20) -> dict:
         """Time repeated launches with HIP events (dispatch-level timing).
 

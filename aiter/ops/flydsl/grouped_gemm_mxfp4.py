@@ -85,6 +85,41 @@ def _select_gemm1_num_waves_per_tensor_tdm(default: int) -> int:
     return num_waves
 
 
+def _select_gemm2_num_waves_per_tensor_tdm(default: int) -> int:
+    """Select a GEMM2-only TDM owner count without changing GEMM1."""
+    value = os.environ.get("AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM")
+    if value is None:
+        return default
+    try:
+        num_waves = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            "AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM must be 1, 2, or 4"
+        ) from exc
+    if num_waves not in (1, 2, 4):
+        raise ValueError(
+            "AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM must be 1, 2, or 4"
+        )
+    return num_waves
+
+
+def _select_gemm2_output_split_wm(default: int = 3) -> int:
+    """Select the first GEMM2 output-TDM slice in logical WM rows."""
+    try:
+        split_wm = int(
+            os.environ.get("AITER_FLYDSL_GEMM2_OUTPUT_SPLIT_WM", str(default))
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "AITER_FLYDSL_GEMM2_OUTPUT_SPLIT_WM must be an integer from 1 to 7"
+        ) from exc
+    if split_wm not in range(1, 8):
+        raise ValueError(
+            "AITER_FLYDSL_GEMM2_OUTPUT_SPLIT_WM must be an integer from 1 to 7"
+        )
+    return split_wm
+
+
 def _select_epilogue_batch_wn(default: int) -> int:
     """Selects the target GEMM1 SiLU epilogue batch width."""
     try:
@@ -309,6 +344,30 @@ def flydsl_grouped_gemm_a8w4_masked(
             (512, 2, 1),
         )
     )
+    target_gemm2 = all(
+        (
+            a_is_fp4,
+            N == 7168,
+            K == 3072,
+            tile_n == 256,
+            tile_k == 256,
+            num_buffers == 4,
+            tile_m == 256,
+            m_warp == 2,
+            n_warp == 2,
+            stage1_act == 0,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+            n_experts > 0,
+        )
+    )
+    if target_gemm2:
+        waves_per_tensor_tdm = _select_gemm2_num_waves_per_tensor_tdm(
+            waves_per_tensor_tdm
+        )
     launch_gemm_a8w4_tdm(
         out,
         ptr_arg(a),
@@ -343,7 +402,15 @@ def flydsl_grouped_gemm_a8w4_masked(
         float(situ_linear_beta),
         _select_epilogue_batch_wn(8 if target_fp4_prefill else 1),
         int(bool(a_preshuffle)),
-        _select_schedule_hints(1 if target_fp4_prefill else 0),
+        (
+            _select_schedule_hints(1)
+            if target_fp4_prefill
+            else (
+                _select_binary_int("AITER_FLYDSL_GEMM2_SCHEDULE_HINTS", 0)
+                if target_gemm2
+                else 0
+            )
+        ),
         _select_relax_cluster_wrap_dscnt(1 if target_fp4_prefill else 0),
         _select_binary_int("AITER_FLYDSL_GEMM1_DIRECT_SCALES", 0)
         if target_fp4_prefill
@@ -355,8 +422,24 @@ def flydsl_grouped_gemm_a8w4_masked(
         _select_binary_int("AITER_FLYDSL_GEMM1_M_MAJOR_SWIZZLE", 0)
         if target_fp4_prefill
         else 0,
-        _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4),
-        _select_positive_int("AITER_FLYDSL_GEMM1_FENCE_COVER_MMA", 8),
+        (
+            _select_positive_int("AITER_FLYDSL_GEMM1_MMA_GROUP", 4)
+            if target_fp4_prefill
+            else (
+                _select_positive_int("AITER_FLYDSL_GEMM2_MMA_GROUP", 4)
+                if target_gemm2
+                else 4
+            )
+        ),
+        (
+            _select_positive_int("AITER_FLYDSL_GEMM1_FENCE_COVER_MMA", 8)
+            if target_fp4_prefill
+            else (
+                _select_positive_int("AITER_FLYDSL_GEMM2_FENCE_COVER_MMA", 8)
+                if target_gemm2
+                else 8
+            )
+        ),
         (
             _select_tristate("AITER_FLYDSL_GEMM1_DISABLE_XDL_ARB_STALL")
             if target_fp4_prefill
@@ -376,6 +459,21 @@ def flydsl_grouped_gemm_a8w4_masked(
         (
             _select_binary_int("AITER_FLYDSL_GEMM1_OVERLAP_OUTPUT_STORE", 0)
             if target_fp4_prefill
+            else (
+                _select_binary_int("AITER_FLYDSL_GEMM2_OVERLAP_OUTPUT_STORE", 0)
+                if target_gemm2
+                else 0
+            )
+        ),
+        (
+            _select_gemm2_output_split_wm()
+            if target_gemm2
+            and _select_binary_int("AITER_FLYDSL_GEMM2_OVERLAP_OUTPUT_STORE", 0)
+            else 0
+        ),
+        (
+            _select_binary_int("AITER_FLYDSL_GEMM2_OUTPUT_WAVE_SPLIT", 0)
+            if target_gemm2
             else 0
         ),
     )

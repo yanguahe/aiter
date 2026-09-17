@@ -42,14 +42,14 @@ Modes:
   att-validate Validate the ATT workload without tracing
 
 Target selection:
-  --gemm2      Benchmark the current FlyDSL GEMM2 as "baseline" and "apre".
+  --gemm2      Benchmark the registered GEMM2 baseline and optimization cases.
                Select GEMM1 with AITER_REPRO_GEMM1_CASE; the default is
                sync_mg4_fc28_apre_exactopt.
 
 Environment aliases:
   ROUNDS=3 RUN_VERIFY=1 RUN_ATT=0
   CASE_LIST=baseline_93665e,sync_mg4_fc28_apre_exactopt   GEMM1 cases
-  CASE_LIST=baseline,apre                                GEMM2 cases
+  CASE_LIST=baseline,apre,apre_wpt2                      GEMM2 cases
   AITER_REPRO_GEMM1_CASE=sync_mg4_fc28   Select GEMM1 in --gemm2 mode
   AITER_REPRO_GEMM2_APRE_PRODUCER=rowgroup|three_kernel
   AITER_REPRO_GEMM2_APRE_RPW=1|2|4|8     Rowgroup rows per wave
@@ -337,13 +337,20 @@ declare -a CLEAR_ENV=(
     -u AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER
     -u AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW
     -u AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH
+    -u AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM
+    -u AITER_FLYDSL_GEMM2_SCHEDULE_HINTS
+    -u AITER_FLYDSL_GEMM2_MMA_GROUP
+    -u AITER_FLYDSL_GEMM2_FENCE_COVER_MMA
+    -u AITER_FLYDSL_GEMM2_OVERLAP_OUTPUT_STORE
+    -u AITER_FLYDSL_GEMM2_OUTPUT_SPLIT_WM
+    -u AITER_FLYDSL_GEMM2_OUTPUT_WAVE_SPLIT
 )
 
 declare -a COMMON_ENV=(
     AITER_USE_GROUPED_GEMM=1
     AITER_GROUPED_DEBUG=0
     ENABLE_CK=0
-    FLYDSL_DUMP_IR=0
+    "FLYDSL_DUMP_IR=${FLYDSL_DUMP_IR:-0}"
     AITER_LOG_MORE=1
     AITER_FORCE_GFX1250=1
     GPU_ARCHS=gfx1250
@@ -379,7 +386,14 @@ declare -a GEMM1_CASES=(
 )
 
 if [[ "$TARGET" == gemm2 ]]; then
-    declare -a CASES=(baseline apre)
+    declare -a CASES=(
+        baseline
+        apre
+        apre_wpt2
+        apre_wpt2_mg4_fc28
+        apre_wpt2_mg4_fc28_ostore2p
+        apre_wpt2_mg4_fc28_ostore2p_ow2
+    )
 else
     declare -a CASES=("${GEMM1_CASES[@]}")
 fi
@@ -388,10 +402,16 @@ if [[ -n "${CASE_LIST:-}" ]]; then
 fi
 if [[ "$TARGET" == gemm2 ]]; then
     for name in "${CASES[@]}"; do
-        if [[ "$name" != baseline && "$name" != apre ]]; then
-            echo "--gemm2 supports only cases: baseline, apre (got '$name')." >&2
-            exit 2
-        fi
+        case "$name" in
+            baseline|apre|apre_wpt2|apre_wpt2_mg4_fc28|\
+                apre_wpt2_mg4_fc28_ostore2p|\
+                apre_wpt2_mg4_fc28_ostore2p_ow2)
+                ;;
+            *)
+                echo "--gemm2 supports only registered GEMM2 cases (got '$name')." >&2
+                exit 2
+                ;;
+        esac
     done
 fi
 
@@ -483,11 +503,59 @@ case_env() {
     gemm1_case_env "$GEMM1_FOR_GEMM2"
     case "$name" in
         baseline)
-            CASE_ENV+=(AITER_FLYDSL_GEMM2_A_PRESHUFFLE=0)
+            CASE_ENV+=(
+                AITER_FLYDSL_GEMM2_A_PRESHUFFLE=0
+                AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM=1
+                AITER_FLYDSL_GEMM2_SCHEDULE_HINTS=0
+            )
             ;;
         apre)
             CASE_ENV+=(
                 AITER_FLYDSL_GEMM2_A_PRESHUFFLE=1
+                AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM=1
+                AITER_FLYDSL_GEMM2_SCHEDULE_HINTS=0
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER=$GEMM2_APRE_PRODUCER"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW=$GEMM2_APRE_RPW"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH=$GEMM2_APRE_PREFETCH"
+            )
+            ;;
+        apre_wpt2)
+            CASE_ENV+=(
+                AITER_FLYDSL_GEMM2_A_PRESHUFFLE=1
+                AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM=2
+                AITER_FLYDSL_GEMM2_SCHEDULE_HINTS=0
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER=$GEMM2_APRE_PRODUCER"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW=$GEMM2_APRE_RPW"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH=$GEMM2_APRE_PREFETCH"
+            )
+            ;;
+        apre_wpt2_mg4_fc28)
+            CASE_ENV+=(
+                AITER_FLYDSL_GEMM2_A_PRESHUFFLE=1
+                AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM=2
+                AITER_FLYDSL_GEMM2_SCHEDULE_HINTS=1
+                AITER_FLYDSL_GEMM2_MMA_GROUP=4
+                AITER_FLYDSL_GEMM2_FENCE_COVER_MMA=28
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER=$GEMM2_APRE_PRODUCER"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW=$GEMM2_APRE_RPW"
+                "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH=$GEMM2_APRE_PREFETCH"
+            )
+            ;;
+        apre_wpt2_mg4_fc28_ostore2p|\
+            apre_wpt2_mg4_fc28_ostore2p_ow2)
+            local output_wave_split=0
+            if [[ "$name" != apre_wpt2_mg4_fc28_ostore2p ]]; then
+                output_wave_split=1
+            fi
+            CASE_ENV+=(
+                AITER_FLYDSL_GEMM2_A_PRESHUFFLE=1
+                AITER_FLYDSL_GEMM2_WAVES_PER_TENSOR_TDM=2
+                AITER_FLYDSL_GEMM2_SCHEDULE_HINTS=1
+                AITER_FLYDSL_GEMM2_MMA_GROUP=4
+                AITER_FLYDSL_GEMM2_FENCE_COVER_MMA=28
+                AITER_FLYDSL_GEMM2_OVERLAP_OUTPUT_STORE=1
+                "AITER_FLYDSL_GEMM2_OUTPUT_SPLIT_WM=${AITER_REPRO_GEMM2_OUTPUT_SPLIT_WM:-3}"
+                "AITER_FLYDSL_GEMM2_OUTPUT_WAVE_SPLIT=$output_wave_split"
                 "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PRODUCER=$GEMM2_APRE_PRODUCER"
                 "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_RPW=$GEMM2_APRE_RPW"
                 "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH=$GEMM2_APRE_PREFETCH"
