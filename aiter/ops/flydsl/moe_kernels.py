@@ -2926,12 +2926,15 @@ _ROUTEKS_KSPLIT_GRID_THRESHOLD = 512
 
 
 @functools.cache
-def _get_compiled_quant_token_fp4(feat_dim: int):
+def _get_compiled_quant_token_fp4(feat_dim: int, tdm_hidden_chunks: int = 0):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_quant_token_fp4_module,
     )
 
-    return build_moe_quant_token_fp4_module(feat_dim=feat_dim)
+    return build_moe_quant_token_fp4_module(
+        feat_dim=feat_dim,
+        tdm_hidden_chunks=tdm_hidden_chunks,
+    )
 
 
 @functools.cache
@@ -2944,12 +2947,22 @@ def _get_compiled_invert_route_rows(source_topk: int = 0):
 
 
 @functools.cache
-def _get_compiled_scatter_preshuffled_a_lds(feat_dim: int):
+def _get_compiled_scatter_preshuffled_a_lds(
+    feat_dim: int,
+    payload_tiles_per_epoch: int = 1,
+    stage_scale_in_lds: bool = False,
+    skip_empty_row_tiles: bool = False,
+):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_scatter_preshuffled_a_lds_module,
     )
 
-    return build_moe_scatter_preshuffled_a_lds_module(feat_dim=feat_dim)
+    return build_moe_scatter_preshuffled_a_lds_module(
+        feat_dim=feat_dim,
+        payload_tiles_per_epoch=payload_tiles_per_epoch,
+        stage_scale_in_lds=stage_scale_in_lds,
+        skip_empty_row_tiles=skip_empty_row_tiles,
+    )
 
 
 @functools.cache
@@ -3121,8 +3134,28 @@ def flydsl_moe_fused_quant_preshuffle(
             token_scale = torch.empty(
                 (token_rows, Ws), dtype=torch.uint8, device=device
             )
+            default_tdm_chunks = (
+                7
+                if feat_dim == 7168
+                and token_rows >= 1024
+                and token_rows % warps_per_block == 0
+                else 0
+            )
+            try:
+                tdm_hidden_chunks = int(
+                    os.environ.get(
+                        "AITER_FLYDSL_GEMM1_APRE_TDM_HIDDEN_CHUNKS",
+                        str(default_tdm_chunks),
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "AITER_FLYDSL_GEMM1_APRE_TDM_HIDDEN_CHUNKS must be an integer"
+                ) from exc
+            if token_rows % warps_per_block:
+                tdm_hidden_chunks = 0
             token_grid = (token_rows + warps_per_block - 1) // warps_per_block
-            _get_compiled_quant_token_fp4(feat_dim)(
+            _get_compiled_quant_token_fp4(feat_dim, tdm_hidden_chunks)(
                 ptr_arg(token_input.view(-1)),
                 ptr_arg(token_payload.view(-1)),
                 ptr_arg(token_scale.view(-1)),
@@ -3143,7 +3176,32 @@ def flydsl_moe_fused_quant_preshuffle(
                 stream=torch.cuda.current_stream(),
             )
             scatter_grid = (n_rows + 31) // 32
-            _get_compiled_scatter_preshuffled_a_lds(feat_dim)(
+            default_scatter_tiles_per_epoch = 7 if feat_dim == 7168 else 1
+            try:
+                scatter_tiles_per_epoch = int(
+                    os.environ.get(
+                        "AITER_FLYDSL_GEMM1_APRE_SCATTER_TILES_PER_EPOCH",
+                        str(default_scatter_tiles_per_epoch),
+                    )
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "AITER_FLYDSL_GEMM1_APRE_SCATTER_TILES_PER_EPOCH must be an integer"
+                ) from exc
+            scatter_scale_lds = os.environ.get(
+                "AITER_FLYDSL_GEMM1_APRE_SCATTER_SCALE_LDS",
+                "1" if feat_dim == 7168 else "0",
+            ) in ("1", "true", "True")
+            scatter_skip_empty = os.environ.get(
+                "AITER_FLYDSL_GEMM1_APRE_SCATTER_SKIP_EMPTY",
+                "1" if feat_dim == 7168 else "0",
+            ) in ("1", "true", "True")
+            _get_compiled_scatter_preshuffled_a_lds(
+                feat_dim,
+                scatter_tiles_per_epoch,
+                scatter_scale_lds,
+                scatter_skip_empty,
+            )(
                 ptr_arg(token_payload.view(torch.uint8)),
                 ptr_arg(token_scale.view(torch.uint8)),
                 ptr_arg(out_payload.view(-1)),

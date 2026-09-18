@@ -66,7 +66,15 @@ import flydsl.expr as fx
 from flydsl._mlir import ir
 from flydsl._mlir.dialects import llvm, scf
 from flydsl.compiler.kernel_function import CompilationContext
-from flydsl.expr import arith, const_expr, gpu, ptrtoint, range_constexpr, rocdl
+from flydsl.expr import (
+    arith,
+    const_expr,
+    gpu,
+    ptrtoint,
+    range_constexpr,
+    rocdl,
+    tdm_ops,
+)
 from flydsl.expr.arith import ArithValue, CmpIPredicate
 from flydsl.expr.typing import Int32, T
 from flydsl.runtime.device import get_rocm_arch
@@ -303,11 +311,44 @@ def _emit_quant_block_loop(c: SimpleNamespace) -> None:
         hidden_row_addr, num_records_bytes=c.feat_bytes_per_row
     )
     feat_elem_base = arith.constant(0, type=i32)
-    for it in range_constexpr(c.block_iters):
-        # MX block (along K) this lane works on this iteration.
-        mx_block = (mx_group_base + arith.constant(it, type=i32)) * arith.constant(
+    n_chunks = getattr(c, "hidden_chunks", 1)
+    assert c.block_iters % n_chunks == 0
+    iters_per_chunk = c.block_iters // n_chunks
+    chunk_prefetch = getattr(c, "chunk_prefetch", None)
+    hidden_lds_load = getattr(c, "hidden_lds_load", None)
+
+    def _mx_block_of(it):
+        return (mx_group_base + arith.constant(it, type=i32)) * arith.constant(
             c.mx_blocks_per_wave_iter, type=i32
         ) + c.block_in_wave
+
+    def _emit_hidden_load(it):
+        col_base = (
+            _mx_block_of(it) * arith.constant(32, type=i32)
+            + c.lane_in_block * c.c_elems_per_lane
+        )
+        if const_expr(hidden_lds_load is not None):
+            chunk = it // iters_per_chunk
+            chunk_elems = c.mx_blocks_per_wave_iter * iters_per_chunk * 32
+            return hidden_lds_load(
+                c.hidden_lds_idx,
+                c.hidden_lds_row_off
+                + arith.constant((chunk % 2) * c.hidden_slot_bytes, type=i32)
+                + (col_base - arith.constant(chunk * chunk_elems, type=i32))
+                * arith.constant(2, type=i32),
+            )
+        return buffer_ops.buffer_load(
+            hidden_rsrc,
+            (feat_elem_base + col_base) >> c.c1_i32,
+            vec_width=4,
+            dtype=i32,
+        )
+
+    for it in range_constexpr(c.block_iters):
+        if const_expr(chunk_prefetch is not None and it % iters_per_chunk == 0):
+            chunk_prefetch(it // iters_per_chunk)
+        # MX block (along K) this lane works on this iteration.
+        mx_block = _mx_block_of(it)
         block_in_range = arith.cmpi(
             CmpIPredicate.ult,
             mx_block,
@@ -327,10 +368,7 @@ def _emit_quant_block_loop(c: SimpleNamespace) -> None:
                     + c.lane_in_block * c.c_elems_per_lane
                 )
                 # 2 bf16/dword -> 4 dwords; one aligned dwordx4 = 8 bf16.
-                hidden_dword = (feat_elem_base + col_base) >> c.c1_i32
-                dwords4 = buffer_ops.buffer_load(
-                    hidden_rsrc, hidden_dword, vec_width=4, dtype=i32
-                )
+                dwords4 = _emit_hidden_load(it)
                 vec8_bf16_ty = T.vec(8, T.bf16)
                 vec8_f32_ty = T.vec(8, f32)
                 bf16x8 = vector.bitcast(vec8_bf16_ty, dwords4)
@@ -1588,13 +1626,27 @@ def build_moe_fused_quant_preshuffle_route_ksplit_module(
     return launch_fused
 
 
-def build_moe_quant_token_fp4_module(feat_dim: int):
+def build_moe_quant_token_fp4_module(feat_dim: int, tdm_hidden_chunks: int = 0):
     """Quantize each source token once with the routeks pk8 quantization path."""
     L = _quant_layout(feat_dim, "fp4", 1)
     if not L.use_pk8:
         raise NotImplementedError("token FP4 quant requires gfx1250 pk8")
+    if tdm_hidden_chunks < 0:
+        raise ValueError("tdm_hidden_chunks must be non-negative")
 
-    module_name = f"moe_quant_token_fd{feat_dim}_fp4_pk8"
+    if tdm_hidden_chunks:
+        if L.block_iters % tdm_hidden_chunks:
+            raise ValueError(
+                f"tdm_hidden_chunks={tdm_hidden_chunks} must divide "
+                f"block_iters={L.block_iters}"
+            )
+        if (feat_dim * 2) % (tdm_hidden_chunks * 16):
+            raise ValueError("each hidden TDM chunk must be 16-byte aligned")
+    hidden_chunk_bytes = (
+        feat_dim * 2 // tdm_hidden_chunks if tdm_hidden_chunks else 0
+    )
+    tdm_tag = f"_hidtdm{tdm_hidden_chunks}" if tdm_hidden_chunks else ""
+    module_name = f"moe_quant_token_fd{feat_dim}_fp4_pk8{tdm_tag}"
     wave_size = L.wave_size
     warps_per_block = L.warps_per_block
 
@@ -1626,9 +1678,67 @@ def build_moe_quant_token_fp4_module(feat_dim: int):
         bid = fx.Uint32(fx.block_idx.x)
         warp_in_block = tid // c_wave
         lane = tid - warp_in_block * c_wave
-        token = bid * arith.constant(warps_per_block, type=i32) + warp_in_block
+        c_wpb = arith.constant(warps_per_block, type=i32)
+        token0 = bid * c_wpb
+        token = token0 + warp_in_block
+
+        hslot = warps_per_block * hidden_chunk_bytes if tdm_hidden_chunks else 0
+        h_lds = None
+        hidden_lds_idx = None
+        hidden_lds_load = None
+        hidden_lds_row_off = c0_i32
+        is_loader = warp_in_block == fx.Uint32(c0_i32)
+        if const_expr(tdm_hidden_chunks):
+            h_lds = fx.SharedAllocator().allocate(2 * hslot)._ptr
+            hidden_lds_idx = fx.index_cast(T.index, ptrtoint(h_lds))
+            hidden_lds_load, _ = make_lds_copy_ops(128)
+            hidden_lds_row_off = warp_in_block * arith.constant(
+                hidden_chunk_bytes, type=i32
+            )
 
         if token < fx.Uint32(num_tokens):
+            chunk_prefetch = None
+            if const_expr(tdm_hidden_chunks):
+                hg_base = fx.recast_iter(fx.Int8, grouped_in) + fx.Int64(token0) * (
+                    feat_dim * 2
+                )
+
+                def _issue_hidden(chunk):
+                    shape = (warps_per_block, hidden_chunk_bytes)
+                    gt = fx.Tensor(
+                        fx.make_view(
+                            hg_base + fx.Int64(chunk * hidden_chunk_bytes),
+                            fx.make_layout(shape, (feat_dim * 2, 1)),
+                        )
+                    )
+                    dst = fx.Tensor(
+                        fx.make_view(
+                            fx.add_offset(h_lds, (chunk % 2) * hslot),
+                            fx.make_layout(shape, (hidden_chunk_bytes, 1)),
+                        )
+                    )
+                    atom = fx.rocdl.make_tdm_atom(
+                        gt,
+                        [warps_per_block, None],
+                        strides=[feat_dim * 2, None],
+                        num_warps=1,
+                    )
+                    fx.copy(atom, gt, dst)
+
+                def chunk_prefetch(chunk):
+                    if const_expr(chunk == 0) and is_loader:
+                        _issue_hidden(0)
+                        tdm_ops.tensor_wait(0)
+                    gpu.barrier()
+                    if is_loader and const_expr(chunk + 1 < tdm_hidden_chunks):
+                        _issue_hidden(chunk + 1)
+                    if const_expr(chunk > 0):
+                        if is_loader:
+                            tdm_ops.tensor_wait(
+                                1 if chunk + 1 < tdm_hidden_chunks else 0
+                            )
+                        gpu.barrier()
+
             block_in_wave = lane // fx.Uint32(L.lanes_per_mx_block)
             lane_in_block = lane - block_in_wave * fx.Uint32(L.lanes_per_mx_block)
             c = SimpleNamespace(
@@ -1671,6 +1781,12 @@ def build_moe_quant_token_fp4_module(feat_dim: int):
                 feat_bytes_per_row=feat_dim * 2,
                 feat_row_i32=token,
                 scale_rsrc=ptr_rsrc(token_scale),
+                hidden_chunks=max(1, tdm_hidden_chunks),
+                chunk_prefetch=chunk_prefetch,
+                hidden_lds_load=hidden_lds_load,
+                hidden_lds_idx=hidden_lds_idx,
+                hidden_lds_row_off=hidden_lds_row_off,
+                hidden_slot_bytes=hslot,
             )
             _emit_quant_block_loop(c)
 
@@ -1772,7 +1888,12 @@ def build_moe_invert_route_rows_module(source_topk: int = 0):
     return launch_invert
 
 
-def build_moe_scatter_preshuffled_a_lds_module(feat_dim: int):
+def build_moe_scatter_preshuffled_a_lds_module(
+    feat_dim: int,
+    payload_tiles_per_epoch: int = 1,
+    stage_scale_in_lds: bool = False,
+    skip_empty_row_tiles: bool = False,
+):
     """Gather token FP4 rows, transpose in LDS, and emit coalesced A stores."""
     if feat_dim % 128:
         raise ValueError("preshuffled A scatter requires feat_dim divisible by 128")
@@ -1784,14 +1905,33 @@ def build_moe_scatter_preshuffled_a_lds_module(feat_dim: int):
     scale_dwords_per_row = scale_bytes_per_row // 4
     waves_per_block = BLOCK_THREADS // 32
     rows_per_wave = 32 // waves_per_block
-    lds_row_dwords = 33
+    payload_tiles = payload_blocks_per_row // waves_per_block
+    if payload_tiles_per_epoch <= 0 or payload_tiles % payload_tiles_per_epoch:
+        raise ValueError(
+            f"payload_tiles_per_epoch={payload_tiles_per_epoch} must divide "
+            f"payload_tiles={payload_tiles}"
+        )
+    payload_epochs = payload_tiles // payload_tiles_per_epoch
+    scale_lds_row_dwords = scale_dwords_per_row + 1
+    lds_row_dwords = max(
+        32 * payload_tiles_per_epoch + 1,
+        scale_lds_row_dwords if stage_scale_in_lds else 0,
+    )
     lds_row_bytes = lds_row_dwords * 4
     lds_bytes = 32 * lds_row_bytes
     assert rows_per_wave == 4
     assert payload_blocks_per_row % waves_per_block == 0
     assert scale_dwords_per_row % waves_per_block == 0
 
-    module_name = f"moe_scatter_preshuffled_a_fd{feat_dim}_r32_lds"
+    epoch_tag = (
+        f"_pe{payload_tiles_per_epoch}" if payload_tiles_per_epoch != 1 else ""
+    )
+    scale_tag = "_slds" if stage_scale_in_lds else ""
+    skip_tag = "_skipempty" if skip_empty_row_tiles else ""
+    module_name = (
+        f"moe_scatter_preshuffled_a_fd{feat_dim}_r32_lds"
+        f"{epoch_tag}{scale_tag}{skip_tag}"
+    )
 
     @flyc.kernel(name=module_name, known_block_size=[BLOCK_THREADS, 1, 1])
     def scatter_kernel(
@@ -1830,70 +1970,128 @@ def build_moe_scatter_preshuffled_a_lds_module(feat_dim: int):
         lds_idx = fx.index_cast(T.index, fx.ptrtoint(lds_ptr))
         lds_load_b32, lds_store_b32 = make_lds_copy_ops(32)
 
-        for it in range_constexpr(payload_blocks_per_row // waves_per_block):
-            k_block_base = fx.Uint32(it * waves_per_block)
-            for r in range_constexpr(rows_per_wave):
-                value = buffer_ops.buffer_load(
-                    src_payload_rsrc,
-                    source_tokens[r] * fx.Uint32(payload_dwords_per_row)
-                    + k_block_base * fx.Uint32(4)
-                    + lane,
-                    vec_width=1,
-                    dtype=i32,
+        def write_payload_epoch(epoch):
+            for sub in range_constexpr(payload_tiles_per_epoch):
+                tile_it = epoch * payload_tiles_per_epoch + sub
+                k_block_base = fx.Uint32(tile_it * waves_per_block)
+                for r in range_constexpr(rows_per_wave):
+                    value = buffer_ops.buffer_load(
+                        src_payload_rsrc,
+                        source_tokens[r] * fx.Uint32(payload_dwords_per_row)
+                        + k_block_base * fx.Uint32(4)
+                        + lane,
+                        vec_width=1,
+                        dtype=i32,
+                    )
+                    lds_store_b32(
+                        lds_idx,
+                        fx.Int32((wave * rows_per_wave + r) * lds_row_bytes)
+                        + fx.Int32((sub * 32 + lane) * 4),
+                        vector.from_elements(T.vec(1, i32), [value]),
+                    )
+
+        def read_payload_epoch(epoch):
+            for sub in range_constexpr(payload_tiles_per_epoch):
+                tile_it = epoch * payload_tiles_per_epoch + sub
+                k_block_base = fx.Uint32(tile_it * waves_per_block)
+                lds_read_byte = fx.Int32(
+                    lane * lds_row_bytes + (sub * 32 + wave * 4) * 4
                 )
-                lds_store_b32(
-                    lds_idx,
-                    fx.Int32((wave * rows_per_wave + r) * lds_row_bytes)
-                    + fx.Int32(lane * 4),
-                    vector.from_elements(T.vec(1, i32), [value]),
+                values = [
+                    lds_load_b32(
+                        lds_idx,
+                        lds_read_byte + fx.Int32(j * 4),
+                    )[0]
+                    for j in range_constexpr(4)
+                ]
+                payload_value = vector.from_elements(T.vec(4, i32), values)
+                row_tile16 = row // fx.Uint32(16)
+                row_in_tile16 = row - row_tile16 * fx.Uint32(16)
+                k_block = k_block_base + wave
+                dst_byte = (
+                    row_tile16 * fx.Uint32(payload_bytes_per_row * 16)
+                    + k_block * fx.Uint32(16 * 16)
+                    + row_in_tile16 * fx.Uint32(16)
                 )
+                if dst_valid:
+                    buffer_ops.buffer_store(
+                        payload_value,
+                        dst_payload_rsrc,
+                        dst_byte,
+                        offset_is_bytes=True,
+                    )
 
-            gpu.barrier()
+        def emit_nonempty_tile():
+            for epoch in range_constexpr(payload_epochs):
+                write_payload_epoch(epoch)
+                gpu.barrier()
+                read_payload_epoch(epoch)
+                gpu.barrier()
 
-            values = [
-                lds_load_b32(
-                    lds_idx,
-                    fx.Int32(lane * lds_row_bytes + wave * 16 + j * 4),
-                )[0]
-                for j in range_constexpr(4)
-            ]
-            payload_value = vector.from_elements(T.vec(4, i32), values)
-            row_tile16 = row // fx.Uint32(16)
-            row_in_tile16 = row - row_tile16 * fx.Uint32(16)
-            k_block = k_block_base + wave
-            dst_byte = (
-                row_tile16 * fx.Uint32(payload_bytes_per_row * 16)
-                + k_block * fx.Uint32(16 * 16)
-                + row_in_tile16 * fx.Uint32(16)
-            )
-            if dst_valid:
-                buffer_ops.buffer_store(
-                    payload_value,
-                    dst_payload_rsrc,
-                    dst_byte,
-                    offset_is_bytes=True,
-                )
+            token = dst_valid.select(fx.Uint32(token_i32), fx.Uint32(0))
+            row_tile32 = row // fx.Uint32(32)
+            src_scale_base = token * fx.Uint32(scale_dwords_per_row)
+            if const_expr(stage_scale_in_lds):
+                scale_load_iters = (scale_dwords_per_row + 31) // 32
+                for it in range_constexpr(scale_load_iters):
+                    scale_dword = fx.Uint32(it * 32) + lane
+                    if scale_dword < fx.Uint32(scale_dwords_per_row):
+                        for r in range_constexpr(rows_per_wave):
+                            value = buffer_ops.buffer_load(
+                                src_scale_rsrc,
+                                source_tokens[r] * fx.Uint32(scale_dwords_per_row)
+                                + scale_dword,
+                                vec_width=1,
+                                dtype=i32,
+                            )
+                            lds_store_b32(
+                                lds_idx,
+                                fx.Int32(
+                                    (wave * rows_per_wave + r) * lds_row_bytes
+                                )
+                                + fx.Int32(scale_dword * fx.Uint32(4)),
+                                vector.from_elements(T.vec(1, i32), [value]),
+                            )
 
-            gpu.barrier()
+                gpu.barrier()
 
-        token = dst_valid.select(fx.Uint32(token_i32), fx.Uint32(0))
-        row_tile32 = row // fx.Uint32(32)
-        src_scale_base = token * fx.Uint32(scale_dwords_per_row)
-        for it in range_constexpr(scale_dwords_per_row // waves_per_block):
-            scale_dword = wave + fx.Uint32(it * waves_per_block)
-            value = buffer_ops.buffer_load(
-                src_scale_rsrc,
-                src_scale_base + scale_dword,
-                vec_width=1,
-                dtype=i32,
-            )
-            dst_dword = (
-                row_tile32 * fx.Uint32(scale_dwords_per_row * 32)
-                + scale_dword * fx.Uint32(32)
-                + lane
-            )
-            if dst_valid:
-                buffer_ops.buffer_store(value, dst_scale_rsrc, dst_dword)
+                for it in range_constexpr(scale_dwords_per_row // waves_per_block):
+                    scale_dword = wave + fx.Uint32(it * waves_per_block)
+                    value = lds_load_b32(
+                        lds_idx,
+                        fx.Int32(lane * lds_row_bytes)
+                        + fx.Int32(scale_dword * fx.Uint32(4)),
+                    )[0]
+                    dst_dword = (
+                        row_tile32 * fx.Uint32(scale_dwords_per_row * 32)
+                        + scale_dword * fx.Uint32(32)
+                        + lane
+                    )
+                    if dst_valid:
+                        buffer_ops.buffer_store(value, dst_scale_rsrc, dst_dword)
+            else:
+                for it in range_constexpr(scale_dwords_per_row // waves_per_block):
+                    scale_dword = wave + fx.Uint32(it * waves_per_block)
+                    value = buffer_ops.buffer_load(
+                        src_scale_rsrc,
+                        src_scale_base + scale_dword,
+                        vec_width=1,
+                        dtype=i32,
+                    )
+                    dst_dword = (
+                        row_tile32 * fx.Uint32(scale_dwords_per_row * 32)
+                        + scale_dword * fx.Uint32(32)
+                        + lane
+                    )
+                    if dst_valid:
+                        buffer_ops.buffer_store(value, dst_scale_rsrc, dst_dword)
+
+        if const_expr(skip_empty_row_tiles):
+            live_mask = rocdl.ballot(T.i64, dst_valid)
+            if live_mask != fx.Int64(0):
+                emit_nonempty_tile()
+        else:
+            emit_nonempty_tile()
 
     @flyc.jit
     def launch_scatter(
