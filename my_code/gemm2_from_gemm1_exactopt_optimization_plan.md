@@ -2014,3 +2014,197 @@ ref output hash128 = d043e1891d95c1af3da5a30e37b9042a
 
 non-balanced 路径继续执行 runtime `m_tile_map` binary search，没有加入 balanced rows shortcut。
 所有测试结束后 `/data/yanguahe/code/gpu_users.sh` 报告无残留 GPU/KFD 进程。
+
+## 13. GEMM2 producer 的 cooperative TDM 优化（a07-3，2026-09-19）
+
+本节继续优化 `apre_wpt2_mg4_fc28_ostore2p_ow2` 所使用的 GEMM2 producer：
+
+```text
+moe_quant_preshuffled_a_fd3072_rpw2_pf2_direct
+```
+
+约束保持不变：不修改 GEMM1 producer，不改变 GEMM2 producer 的量化公式、有效 row 的
+A/ScaleA 内容、目标 physical layout、non-balanced 语义和原有规模 fallback。
+
+### 13.1 机器状态变化后的新起点
+
+在性能测试前，a07-3 的 `/data/yanguahe/code/gpu_users.sh` 报告无 GPU/KFD 用户，
+`rocm-smi` 显示 GPU use 为 0。重新测得原 `rpw2/prefetch2` direct producer：
+
+| producer | samples (us) | median |
+|---|---|---:|
+| 原 `rpw2/prefetch2` | `69.3, 69.0, 68.8` | `69.0` |
+
+因此本节统一以 `69.0 us` 为性能起点，而不是沿用机器状态变化前的数据。
+
+### 13.2 hidden input cooperative TDM
+
+原 direct producer 中，每个 wave 使用 `buffer_load_b128` 独立读取其负责 row 的 BF16 hidden
+数据。虽然 `prefetch_depth=2` 能覆盖一部分 load latency，但不同 wave 仍会分别建立地址、发起
+global load，并在量化循环中频繁等待。
+
+新路径把一个 16-row workgroup 的 `K=3072` BF16 输入沿 K 方向切为 6 段：
+
+```text
+每段每 row       = 1024 B = 512 BF16
+每段 16 rows     = 16 KiB
+双缓冲 hidden LDS = 32 KiB
+TDM owner         = wave 0
+```
+
+wave 0 使用 cooperative TDM 将下一段 hidden tile 搬入 LDS，8 个 waves 再从 LDS 读取各自的
+row/K block。双缓冲让下一段 global-to-LDS TDM 尽量与当前段的 MXFP4 scale reduction、FP4
+conversion 和 packing 重叠。只有完整的 16-row block 才启用该路径；expert 尾部或 capacity
+尾部的 partial block 继续走原 direct global-load 路径，避免 barrier divergence，也不改变
+non-balanced 的有效 row 判定。
+
+chunk sweep 结果：
+
+| hidden TDM 配置 | producer (us) | 结论 |
+|---|---:|---|
+| disabled | `69.0` median | 新起点 |
+| 1 chunk | `68.8` | tile 太大，几乎没有跨段 overlap |
+| 2 chunks | `72.1` | overlap 不足且新增同步成本 |
+| 3 chunks | `65.7` | 有效 |
+| 4 chunks | `65.6` | 有效，但仍有较长 load/drain 区间 |
+| 6 chunks | **`62.9`** | input-only 最优平衡点 |
+| 12 chunks | `66.5` | chunk/barrier 数量过多，控制成本反超收益 |
+
+将 input TDM owner 从 1 wave 增加到 2 或 4 waves 分别得到 `65.4 us` 和 `65.5 us`，均慢于
+单 owner 的 `62.9 us`。这说明该 tile 的瓶颈不是缺少 TDM issuing waves；增加 owner 只扩大
+descriptor/control 开销，并没有提高有效搬运吞吐。
+
+### 13.3 payload output cooperative TDM
+
+hidden TDM6 后，原路径仍由各 lane 对最终 preshuffled payload 执行离散 `buffer_store`。新路径
+先把完整 16-row payload tile 写入带 32B row skew 的 LDS：
+
+```text
+logical payload per MX block = 16 rows * 16 B = 256 B
+LDS pitch                    = 256 B + 32 B = 288 B
+payload LDS                  = 96 * 288 B = 27 KiB
+```
+
+量化计算结束后，2 个 waves 使用 output TDM 把每个 MX block 的有效 256B 从 LDS 连续写入最终
+global payload；32B skew 仅存在于 LDS，TDM tile extent 会丢弃 padding，不改变 global layout。
+ScaleA 继续使用原 byte-store 路径，因为把 ScaleA 改为 LDS/TDM store 的实验没有保持 byte-exact。
+
+output TDM owner sweep：
+
+| 配置 | producer (us) |
+|---|---:|
+| hidden TDM6，原 payload stores | `62.9` |
+| payload TDM，1 wave | `57.6` |
+| payload TDM，2 waves | **`52.5` |
+| payload TDM，4 waves | `52.8` |
+
+2 waves 已经能覆盖 output tile 的搬运需求；4 waves 没有增加有效带宽，反而略增 issuing 和同步
+成本。最终 kernel symbol 为：
+
+```text
+moe_quant_preshuffled_a_fd3072_rpw2_pf2_direct_hidtdm6_otdmw2
+```
+
+### 13.4 其他尝试及清理结果
+
+所有尝试均在保持原量化计算和 output layout 的前提下进行。无收益或错误路径已经从源码中删除。
+
+| 尝试 | 结果 | 判断 |
+|---|---:|---|
+| `rpw4/TDM12` | `65.2 us` | wave-row mapping 不如 `rpw2` |
+| `rpw8/TDM24` | `66.8 us` | 单 wave 循环和 live range 增加 |
+| `rpw1/TDM3` | `88.8 us` | workgroup 覆盖 row 太少，效率明显下降 |
+| `prefetch1/TDM6` | `63.8 us` | overlap 不足 |
+| `prefetch4/TDM6` | `63.4 us` | 更长 live range 未换来收益 |
+| descriptor 不 hoist + output TDM2 | `54.9 us` | 重建 descriptor 增加 scalar/control 开销 |
+| final barrier 仅保留 `dscnt` wait | `53.4 us` | 未优于通用 barrier |
+| payload LDS pad `16/48/64 B` | `54.1/54.3/54.1 us` | 均不如 32B skew |
+| chunked overlap output TDM | `56.7 us` | 额外阶段同步超过 overlap 收益 |
+| ScaleA dword packing | 无稳定收益 | 不保留 |
+| wave-private output TDM | random 错误，`rel_l2≈1.414` | descriptor/layout 不等价，删除 |
+| ScaleA LDS/TDM store | random 错误，`rel_l2≈0.073` | byte mapping 不等价，删除 |
+
+清理后只保留两个可控项：
+
+```text
+AITER_FLYDSL_GEMM2_A_PRESHUFFLE_TDM_CHUNKS
+AITER_FLYDSL_GEMM2_A_PRESHUFFLE_TDM_STORE
+```
+
+仅对目标 specialization `feat_dim=3072, rows_per_wave=2, prefetch_depth=2` 默认启用
+`chunks=6` 和 payload TDM store；其他 shape 默认保持原路径。kernel 接口也只新增对应的两个
+compile-time 参数，没有保留实验阶段的 owner、overlap、wave-private、ScaleA TDM 或 pad selector。
+
+### 13.5 最终正式回归
+
+GPU 空闲时执行：
+
+```bash
+CASE_LIST=apre_wpt2_mg4_fc28_ostore2p_ow2 \
+ROUNDS=3 RUN_VERIFY=1 RUN_ATT=0 \
+bash my_code/reproduce_compare.sh --gemm2
+```
+
+得到：
+
+| producer | samples (us) | median | 相对 `69.0 us` 起点 |
+|---|---|---:|---:|
+| hidden TDM6 + payload TDM2 | `53.0, 53.0, 52.0` | `53.0` | `-16.0 us` / `23.2%` |
+
+单次实验的最低值为 `52.5 us`，相对起点减少 `16.5 us`（`23.9%`）。正式三轮同时得到：
+
+```text
+const0 pass              = True
+logits_diff              = 0
+rel_l2                   = 0
+MoE output hash128       = 21291d9023c8af8a6324fe20f346a967
+ref output hash128       = 21291d9023c8af8a6324fe20f346a967
+GEMM2 samples            = 334.645, 333.800, 333.682 us
+GEMM2 median             = 333.800 us
+MoE e2e samples          = 1248.09, 1248.76, 1247.38 us
+MoE e2e median           = 1248.09 us
+```
+
+运行目录：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/my_code/gemm1_cycle_105pct_20260909/runs/
+  heliosr-1b114-a07-3_20260919T024849Z_gemm2_e2e-const0
+```
+
+balanced random：
+
+```text
+pass = True
+logits_diff = 3.39799e-06
+rel_l2 = 0.00260689
+MoE output hash128 = 1556fc617347e2dabc9cff19dbfd822b
+ref output hash128 = 1a5d22911ba167160b4f2c12092a5193
+```
+
+non-balanced random（`AITER_REPRO_EXPERT_BALANCE=false`）：
+
+```text
+pass = True
+logits_diff = 3.48778e-06
+rel_l2 = 0.00264113
+MoE output hash128 = 10ef188b89c427fde6c8b322b5fd4133
+ref output hash128 = d043e1891d95c1af3da5a30e37b9042a
+```
+
+non-balanced 路径仍通过 `m_tile_map` 确定 expert 边界；没有引入 balanced row shortcut。
+
+### 13.6 停止点
+
+本轮正式结果减少 `16.0 us`，距离“减少 20 us”的目标还差约 `4.0 us`。目前没有足够证据支持
+继续做低风险参数 sweep：hidden TDM chunk、owner waves、row mapping、prefetch depth、payload
+TDM owners、descriptor lifetime、barrier 和 LDS skew 均已覆盖，邻近配置都比当前 winner 慢。
+
+剩余时间主要属于必须保留的 MXFP4 scale reduction/conversion、ScaleA 写回、六段 input TDM 的
+同步，以及最终 payload LDS/TDM drain。若要再稳定减少约 `4 us`，更可能需要把 GEMM2 quant
+融合进 GEMM1 epilogue，或同时更改 producer/consumer physical layout；这会扩大接口、功能和
+正确性风险，超出本任务“不改变 producer 功能和规模限制”的安全优化范围。因此在当前 winner
+处停止，不继续无依据试验。
+
+正式测试后约半分钟，`gpu_users.sh` 检测到用户 `felix` 新启动了另一个 GPU 任务；它开始于上述
+正式测试完成之后，未用于也未影响本节性能数据，且未对该进程做任何操作。

@@ -2972,6 +2972,8 @@ def _get_compiled_quant_preshuffled_a_rowgroup(
     expert_tile_m: int,
     rows_per_wave: int,
     prefetch_depth: int,
+    tdm_hidden_chunks: int = 0,
+    tdm_payload_store: bool = False,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_quant_preshuffled_a_rowgroup_module,
@@ -2983,6 +2985,8 @@ def _get_compiled_quant_preshuffled_a_rowgroup(
         expert_tile_m=expert_tile_m,
         rows_per_wave=rows_per_wave,
         prefetch_depth=prefetch_depth,
+        tdm_hidden_chunks=tdm_hidden_chunks,
+        tdm_payload_store=tdm_payload_store,
     )
 
 
@@ -3243,6 +3247,29 @@ def flydsl_moe_fused_quant_preshuffle(
                 prefetch_depth = int(
                     os.environ.get("AITER_FLYDSL_GEMM2_A_PRESHUFFLE_PREFETCH", "2")
                 )
+                use_target_tdm_defaults = (
+                    feat_dim == 3072
+                    and rows_per_wave == 2
+                    and prefetch_depth == 2
+                )
+                try:
+                    rowgroup_tdm_chunks = int(
+                        os.environ.get(
+                            "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_TDM_CHUNKS",
+                            "6" if use_target_tdm_defaults else "0",
+                        )
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_TDM_CHUNKS "
+                        "must be an integer"
+                    ) from exc
+                rowgroup_tdm_payload_store = os.environ.get(
+                    "AITER_FLYDSL_GEMM2_A_PRESHUFFLE_TDM_STORE",
+                    "1" if use_target_tdm_defaults else "0",
+                ) in ("1", "true", "True")
+                if not rowgroup_tdm_chunks:
+                    rowgroup_tdm_payload_store = False
                 rows_per_block = warps_per_block * rows_per_wave
                 if rows_per_wave not in (1, 2, 4, 8):
                     raise ValueError(
@@ -3273,6 +3300,8 @@ def flydsl_moe_fused_quant_preshuffle(
                         expert_tile_m=int(expert_tile_m),
                         rows_per_wave=rows_per_wave,
                         prefetch_depth=prefetch_depth,
+                        tdm_hidden_chunks=rowgroup_tdm_chunks,
+                        tdm_payload_store=rowgroup_tdm_payload_store,
                     )
                     rowgroup_grid = (n_rows + rows_per_block - 1) // rows_per_block
                     launch_rowgroup(

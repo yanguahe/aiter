@@ -2130,6 +2130,8 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
     expert_tile_m: int,
     rows_per_wave: int = 8,
     prefetch_depth: int = 2,
+    tdm_hidden_chunks: int = 0,
+    tdm_payload_store: bool = False,
 ):
     """Quantize grouped BF16 rows directly into the GEMM A-preshuffle layout.
 
@@ -2175,13 +2177,38 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
     loop_iters = L.mx_blocks_per_row // k_blocks_per_wave
     if loop_iters % prefetch_depth:
         raise ValueError("rowgroup loop count must be divisible by prefetch_depth")
+    if tdm_hidden_chunks < 0 or (
+        tdm_hidden_chunks and loop_iters % tdm_hidden_chunks
+    ):
+        raise ValueError(
+            "tdm_hidden_chunks must be zero or divide the rowgroup loop count"
+        )
+    if tdm_hidden_chunks and (
+        (feat_dim * 2) % tdm_hidden_chunks
+        or (feat_dim * 2 // tdm_hidden_chunks) % 16
+    ):
+        raise ValueError("each rowgroup hidden TDM chunk must be 16-byte aligned")
     prefetch_batches = loop_iters // prefetch_depth
     payload_bytes_per_row = L.payload_bytes_per_row
     scale_dwords_per_row = L.scale_dwords_per_row
+    hidden_chunk_bytes = (
+        feat_dim * 2 // tdm_hidden_chunks if tdm_hidden_chunks else 0
+    )
+    iters_per_chunk = (
+        loop_iters // tdm_hidden_chunks if tdm_hidden_chunks else loop_iters
+    )
+    if tdm_hidden_chunks and iters_per_chunk % prefetch_depth:
+        raise ValueError("TDM chunk boundaries must align with prefetch batches")
+    if tdm_payload_store and (not tdm_hidden_chunks or rows_per_block != 16):
+        raise ValueError(
+            "TDM payload store requires hidden TDM and 16 rows per block"
+        )
     search_iters = max(1, math.ceil(math.log2(max(2, n_experts))) + 1)
     module_name = (
         f"moe_quant_preshuffled_a_fd{feat_dim}_rpw{rows_per_wave}"
         f"_pf{prefetch_depth}_direct"
+        f"{'_hidtdm' + str(tdm_hidden_chunks) if tdm_hidden_chunks else ''}"
+        f"{'_otdmw2' if tdm_payload_store else ''}"
     )
 
     @flyc.kernel(name=module_name, known_block_size=[BLOCK_THREADS, 1, 1])
@@ -2238,8 +2265,117 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
         scale_rsrc = ptr_rsrc(grouped_scale)
         vec8_bf16_ty = T.vec(8, T.bf16)
         vec8_f32_ty = T.vec(8, f32)
+        shared_allocator = fx.SharedAllocator()
 
-        if row_valid:
+        payload_lds = None
+        payload_lds_idx = None
+        payload_lds_store = None
+        payload_tdm_atom = None
+        payload_global_tile = None
+        payload_shared_tile = None
+        payload_lds_pitch = 16 * 16 + 32
+        if const_expr(tdm_payload_store):
+            payload_lds = shared_allocator.allocate(
+                L.mx_blocks_per_row * payload_lds_pitch
+            )._ptr
+            payload_lds_idx = fx.index_cast(T.index, fx.ptrtoint(payload_lds))
+            _, payload_lds_store = make_lds_copy_ops(32)
+            payload_global_base = (
+                fx.recast_iter(fx.Int8, grouped_payload)
+                + fx.Int64(row_base // fx.Uint32(16))
+                * fx.Int64(payload_bytes_per_row * 16)
+            )
+            payload_shape = (L.mx_blocks_per_row, payload_lds_pitch)
+            payload_global_tile = fx.Tensor(
+                fx.make_view(
+                    payload_global_base,
+                    fx.make_layout(payload_shape, (16 * 16, 1)),
+                )
+            )
+            payload_shared_tile = fx.Tensor(
+                fx.make_view(
+                    payload_lds,
+                    fx.make_layout(payload_shape, (payload_lds_pitch, 1)),
+                )
+            )
+            payload_tdm_atom = fx.rocdl.make_tdm_atom(
+                payload_global_tile,
+                [None, 16 * 16],
+                strides=[16 * 16, None],
+                num_warps=2,
+            )
+
+            def issue_payload_store():
+                if wave < fx.Uint32(2):
+                    fx.copy(
+                        payload_tdm_atom,
+                        payload_shared_tile,
+                        payload_global_tile,
+                    )
+
+        hidden_lds = None
+        hidden_lds_idx = None
+        hidden_lds_load = None
+        hidden_slot_bytes = rows_per_block * hidden_chunk_bytes
+        hidden_buffer_count = 1 if tdm_hidden_chunks == 1 else 2
+        is_tdm_loader = wave == fx.Uint32(0)
+        if const_expr(tdm_hidden_chunks):
+            hidden_lds = shared_allocator.allocate(
+                hidden_buffer_count * hidden_slot_bytes
+            )._ptr
+            hidden_lds_idx = fx.index_cast(T.index, fx.ptrtoint(hidden_lds))
+            hidden_lds_load, _ = make_lds_copy_ops(128)
+
+            hidden_global_base = (
+                fx.recast_iter(fx.Int8, grouped_in)
+                + fx.Int64(row_base) * fx.Int64(feat_dim * 2)
+            )
+            hidden_shape = (rows_per_block, hidden_chunk_bytes)
+            hidden_global_tile = fx.Tensor(
+                fx.make_view(
+                    hidden_global_base,
+                    fx.make_layout(hidden_shape, (feat_dim * 2, 1)),
+                )
+            )
+            hidden_atom = fx.rocdl.make_tdm_atom(
+                hidden_global_tile,
+                [rows_per_block, None],
+                strides=[feat_dim * 2, None],
+                num_warps=1,
+            )
+
+            def issue_hidden_chunk(chunk):
+                shared_tile = fx.Tensor(
+                    fx.make_view(
+                        fx.add_offset(
+                            hidden_lds,
+                            (chunk % hidden_buffer_count) * hidden_slot_bytes,
+                        ),
+                        fx.make_layout(hidden_shape, (hidden_chunk_bytes, 1)),
+                    )
+                )
+                fx.copy(
+                    hidden_atom,
+                    hidden_global_tile,
+                    shared_tile,
+                    imm_offset=fx.Int64(chunk * hidden_chunk_bytes),
+                )
+
+            def prefetch_hidden_chunk(chunk):
+                if const_expr(chunk == 0) and is_tdm_loader:
+                    issue_hidden_chunk(0)
+                    tdm_ops.tensor_wait(0)
+                gpu.barrier()
+                if is_tdm_loader and const_expr(chunk + 1 < tdm_hidden_chunks):
+                    issue_hidden_chunk(chunk + 1)
+                if const_expr(chunk > 0):
+                    if is_tdm_loader:
+                        tdm_ops.tensor_wait(
+                            1 if chunk + 1 < tdm_hidden_chunks else 0
+                        )
+                    gpu.barrier()
+
+        def emit_row(use_tdm):
             hidden_row_dword = (
                 row * fx.Uint32(feat_dim // 2) + lane_in_block * c4_i32
             )
@@ -2258,17 +2394,46 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
             )
             scale_pack = c0_i32
             for batch in range_constexpr(prefetch_batches):
+                first_it = batch * prefetch_depth
+                if const_expr(
+                    use_tdm
+                    and first_it % iters_per_chunk == 0
+                ):
+                    prefetch_hidden_chunk(first_it // iters_per_chunk)
                 prefetched = []
                 mx_blocks = []
                 for pi in range_constexpr(prefetch_depth):
                     it = batch * prefetch_depth + pi
                     mx_block = fx.Uint32(it * k_blocks_per_wave) + k_slot
                     hidden_dword = hidden_row_dword + mx_block * fx.Uint32(16)
-                    prefetched.append(
-                        buffer_ops.buffer_load(
-                            hidden_rsrc, hidden_dword, vec_width=4, dtype=i32
+                    if const_expr(use_tdm):
+                        chunk = it // iters_per_chunk
+                        chunk_elem_base = chunk * (hidden_chunk_bytes // 2)
+                        col_base = (
+                            mx_block * fx.Uint32(32)
+                            + lane_in_block * fx.Uint32(8)
                         )
-                    )
+                        row_in_block = wave * fx.Uint32(rows_per_wave) + row_slot
+                        prefetched.append(
+                            hidden_lds_load(
+                                hidden_lds_idx,
+                                fx.Int32(
+                                    (chunk % hidden_buffer_count)
+                                    * hidden_slot_bytes
+                                )
+                                + fx.Int32(row_in_block * hidden_chunk_bytes)
+                                + fx.Int32(
+                                    (col_base - fx.Uint32(chunk_elem_base))
+                                    * fx.Uint32(2)
+                                ),
+                            )
+                        )
+                    else:
+                        prefetched.append(
+                            buffer_ops.buffer_load(
+                                hidden_rsrc, hidden_dword, vec_width=4, dtype=i32
+                            )
+                        )
                     mx_blocks.append(mx_block)
 
                 for pi in range_constexpr(prefetch_depth):
@@ -2302,15 +2467,27 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
                         bf16x8, block_scale_f32, i32_ty=i32
                     )
 
-                    payload_byte = (
-                        payload_row_byte + mx_block * fx.Uint32(16 * 16)
-                    )
-                    buffer_ops.buffer_store(
-                        payload_val,
-                        payload_rsrc,
-                        payload_byte,
-                        offset_is_bytes=True,
-                    )
+                    if const_expr(use_tdm and tdm_payload_store):
+                        row_in_block = wave * fx.Uint32(rows_per_wave) + row_slot
+                        payload_lds_store(
+                            payload_lds_idx,
+                            fx.Int32(mx_block * fx.Uint32(payload_lds_pitch))
+                            + fx.Int32(row_in_block * fx.Uint32(16))
+                            + fx.Int32(lane_in_block * c4_i32),
+                            vector.from_elements(
+                                T.vec(1, i32), [payload_val]
+                            ),
+                        )
+                    else:
+                        payload_byte = (
+                            payload_row_byte + mx_block * fx.Uint32(16 * 16)
+                        )
+                        buffer_ops.buffer_store(
+                            payload_val,
+                            payload_rsrc,
+                            payload_byte,
+                            offset_is_bytes=True,
+                        )
 
                     is_block_lead = lane_in_block == c0_i32
                     if const_expr(rows_per_wave == 8):
@@ -2347,6 +2524,25 @@ def build_moe_quant_preshuffled_a_rowgroup_module(
                                 scale_byte,
                                 offset_is_bytes=True,
                             )
+
+            if const_expr(use_tdm and tdm_payload_store):
+                gpu.barrier()
+                issue_payload_store()
+                if wave < fx.Uint32(2):
+                    tdm_ops.tensor_wait(0)
+
+        if const_expr(tdm_hidden_chunks):
+            block_full = expert_in_range & (
+                row_base + fx.Uint32(rows_per_block) <= fx.Uint32(expert_end)
+            ) & (row_base + fx.Uint32(rows_per_block) <= fx.Uint32(n_rows))
+            if block_full:
+                emit_row(True)
+            else:
+                if row_valid:
+                    emit_row(False)
+        else:
+            if row_valid:
+                emit_row(False)
 
     @flyc.jit
     def launch_quant_preshuffle(
