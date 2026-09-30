@@ -996,8 +996,19 @@ stage = target.upper()
 stage_us_key = f"{target}_us"
 tflops_key = f"{target}_tflops"
 rw_key = f"{target}_rw_tbps"
-baseline_case = "baseline_93665e" if target == "gemm1" else "baseline"
-comparison = "93665e" if target == "gemm1" else "baseline"
+preferred_baseline_case = "baseline_93665e" if target == "gemm1" else "baseline"
+baseline_case = (
+    preferred_baseline_case
+    if preferred_baseline_case in case_order
+    else case_order[0]
+)
+comparison = (
+    "93665e"
+    if baseline_case == "baseline_93665e"
+    else "baseline"
+    if baseline_case == "baseline"
+    else f"first case ({baseline_case})"
+)
 
 print(
     f"| data | case | {stage} samples (us) | {stage} median us | "
