@@ -4,7 +4,8 @@ set -Eeuo pipefail
 # Reproduce same-machine comparisons for the gfx1250 E96/T16384 FlyDSL MoE
 # kernels. Run this script directly inside the existing ROCm container.
 
-REPO_ROOT="${REPO_ROOT:-/data/yanguahe/code/wk_sp1/aiter}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
 EXPECTED_BRANCH="${EXPECTED_BRANCH:-hyg_gfx1250_gemm_a4w4}"
 E2E_ITERS="${AITER_REPRO_E2E_ITERS:-${E2E_ITERS:-20}}"
 E2E_ROUNDS="${AITER_REPRO_E2E_ROUNDS:-${ROUNDS:-2}}"
