@@ -914,3 +914,493 @@ GEMM2 `B_TH=6` 没有稳定收益，中位数反而回退 `1.253 us`。因此最
 /tmp/dsr1_bth6_final/g2_r3_b0.log
 /tmp/dsr1_bth6_final/g2_r3_b6.log
 ```
+
+## GEMM2 persistent task loop 优化（2026-10-01）
+
+### 目标与基线
+
+目标规模和复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+机器重启后的普通 GEMM2 baseline 为：
+
+```text
+59.707 us median
+```
+
+每次计入性能数据前均在 a07-3 主机执行：
+
+```bash
+/data/yanguahe/code/gpu_users.sh
+```
+
+只有整机无已有 GPU/KFD 进程时才保留该次性能结果。若运行后发现其他用户进程进入 GPU，
+该次结果仅用于正确性，不计入性能比较。
+
+### `ps7pf2`：跨 persistent task 预取 stage0/stage1
+
+一个 4-WG cluster 固定处理同一个 M tile，并依次处理 7 个 N-cluster task。当前 task
+完成 compute 后，在 output epilogue 开始前预取下一 task 的 stage0 和 stage1：
+
+```text
+I0, I1, O0, O1
+```
+
+下一 task 使用 `s_wait_tensorcnt 0x2`，确认 I0/I1 已完成，同时允许 O0/O1 继续在后台
+drain。随后先计算 K tile 0，再等待旧 output 完成并补发 stages2-4。output LDS 位于：
+
+```text
+[2 * PITCH, 2 * PITCH + C_STORE_B)
+```
+
+该布局与 stage0/stage1 不重叠。目标 tile 的静态资源为：
+
+```text
+PITCH          = 60,928 B
+input ring     = 243,712 B
+output region  = [121,856, 226,304)
+LDS limit      = 327,680 B
+```
+
+三轮相邻 const0 结果：
+
+| round | `ps7pf2` | baseline | improvement |
+|---:|---:|---:|---:|
+| 1 | 56.591 us | 59.442 us | 4.80% |
+| 2 | 58.147 us | 59.870 us | 2.88% |
+| 3 | 55.181 us | 60.905 us | 9.40% |
+| median | 56.591 us | 59.870 us | 5.48% |
+
+balanced random 和非均衡 random 均通过；GEMM2 output hash 与对应 reference 完全一致。
+
+### persistent metadata hoist
+
+同一 persistent cluster 的 7 个 task 固定使用同一个 `m_tile`。因此以下值只依赖 M tile，
+可以在 task loop 前计算一次：
+
+```text
+m_tile
+blk_m
+expert
+mn_oob
+tile_map pointer
+`blk_m64` and other M-side address metadata
+```
+
+7 个 task 之间变化的只有 `n_unit/tile_idx`，以及由它派生的 `blk_n`、B/ScaleB 和输出
+地址。kernel 不写 `arg_m_tile_map`，所以该 hoist 与原逐 task binary search 逻辑等价。
+
+三轮相邻 const0 结果：
+
+| round | metadata hoist | `ps7pf2` | improvement |
+|---:|---:|---:|---:|
+| 1 | 57.133 us | 58.419 us | 2.20% |
+| 2 | 55.961 us | 58.516 us | 4.37% |
+| 3 | 56.764 us | 58.348 us | 2.71% |
+| median | 56.764 us | 58.419 us | 2.83% |
+
+random 验证结果：
+
+```text
+logits_diff = 3.38491e-06
+rel_l2      = 0.00260189
+pass        = True
+```
+
+### metadata-hoist 版本 ATT 结果
+
+采集 symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x2_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc20_ostore2p_s3_ow2_ps7pf2hm
+```
+
+采集目录：
+
+```text
+my_code/thread_trace_runs/e64_t1536_gemm2_ps7pf2hm_att_20261001
+```
+
+16 条代表 active wave 的统计：
+
+| metric | value |
+|---|---:|
+| active-wave median | 78,939.5 cycles |
+| explicit wait share | 36.04% |
+| `s_barrier_wait` | 13.12% |
+| `s_wait_tensorcnt` | 11.17% |
+| `s_wait_dscnt` | 8.13% |
+| `s_wait_kmcnt` | 3.46% |
+
+主要重复热点：
+
+| PC | instruction | hits/wave | wave-span share | meaning |
+|---|---|---:|---:|---|
+| `0x4428` | `s_barrier_wait 0xffff` | 11 | 5.00% | steady input-ring reuse barrier |
+| `0x308c` | `s_barrier_wait 0xffff` | 6 | 4.05% | 后续 persistent task 的 stage0/1 ready barrier |
+| `0x4b70` | `s_wait_tensorcnt 0x4` | 11 | 4.00% | steady TDM arrival |
+| `0x306c` | `s_wait_tensorcnt 0x2` | 6 | 3.35% | 等待下一 task 的 stage0/1 |
+| `0x27d0` | `s_wait_dscnt 0x0` | 7 | 3.11% | output LDS 第二段 drain；少数 wave 有长尾 |
+| `0x6fb0` | `s_wait_tensorcnt 0x0` | 1 | 1.97% | kernel 最终 output TDM drain |
+
+WGP completion imbalance 的 16 组 capture 平均值为 `4.85%`，中位数为 `2.48%`；主要瓶颈
+仍位于单个 workgroup 内的 TDM/DS/barrier 等待，而不是全局 work 分配不均。
+
+### zero-signal split barrier
+
+后续 task 原逻辑在所有 descriptor setup 和 accumulator 清零之后执行完整
+`tensor_wait(2) + workgroup barrier`。优化后在 descriptor setup 完成时执行：
+
+```text
+s_wait_tensorcnt 0x2
+s_barrier_signal -1
+```
+
+随后用 accumulator 清零覆盖其他 wave 到达 barrier 的时间，并在读取 stage0 前执行：
+
+```text
+s_barrier_wait -1
+```
+
+两组相邻空闲复测均显示小幅稳定收益：
+
+| round | zero-signal | metadata hoist | improvement |
+|---:|---:|---:|---:|
+| 1 | 54.744 us | 55.233 us | 0.89% |
+| 2 | 54.251 us | 54.839 us | 1.07% |
+
+random 结果通过，GEMM2 output hash 与 reference 完全一致。
+
+### 已淘汰实验
+
+- `ps7pf3`：预取 stage0/1/2，将 LDS 增至 `287,232 B`，const0 回退到约 `63.1 us`。
+- 低位 buffer 立即回填：破坏 4-buffer input pipeline，random 虽正确但 GEMM2 回退到约 `107.9 us`。
+- `I0,O0,I1,O1` TDM 排序：正确，但空闲 const0 为 `55.845 us`，弱于 zero-signal。
+- GEMM2 persistent `B_TH=6`：正确，空闲 const0 为 `55.071 us`，未优于 `B_TH=0`。
+- `t192x128/b3`：正确，但空闲 const0 为 `76.315 us`，N tile 数和固定开销翻倍抵消双驻留收益。
+- `t192x256/b2`：正确，但空闲 const0 为 `68.529 us`，较浅 input pipeline 明显回退。
+- Scale TDM owner 非对称重排：random 产生 NaN，已淘汰。
+- 完整 A resident LDS 原型：当前实现 random 产生 NaN，未进入性能评估。
+
+### a07-3 GPU fault boundary
+
+`sudo dmesg -T` 显示 GPU 在 `2026-10-01 13:03:02 UTC` 首次报告：
+
+```text
+amdgpu ... [gfxhub0] no-retry page fault
+Faulty UTCL2 client ID: TCP
+PERMISSION_FAULTS: 0x3
+RW: 0x0
+```
+
+随后在 `13:09:07-13:09:09 UTC` 报告：
+
+```text
+MES(0, 0) failed to respond to msg=REMOVE_QUEUE
+MES(0, 0) failed to respond to msg=SUSPEND
+failed to suspend all gangs
+MES might be in unrecoverable state, issue a GPU reset
+GPU recovery disabled
+```
+
+第一次 fault 与 steady split-fence 实验的运行时间紧邻，因此该实验按不安全版本淘汰。
+从 `13:03:02 UTC` 起得到的所有性能数值均作废；后续 `pad8`、`B_TH=1`、单段 output
+以及 A-resident-unicast 的长时间无返回不能作为这些候选自身性能或正确性的结论。恢复 GPU
+测试前需要由机器管理员执行 GPU reset 或重启；优化过程不会自行执行这两项操作。
+
+### GPU 故障前保留文件状态（已由下节更新）
+
+GPU 故障发生前，本地工作树保留的 GEMM2 persistent 实现为
+`ps7pf2 + metadata hoist + zero-signal`：
+
+```text
+aiter/ops/flydsl/grouped_gemm_mxfp4.py
+aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent.py
+```
+
+本地与 a07-3 上恢复后的 SHA256 一致：
+
+```text
+107fc379a13fb677c774dbc910f684ec188a2394cc729ef5c9cee6038e9f71ed  aiter/ops/flydsl/grouped_gemm_mxfp4.py
+f0b94f24a2833091c9ceb650f9d634996c9a43084e62c2a7eb1a5d14f303135f  aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent.py
+```
+
+静态检查：
+
+```bash
+python -m py_compile \
+  aiter/ops/flydsl/grouped_gemm_mxfp4.py \
+  aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent.py
+
+python -m ruff check \
+  aiter/ops/flydsl/grouped_gemm_mxfp4.py \
+  aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent.py
+```
+
+两项检查均通过。
+
+## a07-3 重启后的关键节点复测（2026-10-01 14:18 UTC）
+
+机器重启后先在主机执行：
+
+```bash
+/data/yanguahe/code/gpu_users.sh
+rocm-smi --showuse --showmemuse
+```
+
+每个 case 运行前后均重新检查，确认没有既有 GPU/KFD 进程，`GPU use` 和
+`GPU Memory Allocated` 均为 `0%`。四个版本按正序、逆序、正序交错测试，以降低时钟和温度
+随时间变化带来的偏差。测试命令为：
+
+```bash
+ENABLE_CK=0 \
+AITER_MOE_EXPERT_BALANCE=true \
+AITER_LOG_MORE=1 \
+AITER_USE_GROUPED_GEMM=1 \
+AITER_GROUPED_DEBUG=0 \
+AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1 \
+FLYDSL_DUMP_IR=0 \
+python3 -u my_code/test_flydsl_grouped_gemm_gfx1250.py \
+  --scenario bench \
+  --data-format a4w4 \
+  --act silu \
+  --no-bias \
+  --no-check-aot-cache \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048 \
+  --iters 20 \
+  --const-init 0
+```
+
+原始日志位于：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/.codex_tmp/gemm2_reboot_rebench/runs/20261001T141807
+```
+
+三轮结果：
+
+| round | version | GEMM1 | GEMM2 | fused MoE | pass | GEMM2 hash equals reference |
+|---:|---|---:|---:|---:|:---:|:---:|
+| 1 | ordinary baseline | 79.729 us | 60.038 us | 211.56 us | True | True |
+| 1 | `ps7pf2` | 75.771 us | 58.391 us | 208.29 us | True | True |
+| 1 | metadata hoist | 79.061 us | 54.986 us | 206.21 us | True | True |
+| 1 | zero-signal | 79.660 us | 55.524 us | 208.13 us | True | True |
+| 2 | zero-signal | 79.978 us | 54.565 us | 209.48 us | True | True |
+| 2 | metadata hoist | 79.198 us | 55.372 us | 205.22 us | True | True |
+| 2 | `ps7pf2` | 79.183 us | 58.484 us | 208.08 us | True | True |
+| 2 | ordinary baseline | 79.504 us | 60.184 us | 215.52 us | True | True |
+| 3 | ordinary baseline | 78.190 us | 60.753 us | 215.80 us | True | True |
+| 3 | `ps7pf2` | 78.176 us | 58.427 us | 214.80 us | True | True |
+| 3 | metadata hoist | 78.420 us | 53.831 us | 206.66 us | True | True |
+| 3 | zero-signal | 78.365 us | 58.274 us | 220.95 us | True | True |
+
+中位数汇总：
+
+| version | GEMM2 median | vs ordinary baseline | fused MoE median | vs ordinary baseline |
+|---|---:|---:|---:|---:|
+| ordinary baseline | 60.184 us | 0.00% | 215.52 us | 0.00% |
+| `ps7pf2` | 58.427 us | 2.92% | 208.29 us | 3.35% |
+| metadata hoist | 54.986 us | 8.64% | 206.21 us | 4.32% |
+| zero-signal | 55.524 us | 7.74% | 209.48 us | 2.80% |
+
+本轮中 metadata hoist 的 GEMM2 中位数最好。zero-signal 的前两轮与 metadata hoist 接近，
+第三轮升至 `58.274 us`，因此重启后没有复现此前约 `1%` 的稳定收益。该变化不影响正确性，
+但在决定最终保留版本时应以新的相邻复测为准。
+
+zero-signal 另做一次 random 验证：
+
+```text
+logits_diff                = 3.38491e-06
+rel_l2                     = 0.00260189
+pass                       = True
+GEMM2 ref output hash128   = 0600dddfcca42f243e9176f595c8a2fe
+GEMM2 output hash128       = 0600dddfcca42f243e9176f595c8a2fe
+```
+
+## 重启后继续优化与最终保留节点
+
+### B-first TDM owner 分支排序
+
+该版本只把 B/ScaleB owner 分支放到 A/ScaleA owner 分支之前，希望较大的 B payload 更早发射，
+不改变地址、TDM 数量或同步协议。random 验证通过，GEMM2 output hash 与 reference 相同。
+
+三轮相邻测试：
+
+| round | metadata hoist | zero-signal | B-first |
+|---:|---:|---:|---:|
+| 1 | 53.707 us | 56.952 us | 53.342 us |
+| 2 | 53.633 us | 56.138 us | 54.742 us |
+| 3 | 54.449 us | 54.458 us | 53.836 us |
+| median | 53.707 us | 56.138 us | 53.836 us |
+
+B-first 相对 metadata hoist 中位数回退约 `0.24%`，没有稳定收益，未保留。
+
+原始日志：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/.codex_tmp/gemm2_reboot_rebench/runs/20261001T142406
+```
+
+### `earlynext`：在最后一个 K tile 前启动下一 task
+
+`ps7pf2` 原来在完整 K-loop 结束后才发射下一 persistent task 的 stage 0/1。`earlynext` 利用
+最后一个 K tile 已经被前一轮 carry 到 register 的事实，将下一 task 的 `I0/I1` 提前到最后一个
+K tile 的 WMMA 之前：
+
+```text
+... current stage 7 ready in rmem
+I0(next), I1(next)
+final K-tile WMMA
+O0(current), O1(current)
+```
+
+因此仍满足 gfx1250 文档规定的同一 wave 内 TDM load/store 按发射顺序完成，同时下一 task 的
+input 写入 buffers 0/1，当前 task 的 output arena 只覆盖 buffers 2/3，不存在 LDS 地址重叠。
+原 epilogue 前的完整 `pipeline_fence(0)` 在 persistent 路径中可以删除；最终 task 的当前输入已经
+在读取最后 K tile 前完成，kernel 末尾仍保留 `tensor_wait(0)` 等待 output 完成。
+
+random 验证：
+
+```text
+logits_diff                = 3.38491e-06
+rel_l2                     = 0.00260189
+pass                       = True
+GEMM2 output hash128       = 7bb3ce52d1938d8548cf80e23bab0d53
+GEMM2 reference hash128    = 7bb3ce52d1938d8548cf80e23bab0d53
+```
+
+第一组三轮相邻测试：
+
+| round | `earlynext` | metadata hoist | improvement |
+|---:|---:|---:|---:|
+| 1 | 53.211 us | 57.624 us | 7.66% |
+| 2 | 53.291 us | 54.358 us | 1.96% |
+| 3 | 55.258 us | 54.499 us | -1.39% |
+| median | 53.291 us | 54.499 us | 2.22% |
+
+另一组紧邻单轮为 `55.195 us` 对 `55.737 us`，`earlynext` 提升 `0.97%`。四组配对中三组更快，
+收益幅度受机器动态状态影响，但方向可重复。当前正式工作树保留该版本。
+
+### output split sweep
+
+保持 metadata hoist，其余不变，只改变两个 output TDM slice 的 WMMA-row 分界。`4+2` 相比原来的
+`3+3` 在三轮相邻测试中均更快：
+
+| round | output `4+2` | output `3+3` | improvement |
+|---:|---:|---:|---:|
+| 1 | 55.912 us | 57.211 us | 2.27% |
+| 2 | 53.863 us | 54.552 us | 1.26% |
+| 3 | 54.660 us | 55.735 us | 1.93% |
+| median | 54.660 us | 55.735 us | 1.93% |
+
+`4+2` 与 `earlynext` 组合后反而回退；两者直接比较的三轮中位数为 `55.741 us` 对
+`53.774 us`。因此只保留更快的 `earlynext`，不叠加 `4+2`。
+
+原始日志：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/.codex_tmp/gemm2_reboot_rebench/runs/20261001T165148
+/data/yanguahe/code/wk_sp1/aiter/.codex_tmp/gemm2_reboot_rebench/runs/20261001T170555
+```
+
+### 本轮未保留的其他候选
+
+- A payload `TH=2` 单轮为 `55.593 us`，仅落在噪声范围；`TH=6` 为 `57.885 us`，A/ScaleA
+  同时使用 `TH=6` 为 `57.809 us`。硬件资料明确指出 multicast load 会 bypass WGP$，因此这些
+  hint 无法改善近端 cache 命中。
+- 将 output descriptor setup 移到 LDS barrier 前通过了 random，但相邻单轮为 `53.867 us`，
+  慢于 `earlynext` 的 `53.549 us`。
+- 预构建 input TDM descriptor 并用 task-dependent `imm_offset` 复用，通过了 random；相邻单轮
+  为 `54.491 us`，慢于 `earlynext` 的 `53.603 us`。增加的 descriptor live range 没有换来收益。
+- `fence_cover_mma=8/12/16` 单轮分别为 `58.525/56.229/58.297 us`，均慢于同轮默认
+  `fence_cover_mma=20` 的 `55.431 us`；`24` 会令 `mma_total == 0`，当前 scheduler helper 因此
+  无法生成合法 schedule。
+- `staggerednext` 更早复用 buffers 0/1，虽然最终 MoE 门限仍通过，但 GEMM2 output hash 不再等于
+  reference，`rel_l2` 增至 `0.0281119`，违反精度要求，已淘汰。
+- stage-0 A/ScaleA LDS resident、ScaleA-only resident 及低地址 ScaleA resident 均在 random 下产生
+  NaN。它们没有进入性能比较，也不会合入正式代码。
+
+### 当前正式候选
+
+当前保留 kernel 为：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x2_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc20_ostore2p_s3_ow2_ps7pf2hm_earlynext
+```
+
+文件 SHA256：
+
+```text
+08692fc27794cbd7211c49de5f9f1d47702adba3582af39b638266a459120cd5  aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent.py
+```
+
+本轮硬件判断依据：
+
+- `MI400_Shader_Programming#65.txt` 2.4 节说明，同一 wave 的 TDM load/store 相互保持发射顺序；
+  `earlynext` 因而维持 `I0,I1,O0,O1`，下一 task 的 `tensor_wait(2)` 可只留下旧 output。
+- 同一文档 4.10.8 节说明每 wave 最多 3 个 TDM 等待 XACK、每 SIMD 最多 6 个；提前发射可能因
+  XACK 限额短暂停顿，但不会改变完成顺序。
+- 同一文档 LDS 章节说明 384 KiB SRAM 按 64 KiB 在 LDS/WGP$ 间分区，LDS 最大 320 KiB。
+当前约 238 KiB 分配落在 256 KiB 档并保留 128 KiB WGP$；将完整 A 常驻会进入 320 KiB 档，
+只剩 64 KiB WGP$，因此没有作为保留方案。
+
+### 正式工作树验证
+
+正式文件已切换为 `metadata hoist + earlynext`，本地与 a07-3 的 kernel SHA256 均为：
+
+```text
+08692fc27794cbd7211c49de5f9f1d47702adba3582af39b638266a459120cd5
+```
+
+使用正式入口执行 random MoE e2e：
+
+```bash
+ROUNDS=1 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-random \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+结果：
+
+```text
+GEMM1                    = 93.022 us
+GEMM2                    = 68.335 us
+fused MoE                = 235.52 us
+logits_diff              = 3.38491e-06
+rel_l2                   = 0.00260189
+pass                     = True
+GEMM2 reference hash128  = 72c5ad0345105b236d59a61386c8018d
+GEMM2 output hash128     = 72c5ad0345105b236d59a61386c8018d
+```
+
+random 数据的耗时不与 const0 性能数据横向比较；这里用于确认最终正式文件仍保持数值正确。
+日志位于：
+
+```text
+/data/yanguahe/code/wk_sp1/aiter/my_code/moe_prefill_switch_ab_runs/20261001T173856Z
+```
+
+静态验证：
+
+```text
+local py_compile: pass
+local ruff:       pass
+local diff-check: pass
+remote py_compile: pass
+remote ruff:       unavailable (/opt/venv/bin/python3: No module named ruff)
+```

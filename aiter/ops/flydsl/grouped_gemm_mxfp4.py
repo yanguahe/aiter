@@ -165,6 +165,9 @@ def flydsl_grouped_gemm_a8w4_masked(
         launch_gemm_a8w4_tdm,
         launch_gemm_a8w4_tdm_optimized,
     )
+    from .kernels.mxfp4_preshuffle_gfx1250_tdm_gemm2_persistent import (
+        launch_gemm_a8w4_tdm_gemm2_persistent,
+    )
 
     if stream is None:
         stream = torch.cuda.current_stream()
@@ -238,7 +241,26 @@ def flydsl_grouped_gemm_a8w4_masked(
             "GEMM1/GEMM2 optimized shapes"
         )
     if use_optimized:
-        launch_gemm_a8w4_tdm_optimized(
+        use_gemm2_persistent = all(
+            (
+                stage1_act == 0,
+                K == 2048,
+                N == 7168,
+                tile_m == 192,
+                tile_n == 256,
+                tile_k == 256,
+                m_warp == 2,
+                n_warp == 2,
+                num_buffers == 4,
+                n_experts == 64,
+            )
+        )
+        optimized_launcher = (
+            launch_gemm_a8w4_tdm_gemm2_persistent
+            if use_gemm2_persistent
+            else launch_gemm_a8w4_tdm_optimized
+        )
+        optimized_launcher(
             out,
             ptr_arg(a),
             ptr_arg(w),
