@@ -97,6 +97,24 @@ def supports_gfx1250_a_preshuffle(
     next_stage_prefetch = _select_bool_env(
         "AITER_TDM_NEXT_STAGE_PREFETCH", next_stage_prefetch
     )
+    gemm2_eight_wave = all(
+        (
+            a_is_fp4,
+            stage1_act == 0,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            n_experts == 64,
+            N == 7168,
+            K == 2048,
+            (tile_m, tile_n, tile_k) == (192, 256, 256),
+            (m_warp, n_warp, num_buffers) == (2, 4, 4),
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+        )
+    )
+    if gemm2_eight_wave:
+        return True
     common = all(
         (
             a_is_fp4,
@@ -241,18 +259,19 @@ def flydsl_grouped_gemm_a8w4_masked(
             "GEMM1/GEMM2 optimized shapes"
         )
     if use_optimized:
-        use_gemm2_persistent = all(
+        use_gemm2_persistent = stage1_act == 0 and K == 2048 and N == 7168 and (
             (
-                stage1_act == 0,
-                K == 2048,
-                N == 7168,
-                tile_m == 192,
-                tile_n == 256,
-                tile_k == 256,
-                m_warp == 2,
-                n_warp == 2,
-                num_buffers == 4,
-                n_experts == 64,
+                tile_m,
+                tile_n,
+                tile_k,
+                m_warp,
+                n_warp,
+                num_buffers,
+                n_experts,
+            )
+            in (
+                (192, 256, 256, 2, 2, 4, 64),
+                (192, 256, 256, 2, 4, 4, 64),
             )
         )
         optimized_launcher = (

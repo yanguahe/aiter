@@ -1404,3 +1404,398 @@ local diff-check: pass
 remote py_compile: pass
 remote ruff:       unavailable (/opt/venv/bin/python3: No module named ruff)
 ```
+
+## GEMM2 eight-wave latency hiding（2026-10-02）
+
+### 优化动机
+
+T512 的 `t64/w1x4/b3` ATT 显示，每个 physical SIMD 可同时驻留两个 wave，
+虽然单 wave 的 exposed stall 很高，dispatch 层仍可由另一个 resident wave
+隐藏 TDM 和 barrier latency。T1536 原 `t192/w2x2/b4` 每个 SIMD 只有一个
+wave，因此在保持 `tile_m=192` 和现有 A-preshuffle ABI 不变的前提下，将
+GEMM2 workgroup 从 4 waves 扩展到 8 waves：
+
+```text
+tile       = 192x256x256
+warps      = 2x4
+block size = 256 threads
+buffers    = 4
+```
+
+每个 wave 的 N 范围由 128 列缩小为 64 列，单 wave accumulator 数量减半，
+从而允许每个 physical SIMD 驻留两个同一 workgroup 的 wave。
+
+### TDM 正确性修正
+
+最初的 8-wave 版本仍让每个 wave 发射两个 next-task input TDM 和两个 output
+TDM。const0 会隐藏该问题，但 random 下出现少量连续输出块错误。gfx1250
+硬件资料规定每个 wave 最多 3 个、每个 SIMD 最多 6 个等待 XACK 的 TDM
+operation，因此最终实现采用以下协议：
+
+1. 保留 next task 的 stage 0/stage 1 提前预取。
+2. 将两段 output store 分配给不同 wave，使每个 wave 只发一个 output TDM。
+3. 同一 SIMD 的两个 resident wave 使用交错的 output phase，均匀分散 TDM
+   descriptor 压力。
+4. 第一段 output TDM 后执行 `s_wait_tensorcnt 0x2`，再发第二段 output；
+   下一 task 开始时执行 `s_wait_tensorcnt 0x1`，确保 I0/I1 已完成，只留下
+   前一 task 的 output TDM 与 tile 0 compute 重叠。
+5. output row split 保持 `3+3`，即每个 wave 的 6 个 WMMA M block 均分为
+   两段。
+
+最终 kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc8_ostore2p_s3_ow2_ps7pf2hm_earlynext_o1w_xor_wait2
+```
+
+### random 精确验证
+
+使用额外的 GEMM2 grouped-output 对比，结果为：
+
+```text
+GEMM2 grouped max_abs = 0
+GEMM2 grouped nonzero = 0
+GEMM2 routed max_abs  = 0
+GEMM2 routed rel_l2   = 0
+GEMM2 reference hash128 = ad17c78eb80b4228cf0b59f190e8af9f
+GEMM2 output hash128    = ad17c78eb80b4228cf0b59f190e8af9f
+MoE logits_diff          = 3.38491e-06
+MoE rel_l2               = 0.00260189
+MoE pass                 = True
+```
+
+### const0 相邻性能
+
+两次相邻 `w2x2` baseline 的 GEMM2 中位数分别为 `55.006 us` 和
+`56.562 us`。8-wave 正确版本的三轮结果为：
+
+```text
+52.368, 52.241, 53.195 us
+median = 52.368 us
+```
+
+| 对比基线 | baseline median | w2x4 median | GEMM2 提升 |
+|---|---:|---:|---:|
+| 较快相邻 baseline | 55.006 us | 52.368 us | 4.79% |
+| 较慢相邻 baseline | 56.562 us | 52.368 us | 7.41% |
+
+该轮 `w2x4` 的 fused MoE 三轮为：
+
+```text
+204.41, 203.75, 204.08 us
+median = 204.08 us
+```
+
+对应日志：
+
+```text
+/tmp/w2x2_baseline_after_pf1
+/tmp/w2x2_baseline_after_o1w
+/tmp/w2x4_o1w_xor_wait2_rounds
+```
+
+### 复现命令
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+
+ROUNDS=1 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-random \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+### 本轮未保留的变体
+
+下列结果仅用于决策，未计入稳定优化：单级 next-task 预取虽正确但为
+`56.490 us`；`MMA_GROUP=2` 为 `53.690 us`；`fence_cover_mma=4` 为
+`53.340 us`；output `2+4` split 为 `53.844 us`；`STORE_PAD=8` 为
+`53.224 us`；direct global store 单轮约 `109 us`。`w1x8`、`wpt1`、去掉
+中间 tensor wait、以及把 output TDM 合并为四个大 descriptor 的版本均未通过
+random exact-hash 验证。
+
+## GEMM2 persistent A payload stage 0/1 常驻（2026-10-02）
+
+### 优化动机
+
+`E64/T1536/topk8/M7168/I2048` 在 expert balance 下每个 expert 恰好有
+`192` 行，因此一个 persistent workgroup 会依次处理同一 expert 的 7 个 N tile。
+这 7 个 task 的 A payload 完全相同，原实现仍会为每个 task 重新执行全部 8 个 K
+stage 的 A TDM load。
+
+该版本在原 4-buffer arena 之后增加两个只读 A payload cache slot：
+
+```text
+A cache stages = 2
+A bytes/stage  = 24,576 B
+extra LDS      = 49,152 B
+total LDS      = 292,864 B (286 KiB)
+```
+
+首个 persistent task 将 K stage 0/1 的 A payload 直接加载到 cache slot；后续 6 个
+task 只更新对应 stage 的 B、ScaleA 和 ScaleB，并继续从 cache slot 读取 A。ScaleA
+体积较小且继续走原有 ring buffer，避免 LDS 分配跨过本轮实验中不稳定的边界。原有
+4-buffer input pipeline、两阶段 output store、`tensor_wait(2)` / `tensor_wait(1)`
+协议以及 output TDM wave 分配均保持不变。
+
+kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc8_ostore2p_s3_ow2_ac2payload_ps7pf2hm_earlynext_o1w_xor_wait2
+```
+
+### random 精确验证
+
+额外的 GEMM2 stage-output 检查通过：
+
+```text
+GEMM2 grouped max_abs = 0
+GEMM2 grouped nonzero = 0
+GEMM2 routed max_abs  = 0
+GEMM2 routed rel_l2   = 0
+MoE logits_diff       = 3.38491e-06
+MoE rel_l2            = 0.00260189
+MoE pass              = True
+```
+
+### 相邻性能复测
+
+第一组：
+
+| 版本 | GEMM2 samples (us) | median | 相对原最佳 |
+|---|---|---:|---:|
+| 原 `w2x4 xor_wait2` | 51.468, 51.904, 51.929 | 51.904 us | baseline |
+| A payload stage 0/1 cache | 52.444, 51.130, 50.228 | 51.130 us | +1.49% |
+
+第二组：
+
+| 版本 | GEMM2 samples (us) | median | 相对原最佳 |
+|---|---|---:|---:|
+| 原 `w2x4 xor_wait2` | 54.166, 54.076, 52.823 | 54.076 us | baseline |
+| A payload stage 0/1 cache | 52.716, 52.454, 53.370 | 52.716 us | +2.51% |
+
+两组相邻比较均为正收益，因此保留该实现作为新的 GEMM2 最佳节点。对应日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T040609Z
+my_code/moe_prefill_switch_ab_runs/20261002T044250Z
+my_code/moe_prefill_switch_ab_runs/20261002T044452Z
+my_code/moe_prefill_switch_ab_runs/20261002T044715Z
+```
+
+复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+
+ENABLE_CK=0 \
+AITER_MOE_EXPERT_BALANCE=true \
+AITER_LOG_MORE=1 \
+AITER_USE_GROUPED_GEMM=1 \
+AITER_GROUPED_DEBUG=0 \
+AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1 \
+FLYDSL_DUMP_IR=0 \
+python3 -u .codex_tmp/test_gemm2_diff.py \
+  --scenario verify \
+  --data-format a4w4 \
+  --act silu \
+  --no-bias \
+  --no-check-aot-cache \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+未保留的相邻实验：A payload/ScaleA 同时常驻两个 stage 会使总 LDS 增至
+`295,936 B` 并产生错误；常驻三个 A payload stage 虽然正确，但三轮中位数
+`52.916 us`，低于两-stage 版本的收益。named barrier、单阶段 output store、
+`wpt=4`、A payload `TH=2/6` 和 A/B LDS load 重排均未通过正确性或性能门槛。
+
+## GEMM2 cached-stage TDM owner 均衡（2026-10-02）
+
+### 优化内容
+
+在保留 A payload stage 0/1 常驻的基础上，重新分配后续 persistent task 的
+stage 0/1 TDM owner。A payload 已经不再搬运，剩余 B、ScaleA、ScaleB 若继续沿用
+原 owner，会让 B 与 ScaleB 同时集中在 physical SIMD2/3，而 SIMD0/1 只承担较小的
+ScaleA，造成明显的 barrier 到达偏斜。
+
+新映射为：
+
+```text
+B payload : waves 0,1,2,3，四路均分
+ScaleA    : waves 4,5
+ScaleB    : waves 6,7
+```
+
+按 `wave 0/4`、`1/5`、`2/6`、`3/7` 共用 physical SIMD 的映射计算，每个 SIMD
+在每个 cached stage 中承担约 `8.75–9.0 KiB`，替代原先约 `0.75 KiB` 对
+`17 KiB` 的不均衡分配。同时每个 wave 每个 stage 仍只发一个 input TDM；加上唯一的
+output TDM 后，仍满足每 wave 3 个、每 SIMD 6 个等待 XACK 的硬件限制。
+
+最终 kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc8_ostore2p_s3_ow2_ac2payload_balnext_ps7pf2hm_earlynext_o1w_xor_wait2
+```
+
+random 精确验证：
+
+```text
+GEMM2 grouped max_abs = 0
+GEMM2 grouped nonzero = 0
+GEMM2 routed max_abs  = 0
+GEMM2 routed rel_l2   = 0
+MoE logits_diff       = 3.38491e-06
+MoE rel_l2            = 0.00260189
+MoE pass              = True
+```
+
+相邻三轮结果：
+
+| 版本 | GEMM2 samples (us) | median | GEMM2 提升 | fused MoE median |
+|---|---|---:|---:|---:|
+| 原 `w2x4 xor_wait2` | 54.166, 54.076, 52.823 | 54.076 us | baseline | 205.75 us |
+| A-cache 两段，未均衡 owner | 52.716, 52.454, 53.370 | 52.716 us | 2.51% | 205.04 us |
+| A-cache 两段 + balanced owner | 50.340, 50.127, 52.414 | 50.340 us | 6.91% | 199.18 us |
+
+对应日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T044452Z
+my_code/moe_prefill_switch_ab_runs/20261002T044715Z
+my_code/moe_prefill_switch_ab_runs/20261002T045612Z
+```
+
+将 next-task 预取再提前一个 K tile 的版本虽然通过 random exact 校验，但三轮
+GEMM2 中位数回退到 `54.548 us`，因此未保留。
+
+## GEMM2 A4 persistent reuse 与 WMMA B operand reuse（2026-10-02）
+
+### 优化内容
+
+在 `ac2payload_balnext` 基础上增加两项互补优化：
+
+1. task 0 将 K stage 4 的 A payload 写入 input ring 的 buffer 0。output LDS 只覆盖
+   buffer 2/3，因此 buffer 0 的 A 区域可以跨后续 6 个 persistent N task 保留。后续
+   task 回填 stage 4 时不再重复加载 A4。
+2. 跳过 A4 后不能直接减少对应 wave 的 TDM 数量，否则会破坏后续
+   `s_wait_tensorcnt(n)` 所依赖的 per-wave outstanding 距离。实现将 B4 从两路改为四路，
+   让 8 个 wave 在该 stage 仍然各发一个 input TDM。
+3. GEMM2 的 snake WMMA 遍历已经让相邻 M row 边界使用相同 B operand。设置
+   `wmma_reuse=3`，只启用 `reuseB`，避免同时启用 `reuseA` 带来的额外约束。
+
+最终 kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc8_reuse3_ostore2p_s3_ow2_ac3payload_reuse_balnext_ps7pf2hm_earlynext_o1w_xor_wait2
+```
+
+### 正确性
+
+random 的 GEMM2 stage-output 精确比较通过：
+
+```text
+GEMM2 grouped max_abs = 0
+GEMM2 grouped nonzero = 0
+GEMM2 routed max_abs  = 0
+GEMM2 routed rel_l2   = 0
+MoE logits_diff       = 3.38491e-06
+MoE rel_l2            = 0.00260189
+MoE pass              = True
+```
+
+### 空闲性能复测
+
+复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+| 版本 | GEMM1 samples (us) | GEMM1 median | GEMM2 samples (us) | GEMM2 median | fused MoE median |
+|---|---|---:|---|---:|---:|
+| `ac2payload_balnext` 基线 | 78.605, 78.668, 78.519 | 78.605 us | 53.207, 53.599, 53.269 | 53.269 us | 207.26 us |
+| A4 reuse + `reuseB`，第 1 组 | 77.346, 76.950, 76.625 | 76.950 us | 50.125, 49.543, 50.251 | 50.125 us | 199.38 us |
+| A4 reuse + `reuseB`，第 2 组 | 77.534, 77.237, 77.325 | 77.325 us | 49.935, 50.344, 50.382 | 50.344 us | 199.19 us |
+
+两组候选中位数平均为 `50.2345 us`，相对本轮基线 `53.269 us` 提升约 `5.70%`；
+fused MoE 中位数平均为 `199.285 us`，相对 `207.26 us` 提升约 `3.85%`。
+
+对应日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T110816Z  # baseline
+my_code/moe_prefill_switch_ab_runs/20261002T113043Z  # reuseB run 1
+my_code/moe_prefill_switch_ab_runs/20261002T113629Z  # reuseB run 2
+```
+
+### 本轮未保留的相邻实验
+
+- `reuseA` 与 A4 reuse 的两组中位数为 `50.161 us`、`50.732 us`，略慢于且波动大于
+  `reuseB`。
+- B-major WMMA 遍历的表面中位数为 `49.983 us`，但同轮 GEMM1 降到 `75.114 us`；
+  使用 GEMM1 作为频率代理归一化后约回退 `2.2%`，因此恢复 snake traversal。
+- 同时复用 A4/A5 的版本虽通过 random 精确校验，但三轮中位数为 `54.479 us`，回退。
+- wave-private output LDS 通过 random 精确校验，但取消两阶段 output-store overlap 后中位数
+  回退到 `57.036 us`。
+- ScaleA/ScaleB direct global load 原型未达到 GEMM2 stage-output 逐元素一致，已删除。
+
+
+## a07-3 重启后 baseline 与当前最优 GEMM2 复测（2026-10-02）
+
+机器重启后，测试前后均通过 `/data/yanguahe/code/gpu_users.sh` 确认全部 GPU 空闲。当前最优 GEMM2 kernel 文件 SHA256：
+
+```text
+482d83a7fd2031a6d8ee1007f3830680b8d65dc89c2d58308b17ded41dd09c32
+```
+
+实际 kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_prefetch_apre_sh_mg4_fc8_reuse3_ostore2p_s3_ow2_ac3payload_reuse_balnext_ps7pf2hm_earlynext_o1w_xor_wait2
+```
+
+复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+| 轮次 | GEMM1 samples (us) | GEMM1 median | GEMM2 samples (us) | GEMM2 median | fused MoE samples (us) | fused MoE median |
+|---|---|---:|---|---:|---|---:|
+| 重启后 baseline | 78.101, 78.025, 78.246 | 78.101 us | 51.463, 51.676, 53.445 | 51.676 us | 207.97, 201.22, 219.03 | 207.97 us |
+| 当前最优独立复测 | 78.495, 78.442, 79.136 | 78.495 us | 51.670, 50.908, 51.965 | 51.670 us | 207.84, 200.90, 201.54 | 201.54 us |
+
+两组三轮合并后，GEMM2 的六个样本中位数为 `51.673 us`。两次运行的 const0 GEMM1、GEMM2 和最终 MoE 输出 hash 均与 reference 一致。
+
+日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T141618Z
+my_code/moe_prefill_switch_ab_runs/20261002T142219Z
+```
