@@ -2022,7 +2022,11 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
-    epilogue_batch_wn = 8 if fp4_prefill_schedule else 1
+    epilogue_batch_wn = (
+        (4 if gemm2_eight_wave_geometry else 8)
+        if fp4_prefill_schedule
+        else 1
+    )
     relax_cluster_wrap_dscnt = fp4_prefill_schedule
     disable_xdl_arb_stall = 0 if fp4_prefill_schedule else -1
     wmma_reuse = 3 if gemm2_eight_wave_geometry else fp4_prefill_schedule
@@ -2044,6 +2048,15 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     assert (tile_n // n_warp // WMMA_N) % epilogue_batch_wn == 0
     cluster_m = (4 if cluster_m < 0 else cluster_m) if fp4_prefill_schedule else 1
     assert cluster_m in (1, 4)
+    segment_aware_lds = all(
+        (
+            fp4_prefill_schedule,
+            gemm2_eight_wave_geometry,
+            K == 7168,
+            n_experts == 64,
+            cluster_m == 1,
+        )
+    )
     cache_tag = (
         K,
         tile_m,
@@ -2072,6 +2085,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         fence_cover_mma,
         output_store_split_wm,
         output_store_wave_split,
+        segment_aware_lds,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -2115,20 +2129,60 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     # to break the ds_store bank conflict; reserve it so the padded tile fits.
     C_STORE_B = ((tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
     PERSISTENT_TASKS = (
-        7
-        if gemm2_schedule and K == 2048 and tile_m == 192 and n_experts == 64
-        else 1
+        4
+        if fp4_prefill_schedule
+        and K == 7168
+        and tile_m == 192
+        and n_experts == 64
+        and cluster_m == 1
+        else (
+            7
+            if gemm2_schedule and K == 2048 and tile_m == 192 and n_experts == 64
+            else 1
+        )
     )
-    OUTPUT_LDS_OFF = 2 * PITCH if PERSISTENT_TASKS > 1 else 0
-    A_CACHE_STAGES = 2 if gemm2_eight_wave_geometry else 0
-    A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
-    A_CACHE_OFF = num_buffers * PITCH
-    ARENA_B = max(
-        num_buffers * PITCH,
-        OUTPUT_LDS_OFF + C_STORE_B,
-        A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
+    A_CACHE_STAGES = (
+        0
+        if const_expr(segment_aware_lds)
+        else (2 if gemm2_eight_wave_geometry and gemm2_schedule else 0)
     )
-    assert OUTPUT_LDS_OFF + C_STORE_B <= ARENA_B
+    LDS_SEGMENT_B = 64 * 1024
+    A_HALF_B = STAGE_A // 2
+    B_HALF_B = STAGE_B // 2
+    SA_HALF_B = STAGE_SA // 2
+    SB_HALF_B = STAGE_SB // 2
+    A_TAIL_OFF = num_buffers * A_HALF_B
+    SA_TAIL_OFF = A_TAIL_OFF
+    SB_TAIL_OFF = SA_TAIL_OFF + num_buffers * SA_HALF_B
+    SEGMENTED_C_STORE_B = (
+        (tile_m * (tile_n // 2 + 8) * 2 + 127) // 128
+    ) * 128
+    if const_expr(segment_aware_lds):
+        # Four A/ScaleA/ScaleB halves occupy segments 0/1, four B halves occupy
+        # segments 2/3, and output occupies segment 4.  Keeping each operand on
+        # a stable 64-KiB segment avoids cross-port segment serialization.  The
+        # next task refills A0/A1 into the ordinary ring while output uses the
+        # disjoint fifth segment, so this layout does not need a separate A cache.
+        OUTPUT_LDS_OFF = 4 * LDS_SEGMENT_B
+        A_CACHE_PITCH = 0
+        A_CACHE_OFF = 0
+        ARENA_B = 5 * LDS_SEGMENT_B
+        assert STAGE_A % 2 == 0 and STAGE_B % 2 == 0
+        assert STAGE_SA % 2 == 0 and STAGE_SB % 2 == 0
+        assert SB_TAIL_OFF + num_buffers * SB_HALF_B <= LDS_SEGMENT_B
+        assert SEGMENTED_C_STORE_B <= LDS_SEGMENT_B
+    else:
+        OUTPUT_LDS_OFF = 2 * PITCH if PERSISTENT_TASKS > 1 else 0
+        A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
+        A_CACHE_OFF = num_buffers * PITCH
+        ARENA_B = max(
+            num_buffers * PITCH,
+            OUTPUT_LDS_OFF + C_STORE_B,
+            A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
+        )
+    assert OUTPUT_LDS_OFF + (
+        SEGMENTED_C_STORE_B if const_expr(segment_aware_lds) else C_STORE_B
+    ) <= ARENA_B
 
     # Quant epilogue compile-time constants.
     QUANT_ROWS_PER_TILE = quant_wmma_rep * 16
@@ -2150,22 +2204,27 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     _output_wave_split = "_ow2" if output_store_wave_split else ""
     _cluster_m = f"_cm{cluster_m}" if fp4_prefill_schedule and cluster_m != 4 else ""
     _b_tdm_th = f"_bth{tdm_b_th}" if tdm_b_th else ""
-    _persistent = (
-        (
-            "_ac3payload_reuse_balnext_ps7pf2hm_earlynext_o1w_xor_wait2"
-            if gemm2_eight_wave_geometry
-            else "_ps7pf2hm_earlynext"
-        )
-        if PERSISTENT_TASKS > 1
-        else ""
-    )
+    _segment_aware_lds = "_ldsseg5_xorm" if segment_aware_lds else ""
+    _persistent = ""
+    if PERSISTENT_TASKS > 1:
+        if gemm2_eight_wave_geometry and gemm2_schedule:
+            _persistent = "_ac3payload_reuse_balnext_ps7pf2hm_earlynext_o1w_xor_wait2"
+        elif fp4_prefill_schedule:
+            _persistent = (
+                "_ps4pf2hm_earlynext_o1w_xor_wait1"
+                if gemm2_eight_wave_geometry
+                else "_ps4pf2hm_earlynext"
+            )
+        else:
+            _persistent = "_ps7pf2hm_earlynext"
     _kname = (
         "a8w4_tdm_fp4"
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
         f"_b{num_buffers}_K{K}"
         f"{_grouped}{_act}_cn4{_cluster_m}_prefetch{_epilogue_batch}_apre_sh{_b_tdm_th}"
         f"{_relax_cluster_wrap}_mg4_fc{fence_cover_mma}{_xdl_arb}"
-        f"{_wmma_reuse}{_overlap_store}{_output_wave_split}{_persistent}"
+        f"{_wmma_reuse}{_overlap_store}{_output_wave_split}"
+        f"{_segment_aware_lds}{_persistent}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -2263,8 +2322,13 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
             lane = tid % WAVE
             lane16 = lane % 16
             kgrp = lane // 16
-            wave_m = wave // n_warp
             wave_n = wave % n_warp
+            physical_wave_slot = wave // n_warp
+            wave_m = (
+                physical_wave_slot ^ (wave_n // 2)
+                if const_expr(segment_aware_lds)
+                else physical_wave_slot
+            )
 
             total_n_tiles = (i32_n + (tile_n - 1)) // tile_n
             total_m_tiles = (i32_m + (tile_m - 1)) // tile_m
@@ -2481,13 +2545,14 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
             Job = namedtuple(
                 "Job",
                 (
-                    "g_base g_off g_stride oob inner outer on_i32 lds_off lds_row "
+                    "kind g_base g_off g_stride oob inner outer on_i32 lds_off lds_row "
                     "k_adv waves pad wg_mask split_inner cache_modifier a_cache_off"
                 ),
             )
             jobs = []
 
             def add_tdm_loads(
+                kind,
                 g_base,
                 g_off,
                 g_stride,
@@ -2508,6 +2573,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
             ):
                 jobs.append(
                     Job(
+                        kind,
                         g_base,
                         g_off,
                         g_stride,
@@ -2528,6 +2594,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 )
 
             add_tdm_loads(
+                "a",
                 gA_base,
                 a_off0,
                 Kp16,
@@ -2543,6 +2610,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 a_cache_off=0,
             )
             add_tdm_loads(
+                "b",
                 gB_base,
                 b_off0,
                 Kp16,
@@ -2558,6 +2626,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 cache_modifier=tdm_b_th,
             )
             add_tdm_loads(
+                "sa",
                 gSA_base,
                 (blk_m64 // 32) * AS_ROW,
                 AS_ROW,
@@ -2573,6 +2642,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 wg_mask=a_mcast_mask if cluster_m > 1 else None,
             )
             add_tdm_loads(
+                "sb",
                 gSB_base,
                 sb_off0,
                 SB_OUTER_STRIDE,
@@ -2691,18 +2761,56 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                             atom, "workgroup_mask", fx.Int32(j.wg_mask)
                         )
                     use_a_cache = cache_a and j.a_cache_off is not None
-                    base = (
-                        cache_i32 if j.on_i32 else cache_pa
-                    ) if use_a_cache else (base_i32 if j.on_i32 else pa)
-                    lds_off = (
-                        j.a_cache_off // 4 if j.on_i32 else j.a_cache_off
-                    ) if use_a_cache else j.lds_off
+                    dst_outer_off = wave_outer_off
+                    if const_expr(segment_aware_lds):
+                        assert len(j.waves) == 2 and not split_i
+                        owner_half = wave - j.waves[0]
+                        if const_expr(j.kind == "a"):
+                            byte_off = (
+                                owner_half * LDS_SEGMENT_B + s * A_HALF_B
+                            )
+                        elif const_expr(j.kind == "b"):
+                            byte_off = (
+                                (owner_half + 2) * LDS_SEGMENT_B + s * B_HALF_B
+                            )
+                        elif const_expr(j.kind == "sa"):
+                            byte_off = (
+                                owner_half * LDS_SEGMENT_B
+                                + SA_TAIL_OFF
+                                + s * SA_HALF_B
+                            )
+                        else:
+                            assert j.kind == "sb"
+                            byte_off = (
+                                owner_half * LDS_SEGMENT_B
+                                + SB_TAIL_OFF
+                                + s * SB_HALF_B
+                            )
+                        segment_ptr = base_ptr + fx.index_cast(T.index, byte_off)
+                        base = fx.recast_iter(
+                            p32_shared if j.on_i32 else p8_shared, segment_ptr
+                        )
+                        lds_off = 0
+                        dst_outer_off = 0
+                    else:
+                        base = (
+                            cache_i32 if j.on_i32 else cache_pa
+                        ) if use_a_cache else (base_i32 if j.on_i32 else pa)
+                        lds_off = (
+                            j.a_cache_off // 4 if j.on_i32 else j.a_cache_off
+                        ) if use_a_cache else j.lds_off
                     dst = lds_view(
                         base
                         + lds_off
-                        + wave_outer_off * j.lds_row
+                        + dst_outer_off * j.lds_row
                         + wave_inner_off
-                        + (so4 if j.on_i32 and not use_a_cache else 0),
+                        + (
+                            so4
+                            if j.on_i32
+                            and not use_a_cache
+                            and not segment_aware_lds
+                            else 0
+                        ),
                         (seg, inner_seg),
                         (j.lds_row, 1),
                     )
@@ -2752,15 +2860,36 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
 
             # Split each region's offset into a lane-varying base, which keepalive
             # can pin, and a compile-time part that folds into ds_load's offset:.
-            lds_a_lane_off = (wmb // 16) * A_LDS_ROW + kgrp * 256 + lane16 * 16
-            lds_b_lane_off = STAGE_A + (wnb // 16) * B_LDS_ROW + kgrp * 256 + lane16 * 16
+            lds_a_lane_off = (
+                kgrp * 256 + lane16 * 16
+                if const_expr(segment_aware_lds)
+                else (wmb // 16) * A_LDS_ROW + kgrp * 256 + lane16 * 16
+            )
+            lds_b_lane_off = (
+                ((wave_n % 2) * (warp_tile_n // 16)) * B_LDS_ROW
+                + kgrp * 256
+                + lane16 * 16
+                if const_expr(segment_aware_lds)
+                else STAGE_A
+                + (wnb // 16) * B_LDS_ROW
+                + kgrp * 256
+                + lane16 * 16
+            )
             assert wmma_m_rep == 1 or wmma_m_rep % 2 == 0
             lds_sa_lane_rel = ((wmb // 32) * AS_INNER + lane) * 4
-            lds_sa_lane_off = SA_OFF + lds_sa_lane_rel
+            lds_sa_lane_off = (
+                lane * 4
+                if const_expr(segment_aware_lds)
+                else SA_OFF + lds_sa_lane_rel
+            )
             # One full-wave load covers both 16-column halves of an N32 scale
             # super-row. WMMA opsel_a selects lane 0:15 or 16:31 for each wn.
             assert warp_tile_n % 32 == 0, "load_sb split requires a 32-aligned wnb"
-            lds_sb_lane_off = SB_OFF + ((wnb // 32) * SC_INNER + lane) * 4
+            lds_sb_lane_off = (
+                (((wave_n % 2) * (warp_tile_n // 32)) * SC_INNER + lane) * 4
+                if const_expr(segment_aware_lds)
+                else SB_OFF + ((wnb // 32) * SC_INNER + lane) * 4
+            )
 
             def lds_a_base(buf):
                 return buf + fx.index_cast(T.index, lds_a_lane_off)
@@ -2778,6 +2907,39 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
 
             def calc_lds_addr(buf, kt):
                 """Calculate the lane-specific LDS bases for one stage buffer."""
+                if const_expr(segment_aware_lds):
+                    stage = fx.Int32(kt) % fx.Int32(num_buffers)
+                    base_idx = ptr_to_idx(base_ptr)
+                    a_segment = wave_m
+                    b_segment = wave_n // 2
+                    a_stage_base = (
+                        base_idx
+                        + fx.index_cast(T.index, a_segment * LDS_SEGMENT_B)
+                        + fx.index_cast(T.index, stage * A_HALF_B)
+                    )
+                    b_stage_base = (
+                        base_idx
+                        + fx.index_cast(T.index, (b_segment + 2) * LDS_SEGMENT_B)
+                        + fx.index_cast(T.index, stage * B_HALF_B)
+                    )
+                    sa_stage_base = (
+                        base_idx
+                        + fx.index_cast(T.index, a_segment * LDS_SEGMENT_B)
+                        + SA_TAIL_OFF
+                        + fx.index_cast(T.index, stage * SA_HALF_B)
+                    )
+                    sb_stage_base = (
+                        base_idx
+                        + fx.index_cast(T.index, b_segment * LDS_SEGMENT_B)
+                        + SB_TAIL_OFF
+                        + fx.index_cast(T.index, stage * SB_HALF_B)
+                    )
+                    return LdsAddr(
+                        a=a_stage_base + fx.index_cast(T.index, lds_a_lane_off),
+                        b=b_stage_base + fx.index_cast(T.index, lds_b_lane_off),
+                        sa=sa_stage_base + fx.index_cast(T.index, lds_sa_lane_off),
+                        sb=sb_stage_base + fx.index_cast(T.index, lds_sb_lane_off),
+                    )
                 regular_a = lds_a_base(buf)
                 regular_sa = lds_sa_base(buf)
                 if const_expr(A_CACHE_STAGES > 0):
@@ -3382,6 +3544,10 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         store_phase = wave_n // store_waves
                         store_wave = wave_n - store_phase * store_waves
                         target_phase = 0 if wm_base == 0 else 1
+                        # ``store_phase ^ wave_m`` selects one physical resident
+                        # slot per output phase.  This remains valid when the
+                        # segment-aware layout swaps logical M ownership on the
+                        # second SIMD pair, and covers all four 48-row slices.
                         do_store = (store_phase ^ wave_m) == target_phase
                         row_start = wmb + wm_base * 16 + store_wave * owned_rows
                     else:

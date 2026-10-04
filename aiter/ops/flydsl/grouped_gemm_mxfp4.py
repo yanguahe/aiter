@@ -115,6 +115,24 @@ def supports_gfx1250_a_preshuffle(
     )
     if gemm2_eight_wave:
         return True
+    gemm1_eight_wave = all(
+        (
+            a_is_fp4,
+            stage1_act == 1,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            n_experts == 64,
+            N == 4096,
+            K == 7168,
+            (tile_m, tile_n, tile_k) == (192, 256, 256),
+            (m_warp, n_warp, num_buffers) == (2, 4, 4),
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+        )
+    )
+    if gemm1_eight_wave:
+        return True
     common = all(
         (
             a_is_fp4,
@@ -259,6 +277,18 @@ def flydsl_grouped_gemm_a8w4_masked(
             "GEMM1/GEMM2 optimized shapes"
         )
     if use_optimized:
+        use_gemm1_persistent = all(
+            (
+                stage1_act == 1,
+                K == 7168,
+                N == 4096,
+                (tile_m, tile_n, tile_k) == (192, 256, 256),
+                (m_warp, n_warp, num_buffers) in ((2, 2, 4), (2, 4, 4)),
+                n_experts == 64,
+                cluster_n == 4,
+                cluster_m == 1,
+            )
+        )
         use_gemm2_persistent = stage1_act == 0 and K == 2048 and N == 7168 and (
             (
                 tile_m,
@@ -276,7 +306,7 @@ def flydsl_grouped_gemm_a8w4_masked(
         )
         optimized_launcher = (
             launch_gemm_a8w4_tdm_gemm2_persistent
-            if use_gemm2_persistent
+            if use_gemm1_persistent or use_gemm2_persistent
             else launch_gemm_a8w4_tdm_optimized
         )
         optimized_launcher(

@@ -1799,3 +1799,741 @@ ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
 my_code/moe_prefill_switch_ab_runs/20261002T141618Z
 my_code/moe_prefill_switch_ab_runs/20261002T142219Z
 ```
+
+
+## GEMM1 优化新阶段 baseline（a07-3 重启后，2026-10-02 15:11 UTC）
+
+测试前确认 a07-3 的全部 GPU 空闲。目标规模和复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+| 指标 | samples (us) | median |
+|---|---|---:|
+| GEMM1 | 77.166, 77.691, 76.337 | 77.166 us |
+| GEMM2 | 52.898, 52.647, 52.856 | 52.856 us |
+| fused MoE | 200.87, 202.40, 201.99 | 201.99 us |
+
+GEMM1 减少 20% 的目标为：
+
+```text
+77.166 us * 0.80 = 61.733 us
+```
+
+const0 的 GEMM1、GEMM2 和最终 MoE 输出 hash 均与 reference 一致。日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T151110Z
+```
+
+## GEMM1 persistent x4 + eight-wave latency hiding（2026-10-02 至 2026-10-03）
+
+### 保留的实现
+
+在 `t192x256x256/w2x2/b4` 的基础上，将 GEMM1 改成以下组合：
+
+```text
+tile               = 192x256x256
+workgroup          = w2x4（8 waves）
+input buffers      = 4
+persistent tasks   = 4
+cluster            = 4x1
+B TDM cache hint   = 6 (NT_HT)
+WMMA reuse         = reuseB
+next-task prefetch = stage 0 + stage 1
+output TDM         = one descriptor per wave
+```
+
+`N=4096` 一共有 `16` 个 N tile。一个 4-WG cluster 覆盖四个 N tile，persistent
+loop 再顺序处理四个 N task，因此每个 expert 的全部 N 方向工作由同一个 cluster
+完成。task 间提前发射下一 task 的 stage 0/1，并让当前 output TDM 与下一 task 的
+tile 0 compute 重叠。
+
+`w2x4` 把每个 wave 的 accumulator 和 operand register 压低到可在每个 physical
+SIMD 同时驻留两个 wave。ATT 中观察到的静态资源为：
+
+```text
+VGPR = 377 / wave
+SGPR = 97 / wave
+LDS  = 243,712 B / workgroup
+```
+
+MI450 每个 SIMD 有 1024 个 VGPR，因此两个 wave 合计约 754 个 VGPR，双驻留成立。
+相较此前单 wave/SIMD 的版本，这一变化可在一个 wave 等待 TDM、LDS 或 barrier 时让
+另一个 wave 继续发射指令。
+
+实际 GEMM1 symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_cn4_cm1_prefetch_eb4_apre_sh_bth6_rcw_mg4_fc8_xdl0_reuse3_ostore2p_s3_ps4pf2hm_earlynext_o1w_xor_wait1
+```
+
+### 性能结果
+
+首次三轮结果：
+
+```text
+GEMM1 samples = 70.718, 72.824, 75.558 us
+GEMM1 median  = 72.824 us
+```
+
+相对本轮重启后 baseline `77.166 us`，中位数降低约 `5.63%`。机器状态随后发生漂移，
+因此又对 `reuseB`（`reuse3`）和 A+B 同时 reuse（`reuse1`）做了 ABBA 相邻复测：
+
+| 版本 | 第 1 组三轮 median | 第 2 组三轮 median | 六样本合并 median |
+|---|---:|---:|---:|
+| `reuseB` (`reuse3`) | 75.796 us | 74.329 us | 75.222 us |
+| A+B reuse (`reuse1`) | 76.130 us | 74.656 us | 75.740 us |
+
+两者差异较小，但两组汇总后 `reuseB` 仍约快 `0.68%`，因此保留 `reuse3`，删除
+`reuse1` 实验代码。
+
+对应日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261002T171823Z
+my_code/moe_prefill_switch_ab_runs/20261002T185016Z
+my_code/moe_prefill_switch_ab_runs/20261002T190215Z
+my_code/moe_prefill_switch_ab_runs/20261002T190357Z
+my_code/moe_prefill_switch_ab_runs/20261002T190514Z
+my_code/moe_prefill_switch_ab_runs/20261002T190628Z
+```
+
+### random 正确性
+
+恢复最终 `reuseB` 文件后执行：
+
+```bash
+ROUNDS=1 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-random \
+  --experts 64 \
+  --tokens 1536 \
+  --topk 8 \
+  --model-dim 7168 \
+  --inter-dim 2048
+```
+
+结果：
+
+```text
+logits_diff = 3.38491e-06
+rel_l2      = 0.00260189
+pass        = True
+```
+
+该次 random 运行时机器上存在其他 GPU workload，因此这里只采用正确性结论，不采用其
+耗时。日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261003T031720Z
+```
+
+### 当前 trace 结论
+
+`w2x4` 版本的代表 full-wave span 约为 `119k–121k cycles`。不同 SIMD/slot 的主要
+exposed stall 分布为：
+
+- `s_wait_dscnt`：约 `17.8%–25.7%`；
+- `s_wait_tensorcnt`：最高约 `17.0%`；
+- `s_barrier_wait`：约 `11.2%–29.0%`。
+
+因此当前瓶颈已经从固定 prologue/epilogue 转移到 K-loop 内的 LDS completion、B TDM
+latency，以及两个 resident waves 到达 workgroup barrier 的偏斜。
+
+### 本阶段已淘汰的实验
+
+以下实验均已恢复，不保留代码：`reuseA+reuseB`、5-buffer pipeline、A stage 0/1
+resident cache、`coexec`/`max-ilp`/`iterative-maxocc` scheduler、`fc12`、split/raw
+barrier、B L2 software prefetch、B-first owner、balanced TDM owner、`w3x4`、`w4x4`、
+`t96/b2`、`t192x128/b3`、`cluster_n=8` 和 `wpt4`。其中 `w3x4`、`w4x4`、`wpt4`
+的实验版本还出现 random 精度错误，不能保留。
+
+## 2026-10-03 重启后的 GEMM1 baseline、最优版与 invalid-block trace
+
+a07-3 再次重启后，在 GPU 空闲状态下重新测量本阶段 baseline 和当前保留的最优版本：
+
+| version | GEMM1 samples (us) | GEMM1 median | GEMM2 median | fused MoE median | correctness |
+|---|---|---:|---:|---:|---|
+| phase baseline (`t192/w2x2/b4 + B_TH=6`) | 78.128, 77.881, 79.720 | 78.128 us | 53.418 us | 208.05 us | const0 hashes match |
+| retained best (`persistent x4 + t192/w2x4/b4 + B_TH=6 + reuseB`) | 75.131, 74.825, 74.104 | 74.825 us | 51.469 us | 199.53 us | const0 hashes match |
+
+当前最优 GEMM1 相对同机 baseline 降低 `4.23%`。日志目录：
+
+```text
+baseline: my_code/moe_prefill_switch_ab_runs/20261003T054059Z
+best:     my_code/moe_prefill_switch_ab_runs/20261003T054229Z
+```
+
+随后对当前最优 GEMM1 抓取单次 SIMD3 ATT。cycle 总量最大的 decoded SIMD slot
+为 `SE1/SIMD3/slot1`，其中一个有效 block 消耗 `126149 cycles`，三个二分查找后
+early-exit 的无效 block 合计消耗 `3267 cycles`。无效 block 占该 slot 累计 block
+cycles 的比例为：
+
+```text
+3267 / 129416 = 2.524417%
+```
+
+完整方法、trace 路径和 physical-WGP 口径的交叉检查见
+`my_code/e64_t1536_topk8_gemm1_invalid_block_trace_analysis_a07_3.md`。
+
+### 当前最优 GEMM1 的 wait-cycle 瓶颈
+
+同一份重启后 trace 的 8 条有效 compute wave 合计 `994047 cycles`。按 decoder
+instruction latency 统计：
+
+```text
+s_wait_dscnt      = 222278 cycles = 22.360915%
+s_wait_tensorcnt  =  15224 cycles =  1.531517%
+s_barrier_wait    = 185600 cycles = 18.671149%
+s_wait_kmcnt      =  24097 cycles =  2.424131%
+```
+
+其中 `s_wait_dscnt` 的 exposed stall 为 `21.682476%`，`s_wait_tensorcnt` 的
+exposed stall 为 `1.437357%`。当前主要瓶颈是 K-loop 的 LDS operand completion
+以及两个 resident waves 到达 workgroup barrier 的偏斜；TDM completion 已不是第一
+瓶颈。完整 PC、immediate 和 per-wave 分析见
+`my_code/e64_t1536_topk8_gemm1_best_thread_trace_bottleneck_a07_3.md`。
+
+### Trace 抓取方法与统计口径
+
+当前最优 GEMM1 的完整 symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_cn4_cm1_prefetch_eb4_apre_sh_bth6_rcw_mg4_fc8_xdl0_reuse3_ostore2p_s3_ps4pf2hm_earlynext_o1w_xor_wait1
+```
+
+为减少 trace 次数，本次只抓取 ATT SIMD selector 3。decoder 输出了四个 shader
+engine 的 occupancy 数据，并解码了每个 shader engine 上 SIMD3 的两个 slot。
+
+```bash
+cd /data/yanguahe/code/wk_sp1/aiter
+
+REPO_ROOT=/data/yanguahe/code/wk_sp1/aiter \
+TRACE_ROOT=my_code/thread_trace_runs \
+bash /tmp/get_isa_runner_att.sh \
+  a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_cn4_cm1_prefetch_eb4_apre_sh_bth6_rcw_mg4_fc8_xdl0_reuse3_ostore2p_s3_ps4pf2hm_earlynext_o1w_xor_wait1 \
+  e64_t1536_topk8_gemm1_best_invalid_blocks_a07_3_20261003 \
+  "env AITER_MOE_EXPERT_BALANCE=true AITER_LOG_MORE=1 AITER_USE_GROUPED_GEMM=1 AITER_GROUPED_DEBUG=0 AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1 python3 -u my_code/test_flydsl_grouped_gemm_gfx1250.py --scenario bench --data-format a4w4 --act silu --no-bias --no-check-aot-cache --experts 64 --tokens 1536 --topk 8 --model-dim 7168 --inter-dim 2048 --iters 2 --const-init 0" \
+  --ana-att
+```
+
+trace 目录：
+
+```text
+my_code/thread_trace_runs/e64_t1536_topk8_gemm1_best_invalid_blocks_a07_3_20261003
+```
+
+`analyze_att_capture.py` 给出的 REALTIME 加权平均 GFXCLK 为 `1893.745 MHz`，
+最大 occupancy timestamp span 为 `132579 cycles`。
+
+`trace_segment_cycles.py` 以 kernel 第一条 `global_prefetch_b8` 到 `s_endpgm`
+作为完整区间，8 条有效 compute wave 的结果为：
+
+```text
+count            = 8
+average          = 120636.4 cycles
+p50              = 120696.0 cycles
+p90              = 122250.2 cycles
+minimum          = 118678 cycles
+maximum          = 122512 cycles
+```
+
+wait 占比使用更完整的 `wave.begin -> wave.end` duration 作为分母。8 条有效 wave
+的总 span 为 `994047 cycles`，平均每条 wave 为 `124255.875 cycles`。该口径是
+active-wave cycle 的加权统计；不能把多个并发 wave 的 wait cycles 相加后除以一次
+dispatch wall time。
+
+### 无效 block 的完整统计
+
+decoder 文件名采用 `seX_smY_slZ_wvN.json`。固定 `SE/SM/SL` 后，`wvN`
+表示依次占用该 SIMD slot 的 block-wave 实例。
+
+分类直接依据动态指令：
+
+- 有效 block 至少执行一条 `v_wmma*`；
+- 无效 early-exit block 没有执行任何 `v_wmma*`。
+
+两类 trace 完全分离：
+
+| 类型 | 解码 block 数 | 每个 block 的动态指令数 | duration 范围 |
+|---|---:|---:|---:|
+| 有效计算 block | 8 | 15,127-15,286 | 122,239-126,149 cycles |
+| 无效 early-exit block | 22 | 固定为 238 | 907-1,287 cycles |
+
+无效路径末尾为 persistent-loop 的 scalar 控制流，随后直接 drain 并退出：
+
+```text
+s_add_co_i32 ...
+s_cmp_lg_u32 ...
+s_cbranch_*
+s_wait_tensorcnt 0x0
+s_endpgm
+```
+
+该路径没有进入 GEMM hotloop，因此短 trace 确实是 expert id 无效后直接返回的
+block，而不是执行异常快的有效 block。
+
+对每个 `SE/SM/SL` 内所有 `wvN` 的 duration 求和，cycle 总量最大的是
+`SE1/SIMD3/slot1`：
+
+| block instance | cycles | 动态指令数 | `v_wmma*` 数量 | 分类 |
+|---|---:|---:|---:|---|
+| `wv0` | 126,149 | 15,286 | 2,688 | 有效计算 |
+| `wv1` | 1,241 | 238 | 0 | 无效 early-exit |
+| `wv2` | 1,011 | 238 | 0 | 无效 early-exit |
+| `wv3` | 1,015 | 238 | 0 | 无效 early-exit |
+
+```text
+slot 总 cycles    = 126149 + 1241 + 1011 + 1015
+                  = 129416 cycles
+
+无效 block cycles = 1241 + 1011 + 1015
+                  = 3267 cycles
+
+无效 block 占比   = 3267 / 129416
+                  = 2.524417%
+```
+
+按本次 GFXCLK，`3267 cycles` 相当于约 `1.725 us` 的累计 slot residency。
+这是该 slot 上的理想局部上限；不同 WGP 的无效 block 会与其他工作并行，不能直接
+推导为整个 kernel 可以降低 `1.725 us`。
+
+全部 decoded SIMD slot：
+
+| 排名 | decoded SIMD slot | blocks | 有效 | 无效 | 总 cycles | 无效 cycles | 无效占比 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | SE1/SIMD3/slot1 | 4 | 1 | 3 | 129,416 | 3,267 | 2.524417% |
+| 2 | SE1/SIMD3/slot0 | 4 | 1 | 3 | 128,509 | 2,963 | 2.305675% |
+| 3 | SE0/SIMD3/slot1 | 3 | 1 | 2 | 128,145 | 2,301 | 1.795622% |
+| 4 | SE0/SIMD3/slot0 | 3 | 1 | 2 | 127,436 | 2,106 | 1.652594% |
+| 5 | SE3/SIMD3/slot1 | 4 | 1 | 3 | 126,657 | 3,314 | 2.616515% |
+| 6 | SE2/SIMD3/slot1 | 4 | 1 | 3 | 125,917 | 3,061 | 2.430966% |
+| 7 | SE3/SIMD3/slot0 | 4 | 1 | 3 | 125,756 | 3,016 | 2.398295% |
+| 8 | SE2/SIMD3/slot0 | 4 | 1 | 3 | 124,978 | 2,739 | 2.191586% |
+
+`occupancy.json` 的 `packed_sa_wgp` 可用于更严格的
+`SE/SA/WGP/SIMD/slot` 物理坐标交叉检查：
+
+- 累计 resident cycles 最大的物理 slot 是
+  `SE2/SA1/WGP2/SIMD0/slot0`，只运行一个有效 block，共 `132537 cycles`，
+  无效 block 占比为 `0%`。
+- 在确实被多个 block 复用的物理 slot 中，cycle 总量最大的是
+  `SE1/SA1/WGP2/SIMD0/slot1`，一个有效 block 加一个无效 block 共
+  `129874 cycles`；无效 block 为 `1038 cycles`，占 `0.799236%`。
+
+按 decoder `SE/SM/SL` slot 时间线，问题所问的主要结果是 `2.524417%`。
+physical-WGP 结果进一步说明，无效 block 不是当前 kernel 的主要性能瓶颈。
+
+### 全部 `s_wait_tensorcnt` 和 `s_wait_dscnt` 占比
+
+| wait 类型 | 动态次数 | decoder latency cycles | 占完整 wave span | exposed stall cycles | stall 占完整 wave span | 单 wave占比 min / median / max |
+|---|---:|---:|---:|---:|---:|---:|
+| `s_wait_tensorcnt` | 936 | 15,224 | **1.531517%** | 14,288 | **1.437357%** | 0.839339% / 1.486696% / 2.783217% |
+| `s_wait_dscnt` | 6,744 | 222,278 | **22.360915%** | 215,534 | **21.682476%** | 19.583260% / 22.345841% / 24.946279% |
+
+两类 wait 合计：
+
+```text
+decoder latency = 237502 / 994047 = 23.892432%
+exposed stall   = 229822 / 994047 = 23.119832%
+```
+
+`s_wait_tensorcnt` 的 immediate 构成：
+
+| instruction | count | latency cycles | 占完整 wave span | exposed stall |
+|---|---:|---:|---:|---:|
+| `s_wait_tensorcnt 0x2` | 808 | 7,024 | 0.7066% | 6,216 |
+| `s_wait_tensorcnt 0x3` | 8 | 5,324 | 0.5356% | 5,316 |
+| `s_wait_tensorcnt 0x0` | 64 | 2,539 | 0.2554% | 2,475 |
+| `s_wait_tensorcnt 0x1` | 56 | 337 | 0.0339% | 281 |
+
+`s_wait_dscnt` 的主要构成：
+
+| instruction | count | latency cycles | 占完整 wave span | exposed stall |
+|---|---:|---:|---:|---:|
+| `s_wait_dscnt 0x0` | 1,016 | 118,246 | 11.8954% | 117,230 |
+| `s_wait_dscnt 0xa` | 960 | 86,043 | 8.6558% | 85,083 |
+| `s_wait_dscnt 0x8` | 952 | 4,591 | 0.4618% | 3,639 |
+| `s_wait_dscnt 0x6` | 64 | 4,112 | 0.4137% | 4,048 |
+| `s_wait_dscnt 0x1d` | 864 | 3,360 | 0.3380% | 2,496 |
+| `s_wait_dscnt 0x5` | 32 | 2,318 | 0.2332% | 2,286 |
+| 其余 immediate 合计 | 2,856 | 3,608 | 0.3630% | 1,752 |
+
+`s_wait_dscnt 0x0` 和 `s_wait_dscnt 0xa` 合计占完整 wave span 的
+`20.5512%`，占全部 DScnt wait latency 的 `91.91%`。它们分别集中在 stage
+handoff/buffer 复用前的完整 LDS drain，以及 WMMA 消费下一批 operands 前的部分
+LDS-read completion 等待。
+
+### 其他主要 cycle 项
+
+| opcode | decoder latency cycles | 占完整 wave span | exposed stall 占比 | 说明 |
+|---|---:|---:|---:|---|
+| `v_wmma_scale_f32_32x16x128_f4` | 330,660 | 33.2640% | 13.7945% | GEMM 有效计算主体 |
+| `s_wait_dscnt` | 222,278 | 22.3609% | 21.6825% | LDS completion 主瓶颈 |
+| `s_barrier_wait` | 185,600 | 18.6711% | 18.5746% | workgroup wave 到达偏斜 |
+| `ds_load_b128` | 61,814 | 6.2184% | 2.6130% | A/B operand 从 LDS 进入 VGPR |
+| `s_wait_kmcnt` | 24,097 | 2.4241% | 2.4169% | prologue scalar load / expert lookup |
+| `s_wait_tensorcnt` | 15,224 | 1.5315% | 1.4374% | TDM load/store completion |
+| `v_add_nc_u32_e32` | 12,578 | 1.2653% | 0.6086% | 地址更新 |
+| `v_tanh_f32_e32` | 12,321 | 1.2395% | 0.6214% | SiLU epilogue |
+
+所有 `s_barrier_wait` 合计占 `18.671149%`。`s_wait_dscnt + s_barrier_wait`
+合计占 `41.032064%`；再加上 `s_wait_tensorcnt` 后占 `42.563581%`。
+
+最重的静态 wait 位置：
+
+| PC | instruction | latency/span | 作用 |
+|---|---|---:|---|
+| `0x36e0` | `s_barrier_wait 0xffff` | 9.9657% | steady K-loop stage handoff |
+| `0x4000` | `s_wait_dscnt 0x0` | 5.4900% | 下一 stage 可读或复用前完整 LDS drain |
+| `0x36d8` | `s_wait_dscnt 0x0` | 5.0805% | 下一 stage 可读或复用前完整 LDS drain |
+| `0x3e28` | `s_wait_dscnt 0xa` | 4.1319% | WMMA 前等待部分 LDS operands |
+| `0x4008` | `s_barrier_wait 0xffff` | 3.7900% | steady K-loop stage handoff |
+| `0x3508` | `s_wait_dscnt 0xa` | 2.8735% | WMMA 前等待部分 LDS operands |
+
+前四个主要 DScnt wait PC 合计贡献全部 DScnt wait latency 的 `78.60%`；前两个
+主要 hotloop barrier PC 合计贡献全部 barrier wait latency 的 `73.67%`。
+
+### 两个 resident slot 的不对称
+
+| slot | `s_wait_tensorcnt` | `s_wait_dscnt` | `s_barrier_wait` |
+|---|---:|---:|---:|
+| slot0，四个 SE 加权 | 1.1737% | 20.9446% | 27.5693% |
+| slot1，四个 SE 加权 | 1.8876% | 23.7706% | 9.8147% |
+
+slot1 在 LDS/TDM 数据就绪上更慢，而 slot0 更早到达 barrier，并把差值暴露为较长的
+`s_barrier_wait`。由于 barrier 是全 workgroup 同步，不能只根据单个 slot 断言唯一
+straggler；但这一稳定不对称说明两个 resident waves 的 operand readiness 和推进速度
+没有平衡。
+
+### 当前瓶颈与优化优先级
+
+当前最优 GEMM1 的第一瓶颈是 K-loop 的 LDS operand pipeline：
+
+1. 每个 k128 都需要从 LDS 读取 A、B、ScaleA 和 ScaleB 到 VGPR。
+2. `s_wait_dscnt 0xa` 在 WMMA 前等待所需 operands。
+3. `s_wait_dscnt 0x0` 在 stage 交接或 buffer 复用前完全 drain LDS 操作。
+4. wave 之间的数据就绪时间不同，最终在全 workgroup barrier 上暴露为额外等待。
+
+`s_wait_tensorcnt` 只有 `1.53%`，说明 persistent prefetch 已经隐藏绝大部分 TDM
+global-memory latency。继续单纯增加 TDM prefetch distance、增加 inflight TDM 数或
+只调整 B cache hint，预计不会形成大幅收益，并且可能碰到 MI400 每 wave 3 个、每
+SIMD 6 个等待 XACK 的 TDM 限制。
+
+`s_wait_kmcnt` 仍占 `2.42%`，主要来自 expert lookup 的 scalar loads。当前 persistent
+版本已经让同一 block 的 4 个 N task 共用一次 expert lookup，因此这里剩余的优化空间
+明显小于 LDS/barrier 路径。
+
+后续应优先：
+
+1. 重排每个 k128 的 LDS reads 与 WMMA，让下一批 operands 更早进入 VGPR，并在
+   `s_wait_dscnt 0xa` 之前放置更多独立 WMMA 或地址计算。
+2. 根据 LDS buffer 的真实读写集合缩小 stage handoff 的 drain 范围，减少完整
+   `s_wait_dscnt 0x0`，但不能直接删除正确性所需的 barrier。
+3. 重新平衡两个 resident slot 的 LDS/TDM owner 工作，降低 barrier arrival skew。
+4. 如果工具链提供正式入口，在 code-object descriptor 层测试
+   `.amdhsa_round_robin_scheduling 1`。此前有问题的 in-kernel
+   `s_setprio_inc_wg` 实验不再使用。
+
+硬件依据：
+
+- `MI400_Shader_Programming#65.txt` §4.3.7.2.4：LDS 操作由 DScnt 跟踪，read
+  完成表示结果可以从 VGPR 使用。
+- 同文档 §4.10.1：TDM completion 由 TENSORcnt 跟踪；同一 wave 的 tensor
+  instructions 保持顺序。
+- 同文档 §4.10.8：每 wave 最多 3 个、每 SIMD 最多 6 个等待 XACK 的 TDM。
+- 同文档 §5.2.2：workgroup equal-priority scheduling 用于让协作 waves 更同步地
+  到达 barrier。
+
+复现分析：
+
+```bash
+python3 my_code/analyze_gemm_invalid_block_trace.py <ui_output_dir>
+python3 my_code/analyze_gemm_invalid_blocks.py <ui_output_dir>/occupancy.json
+python3 my_code/analyze_gemm_wait_cycles.py <ui_output_dir> --top 20
+```
+
+相关日志：
+
+```text
+my_code/thread_trace_runs/e64_t1536_topk8_gemm1_best_invalid_blocks_a07_3_20261003/logs/
+  analyze_att_capture.log
+  trace_segment_full_valid_waves.log
+  invalid_block_wave_trace_analysis.log
+  invalid_block_occupancy_analysis.log
+  wait_cycle_analysis.log
+  wait_cycle_aggregate.log
+  wait_immediate_summary.log
+  per_wave_wait_share.log
+  top_wait_events.log
+  top_wait_pc_context.log
+```
+
+## 2026-10-03：GEMM1 LDS segment-aware layout
+
+### 硬件结论
+
+根据本地 `MI400_Shader_Programming#65.txt` §4.7.1、§5.3.6、§5.7.6 和
+`architecture.txt` §2.12：
+
+- LDS 为 `64 banks × 4 B`，按 `64 KiB segment` 划分；单 workgroup 最多分配
+  `320 KiB`。
+- 两个 SIMD-pair port 同时访问同一个 segment 时会发生 secondary segment
+  conflict，只允许 priority port 访问 RAM；访问不同 segment 时可以并行访问相同
+  bank。
+- 每个 SIMD 每周期最多发射一条 LDS/VMEM 指令，所以同一个 SIMD 上的两条 resident
+  wave 并不是两个独立 LDS port。真正需要优先分离的是两个 SIMD-pair port。
+- `DS_LOAD_B128` 的理想 independent repeat rate 已是 2 cycles，dependent latency
+  约 58 cycles。当前 lane pattern 每个 16-lane half 已覆盖全部 64 banks，小 padding
+  无法突破这个固有下限。
+
+### 实施方案
+
+仅对 E64/T1536/topk8/M7168/I2048 的 GEMM1 `t192x256x256/w2x4/b4`、
+`cluster_m=1` 路径启用五段 LDS：
+
+```text
+segment 0: A wave_m=0 + ScaleA wave_m=0 + ScaleB port0
+segment 1: A wave_m=1 + ScaleA wave_m=1 + ScaleB port1
+segment 2: B port0
+segment 3: B port1
+segment 4: fused SiLU output
+```
+
+四个 stage 在各自 segment 内使用固定 stride：
+
+```text
+A_HALF  = 0x3000
+B_HALF  = 0x4000
+SA_HALF = 0x0300
+SB_HALF = 0x0400
+```
+
+同时将逻辑 M wave 映射改为：
+
+```text
+physical_wave_slot = wave // 4
+port               = wave_n // 2
+wave_m             = physical_wave_slot ^ port
+```
+
+这样同一 resident-slot phase 下，两个 SIMD-pair port 的 A/ScaleA 访问落到不同
+segment；B/ScaleB 本身按 port 分到不同 segment。外部 tensor layout、TDM 数量、
+四级 ring、四个 persistent N task 和 barrier 协议保持不变。GEMM1 在修改前后均为
+`A_CACHE_STAGES=0`；两级 A cache 属于 GEMM2 persistent schedule。
+
+最终 kernel symbol：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_cn4_cm1_prefetch_eb4_apre_sh_bth6_rcw_mg4_fc8_xdl0_reuse3_ostore2p_s3_ldsseg5_xorm_ps4pf2hm_earlynext_o1w_xor_wait1
+```
+
+### 相邻性能复测
+
+复现命令：
+
+```bash
+ROUNDS=3 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-const0 \
+  --experts 64 --tokens 1536 --topk 8 \
+  --model-dim 7168 --inter-dim 2048
+```
+
+GPU 测试前后均为空闲。相邻结果：
+
+| 版本 | GEMM1 samples (us) | median (us) | 相对旧最优 |
+|---|---|---:|---:|
+| 旧最优 persistent linear layout | 75.835, 75.903, 74.374 | 75.835 | baseline |
+| 5-segment + `wave_m` remap | 73.098, 74.648, 73.922 | 73.922 | **+2.52%** |
+
+日志：
+
+```text
+旧最优: my_code/moe_prefill_switch_ab_runs/20261003T090157Z
+新版本: my_code/moe_prefill_switch_ab_runs/20261003T092205Z
+```
+
+random 验证：
+
+```text
+logits_diff = 3.38491e-06
+rel_l2      = 0.00260189
+pass        = True
+```
+
+### 新旧 trace 对比
+
+新 trace：
+
+```text
+my_code/thread_trace_runs/e64_t1536_topk8_gemm1_ldsseg5_split_xorm_a07_3_20261003
+```
+
+该 trace 来自功能等价、仅保留实验版本后缀的
+`_ldsseg5_split_xorm_v8` symbol；最终清理后的 symbol 使用 `_ldsseg5_xorm`。
+
+| 指标 | 旧最优 | 5-segment | 变化 |
+|---|---:|---:|---:|
+| 平均完整 wave interval | 120,636.4 | 113,773.1 cycles | -5.69% |
+| 8 条有效 wave 总 span | 994,047 | 940,935 cycles | -5.34% |
+| `s_wait_dscnt` latency | 222,278 (22.3609%) | 89,946 (9.5592%) | -59.53% cycles |
+| `s_wait_dscnt` exposed stall | 215,534 (21.6825%) | 83,250 (8.8476%) | -61.37% cycles |
+| `s_barrier_wait` latency | 185,600 (18.6711%) | 284,239 (30.2081%) | +53.15% cycles |
+| `s_wait_tensorcnt` latency | 15,224 (1.5315%) | 28,310 (3.0087%) | +85.96% cycles |
+| DScnt + barrier latency | 407,878 (41.0321%) | 374,185 (39.7674%) | -8.26% cycles |
+
+`s_wait_dscnt` 的绝对 cycles 减少约 59.5%，说明 segment 重新布局确实消除了大量
+跨 port 串行。但更快的 waves 随后在 workgroup barrier 等待慢 wave，导致
+`s_barrier_wait` 增加约 53.1%；`s_wait_tensorcnt` 的增加来自 issue/arrival timing
+变化，而不是 TDM 数量变化。因此最终 wall-time 收益只有约 2.5%，远小于 DScnt 的
+局部下降幅度。
+
+新版本两个 resident slot 的等待仍不平衡：slot0 的 barrier share 约 38.4%-41.1%，
+slot1 约 19.2%-22.0%；slot1 的 DScnt share 约 10.4%-11.5%，slot0 约
+7.4%-8.9%。后续优化应针对 wave arrival skew 和 barrier 前调度，继续增加 LDS padding
+或再次整体搬迁数据预计收益有限。
+
+### 未保留实验
+
+- 实验性启用两级 A cache，并让 output 覆盖 B stage 2/3：三轮中位数 `73.321 us`，慢于
+  无 cache segment 版，原因是 output TDM 与 next-task B prefetch 重新争用 segment
+  2/3。
+- 只保留一级 A cache，并让 ScaleB 与 output 在 segment 4 按生命周期复用：random
+  出现 `logits_diff=0.16932`、`rel_l2=0.581853`，未通过正确性，已删除。
+- 把 output-store 选择条件从 `store_phase ^ wave_m` 改成
+  `store_phase ^ physical_wave_slot` 会漏写中间两个 48-row slice，已撤销。
+
+完整设计说明见：
+
+```text
+my_code/e64_t1536_topk8_gemm1_lds_segment_layout_design.md
+```
+
+### `hyg/moe_a4w4_pr_refactor` v123 cyclic packing 移植结果
+
+refactor v123 的核心布局也移植到了当前 BF16-output GEMM1：每个 ring stage 固定占用
+一个 `64 KiB segment`，`wave_m=0` 的 A/ScaleA 放在当前 segment 前部，
+`wave_m=1` 放在下一 segment 尾部并在 stage 3 环回 segment 0；B/ScaleB 位于当前
+stage 中部。总 LDS 从 `320 KiB` 降为 `256 KiB`。
+
+移植时发现必须同步修改 B 的 producer 和 consumer base：
+
+```text
+old: STAGE_A
+new: B_OFF = A_OWNER_BYTES + SA_OWNER_BYTES
+```
+
+遗漏任一处会导致 random 输出 NaN。修正后两种版本均通过 random，误差保持：
+
+```text
+logits_diff = 3.38491e-06
+rel_l2      = 0.00260189
+pass        = True
+```
+
+空闲 GPU 三轮结果：
+
+| 版本 | GEMM1 samples (us) | median (us) | 相对当前 5-segment |
+|---|---|---:|---:|
+| 当前 5-segment 最优 | 73.098, 74.648, 73.922 | **73.922** | baseline |
+| cyclic + `32 B / 1 KiB` padding | 74.924, 74.243, 74.783 | **74.783** | -1.16% |
+| cyclic、无 padding | 73.604, 75.236, 74.947 | **74.947** | -1.39% |
+
+日志：
+
+```text
+5-segment:    my_code/moe_prefill_switch_ab_runs/20261003T092205Z
+cyclic+p32:   my_code/moe_prefill_switch_ab_runs/20261003T142356Z
+cyclic:       my_code/moe_prefill_switch_ab_runs/20261003T143049Z
+```
+
+结论：v123 cyclic packing 在 refactor 的 fused-quant GEMM1 上相对 v115 有 `5.19%`
+收益，但在当前 BF16-output GEMM1 上没有超过现有 5-segment layout。当前 kernel 的
+output staging 为 `52,224 B`，epilogue/barrier 行为也与 compact fused-quant output
+不同；减少一个 LDS segment 带来的收益不足以抵消 B/ScaleB 仍在同一 stage segment
+以及 cyclic 地址计算的代价。因此 cyclic 版本未保留，当前源码和 a07-3 均恢复到
+5-segment `_ldsseg5_xorm` 版本。
+
+## 当前最终最优 GEMM1 及资源使用
+
+截至本轮测试，性能最好的 GEMM1 是保留的 5-segment LDS layout 版本：
+
+```text
+a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_cn4_cm1_prefetch_eb4_apre_sh_bth6_rcw_mg4_fc8_xdl0_reuse3_ostore2p_s3_ldsseg5_xorm_ps4pf2hm_earlynext_o1w_xor_wait1
+```
+
+空闲 GPU 三轮性能为：
+
+```text
+73.098, 74.648, 73.922 us
+median = 73.922 us
+```
+
+对应日志：
+
+```text
+my_code/moe_prefill_switch_ab_runs/20261003T092205Z
+```
+
+资源数据从 a07-3 上 exact-symbol ATT capture 的实际 code object ID 11 中读取。四个
+SIMD capture 使用的 code object SHA256 均为：
+
+```text
+ba5529a95889a6b34ade2e3c37d14775ce33ee7c019b665ca97985c36e0865d1
+```
+
+AMDGPU code object metadata：
+
+```yaml
+.cluster_dims: [4, 1, 1]
+.group_segment_fixed_size: 327680
+.private_segment_fixed_size: 0
+.kernarg_segment_size: 176
+.max_flat_workgroup_size: 256
+.reqd_workgroup_size: [256, 1, 1]
+.sgpr_count: 98
+.sgpr_spill_count: 0
+.vgpr_count: 370
+.vgpr_spill_count: 0
+.wavefront_size: 32
+```
+
+换算结果：
+
+| 资源 | metadata 原值 | 字节换算 | 作用域 |
+|---|---:|---:|---|
+| LDS | 327,680 B | **320 KiB** | 每个 workgroup |
+| SGPR | 98 个 32-bit SGPR | **392 B** | 每个 wave，共享于 wave 的 32 lanes |
+| VGPR | 370 个 32-bit VGPR/lane | **1,480 B/lane；47,360 B，即 46.25 KiB/wave** | 每个 wave |
+| scratch/private segment | 0 B | **0 B** | 每个 work-item |
+
+当前一个 workgroup 有 `256 / 32 = 8 waves`。按未考虑硬件分配粒度取整的逻辑数量：
+
+```text
+SGPR/workgroup = 98 × 4 B × 8 = 3,136 B = 3.0625 KiB
+VGPR/workgroup = 370 × 32 lanes × 4 B × 8 = 378,880 B = 370 KiB
+VGPR/SIMD      = 370 × 2 resident waves = 740 VGPR entries
+```
+
+这里的字节换算用于说明寄存器状态规模；实际 register-file 分配仍由硬件按其分配粒度
+取整。ATT occupancy 直接确认该 kernel 为：
+
+```text
+1 resident workgroup / WGP
+8 resident waves / WGP
+2 resident waves / SIMD
+```
+
+320 KiB LDS 已占满 gfx1250 对单个 workgroup 可分配的 5 个 64 KiB LDS segment，因而
+只能驻留一个 workgroup。该 workgroup 的 8 个 wave 均匀分布到 4 个 SIMD，每个 SIMD
+同时驻留两个 wave。`private_segment_fixed_size=0`、`sgpr_spill_count=0` 和
+`vgpr_spill_count=0` 表明最终版本没有 scratch/private allocation，也没有 SGPR/VGPR
+spill。
+
+本文前面记录的 `VGPR=377`、`SGPR=97`、`LDS=243,712 B` 属于较早的 persistent
+`w2x4` 实验版本；当前最终 5-segment `_ldsseg5_xorm` 版本应以上述 code object
+metadata 为准。
