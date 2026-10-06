@@ -1972,9 +1972,9 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
 ):
-    """Launch the t192/w2x4/b4 persistent GEMM2 kernel.
+    """Launch the t192/w2x4/b4 or t256/w2x2/b4 persistent GEMM2 kernel.
 
-    The caller enforces the validated E64/T1536 cluster contract.
+    The caller enforces the validated gfx1250 A-preshuffle cluster contract.
     """
     WMMA_M = WMMA_N = 16
     WMMA_K = 128
@@ -2030,7 +2030,11 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     epilogue_batch_wn = 8 if fp4_prefill_schedule else 1
     relax_cluster_wrap_dscnt = fp4_prefill_schedule
     disable_xdl_arb_stall = 0 if fp4_prefill_schedule else -1
-    wmma_reuse = 3 if gemm2_eight_wave_geometry else fp4_prefill_schedule
+    wmma_reuse = (
+        3
+        if gemm2_eight_wave_geometry or (gemm2_schedule and tile_m == 256)
+        else fp4_prefill_schedule
+    )
     schedule_wmma_m_rep = tile_m // m_warp // WMMA_M
     schedule_mma_n_rep = (tile_n // n_warp // WMMA_N) // 2
     schedule_mma_count = schedule_wmma_m_rep * schedule_mma_n_rep
@@ -2121,11 +2125,19 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     C_STORE_B = ((tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
     PERSISTENT_TASKS = (
         7
-        if gemm2_schedule and K == 2048 and tile_m == 192 and n_experts == 64
+        if gemm2_schedule
+        and (
+            (K == 2048 and tile_m == 192 and n_experts == 64)
+            or (K == 3072 and tile_m == 256 and n_experts == 96)
+        )
         else 1
     )
     OUTPUT_LDS_OFF = 2 * PITCH if PERSISTENT_TASKS > 1 else 0
-    A_CACHE_STAGES = 2 if gemm2_eight_wave_geometry else 0
+    A_CACHE_STAGES = (
+        2
+        if gemm2_eight_wave_geometry
+        else (1 if PERSISTENT_TASKS > 1 and tile_m == 256 else 0)
+    )
     A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
     A_CACHE_OFF = num_buffers * PITCH
     ARENA_B = max(
@@ -2569,6 +2581,8 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 wg_mask=b_mcast_mask,
             )
             next_jobs = jobs
+            next_jobs_stage0 = jobs
+            next_jobs_stage1 = jobs
             cached_a_jobs = jobs
             if const_expr(PERSISTENT_TASKS > 1):
                 next_blk_n = ((tile_idx + 1) * cluster_n + local_n) * tile_n
@@ -2578,7 +2592,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 next_sb_off0 = (
                     (next_blk_n64 // 32) * SB_OUTER_STRIDE + sb_batch_off
                 )
-                if const_expr(A_CACHE_STAGES > 0):
+                if const_expr(A_CACHE_STAGES == 2):
                     # Cached A0/A1 remove owner-wave TDMs. Split B across the first
                     # resident waves and leave ScaleA/ScaleB on the second slots so
                     # every physical SIMD receives similar next-task prefetch bytes.
@@ -2596,6 +2610,18 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         jobs[1]._replace(waves=tuple(range(4))),
                         jobs[2],
                         jobs[3],
+                    ]
+                elif const_expr(A_CACHE_STAGES == 1):
+                    next_jobs_stage0 = [
+                        jobs[1]._replace(g_off=next_b_off0),
+                        jobs[2],
+                        jobs[3]._replace(g_off=next_sb_off0),
+                    ]
+                    next_jobs_stage1 = [
+                        jobs[0],
+                        jobs[1]._replace(g_off=next_b_off0),
+                        jobs[2],
+                        jobs[3]._replace(g_off=next_sb_off0),
                     ]
                 else:
                     next_jobs = [
@@ -3211,8 +3237,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                                     i,
                                     i,
                                     cache_a=(
-                                        gemm2_eight_wave_geometry
-                                        and i < A_CACHE_STAGES
+                                        A_CACHE_STAGES > 0 and i < A_CACHE_STAGES
                                     ),
                                 )
                             pipeline_fence(outstanding=TDM_PER * (PRE - 1))
@@ -3288,11 +3313,30 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                             PERSISTENT_TASKS > 1 and j + 1 == PRE
                         ):
                             if tile_idx + 1 < PERSISTENT_TASKS:
-                                dispatch_wave_job(prefetch_next, next_jobs)
+                                if const_expr(A_CACHE_STAGES == 1):
+                                    dispatch_wave_job(
+                                        lambda stage_jobs: issue(0, 0, stage_jobs),
+                                        next_jobs_stage0,
+                                    )
+                                    dispatch_wave_job(
+                                        lambda stage_jobs: issue(1, 1, stage_jobs),
+                                        next_jobs_stage1,
+                                    )
+                                else:
+                                    dispatch_wave_job(prefetch_next, next_jobs)
+                        # In a t256 persistent outer loop, vector-SSA
+                        # promotion loses the three carries between the four
+                        # constexpr-unrolled drain calls. Reload K128-0 from LDS
+                        # for drain tiles 1..3; tile 0's rolled carry is valid.
                         compute_ktile(
                             buf,
                             None,
-                            next_stage_on,
+                            next_stage_on
+                            and not (
+                                PERSISTENT_TASKS > 1
+                                and tile_m == 256
+                                and j > 0
+                            ),
                             next_stage_buf,
                             None,
                             (

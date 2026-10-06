@@ -358,19 +358,38 @@ def flydsl_grouped_gemm_a8w4_masked(
                 cluster_m == 1,
             )
         )
-        use_gemm2_persistent = stage1_act == 0 and K == 2048 and N == 7168 and (
-            (
-                tile_m,
-                tile_n,
-                tile_k,
-                m_warp,
-                n_warp,
-                num_buffers,
-                n_experts,
-            )
-            in (
-                (192, 256, 256, 2, 2, 4, 64),
-                (192, 256, 256, 2, 4, 4, 64),
+        use_gemm2_persistent = (
+            stage1_act == 0
+            and N == 7168
+            and (
+                (
+                    K == 2048
+                    and (
+                        tile_m,
+                        tile_n,
+                        tile_k,
+                        m_warp,
+                        n_warp,
+                        num_buffers,
+                        n_experts,
+                    )
+                    in (
+                        (192, 256, 256, 2, 2, 4, 64),
+                        (192, 256, 256, 2, 4, 4, 64),
+                    )
+                )
+                or (
+                    K,
+                    tile_m,
+                    tile_n,
+                    tile_k,
+                    m_warp,
+                    n_warp,
+                    num_buffers,
+                    n_experts,
+                    contiguous_m,
+                )
+                == (3072, 256, 256, 256, 2, 2, 4, 96, 122880)
             )
         )
         if use_fused_persistent:
