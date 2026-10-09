@@ -16,6 +16,13 @@ _SUPPORTED_CLUSTER_M = (1, 2, 4)
 _SUPPORTED_CLUSTER_N = (1, 2, 3, 4)
 
 
+def _balanced_expert_routing_enabled() -> bool:
+    return os.environ.get("AITER_MOE_EXPERT_BALANCE", "false").lower() in (
+        "1",
+        "true",
+    )
+
+
 def _select_bool_env(name: str, csv_value: int) -> int:
     """Select a strict 0/1 environment override or the CSV setting."""
     value = os.environ.get(name)
@@ -127,7 +134,9 @@ def _supports_gfx1250_a_preshuffle_resolved(
             n_experts == 64,
             N == 7168,
             K == 2048,
-            (tile_m, tile_n, tile_k) == (192, 256, 256),
+            tile_m == 192
+            or (tile_m == 256 and _balanced_expert_routing_enabled()),
+            (tile_n, tile_k) == (256, 256),
             (m_warp, n_warp, num_buffers) == (2, 4, 4),
             cluster_n == 4,
             next_stage_prefetch == 1,
@@ -141,7 +150,8 @@ def _supports_gfx1250_a_preshuffle_resolved(
             stage1_act == 1,
             N == 4096,
             K == 7168,
-            tile_m == 192,
+            tile_m == 192
+            or (tile_m == 256 and _balanced_expert_routing_enabled()),
             n_warp == 4,
         )
     )
@@ -351,7 +361,8 @@ def flydsl_grouped_gemm_a8w4_masked(
                 stage1_act == 1,
                 N == 4096,
                 K == 7168,
-                (tile_m, tile_n, tile_k) == (192, 256, 256),
+                tile_m in (192, 256),
+                (tile_n, tile_k) == (256, 256),
                 (m_warp, n_warp, num_buffers) == (2, 4, 4),
                 n_experts == 64,
                 cluster_n == 4,
@@ -376,6 +387,7 @@ def flydsl_grouped_gemm_a8w4_masked(
                     in (
                         (192, 256, 256, 2, 2, 4, 64),
                         (192, 256, 256, 2, 4, 4, 64),
+                        (256, 256, 256, 2, 4, 4, 64),
                     )
                 )
                 or (
@@ -398,6 +410,21 @@ def flydsl_grouped_gemm_a8w4_masked(
             optimized_launcher = launch_gemm_a8w4_tdm_gemm2_persistent
         else:
             optimized_launcher = launch_gemm_a8w4_tdm_optimized
+        persistent_kwargs = (
+            {
+                # E64/T1536/topk8 has exactly 192 rows per expert under the
+                # balanced-routing contract. Keep the external 256-row stride,
+                # but compile the persistent kernels for 192 active rows.
+                "balanced_m192": int(
+                    tile_m == 256
+                    and n_experts == 64
+                    and contiguous_m == 28672
+                    and _balanced_expert_routing_enabled()
+                )
+            }
+            if use_fused_persistent or use_gemm2_persistent
+            else {}
+        )
         optimized_launcher(
             out,
             ptr_arg(a),
@@ -430,6 +457,7 @@ def flydsl_grouped_gemm_a8w4_masked(
             next_stage_prefetch,
             waves_per_tensor_tdm,
             _select_tdm_b_th(tdm_b_th),
+            **persistent_kwargs,
         )
         return out
     ep_row_map_tensor = ep_row_map if ep_row_map is not None else out

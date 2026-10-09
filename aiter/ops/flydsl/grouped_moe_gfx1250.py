@@ -1097,7 +1097,7 @@ def _grouped_a8w4_tdm_moe(
             and topk == 8
             and model_dim == 7168
             and inter_dim == 2048
-            and tile_m == 192
+            and tile_m in (192, 256)
             and tile_n == 256
             and tile_k == 256
             and m_warp == 2

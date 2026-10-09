@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025 FlyDSL Project Contributors
 
-"""Tuned t192 persistent MoE prefill kernels for gfx1250."""
+"""Tuned t192/t256 persistent MoE prefill kernels for gfx1250."""
 
 import math
 from collections import namedtuple
@@ -71,8 +71,9 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     next_stage_prefetch: Constexpr[int] = 0,
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
+    balanced_m192: Constexpr[int] = 0,
 ):
-    """Launch the t192/w2x4/b4 persistent fused-quant GEMM1 kernel.
+    """Launch the t192/t256 w2x4/b4 persistent fused-quant GEMM1 kernel.
 
     The caller enforces the validated E64/T1536 cluster contract.
     """
@@ -81,6 +82,8 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     WAVE = 32
     PACK_TK = tile_k // 2
     KWS = tile_k // WMMA_K
+    balanced_t256_m192 = bool(balanced_m192)
+    compute_tile_m = 192 if balanced_t256_m192 else tile_m
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
     # This launcher contains only the production A-preshuffle schedules. Other
@@ -97,7 +100,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     )
     gemm2_eight_wave_geometry = all(
         (
-            tile_m == 192,
+            tile_m in (192, 256),
             tile_n == 256,
             tile_k == 256,
             m_warp == 2,
@@ -137,7 +140,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         0 if fp4_prefill_schedule and not gemm2_eight_wave_geometry else -1
     )
     wmma_reuse = 3 if gemm2_eight_wave_geometry else fp4_prefill_schedule
-    schedule_wmma_m_rep = tile_m // m_warp // WMMA_M
+    schedule_wmma_m_rep = compute_tile_m // m_warp // WMMA_M
     schedule_mma_n_rep = (tile_n // n_warp // WMMA_N) // 2
     schedule_mma_count = schedule_wmma_m_rep * schedule_mma_n_rep
     # Leave one four-MMA group before the closing group.  This gives t256 its
@@ -158,6 +161,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     cache_tag = (
         K,
         tile_m,
+        compute_tile_m,
         tile_n,
         tile_k,
         m_warp,
@@ -185,7 +189,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         output_store_wave_split,
     )
     _ = cache_tag
-    warp_tile_m = tile_m // m_warp
+    warp_tile_m = compute_tile_m // m_warp
     warp_tile_n = tile_n // n_warp
     wmma_m_rep = warp_tile_m // WMMA_M
     wmma_n_rep = warp_tile_n // WMMA_N
@@ -202,10 +206,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     ACT_ELEM = fx.Float4E2M1FN
     ACT_NDW = 8
 
-    A_LDS_OUTER = tile_m // 16
+    A_LDS_OUTER = compute_tile_m // 16
     SEGMENT_SPLIT_A = bool(
         fp4_prefill_schedule
         and gemm2_eight_wave_geometry
+        and compute_tile_m == 192
         and stage1_quant_out == 1
     )
     LDS_SEGMENT_BYTES = 64 * 1024
@@ -229,7 +234,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     SC_INNER = tile_k // 4
     SB_SUPERS = tile_n // 32
     AS_INNER = SC_INNER
-    AS_SUPERS = tile_m // 32
+    AS_SUPERS = compute_tile_m // 32
     # One outer row is one wave's M tile. Its inner (k128, wm, lane16)
     # layout gives each WMMA scale operand a contiguous 16-dword block.
     STAGE_SA = ((AS_SUPERS * AS_INNER * 4 + 15) // 16) * 16
@@ -261,12 +266,12 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     out_elem = T.f16 if out_is_f16 else T.bf16
     # +16 cols: the bf16 passthrough epilogue stages C with a padded row pitch
     # to break the ds_store bank conflict; reserve it so the padded tile fits.
-    C_STORE_B = ((tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
+    C_STORE_B = ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
     PERSISTENT_TASKS = (
         4
         if fp4_prefill_schedule
         and K == 7168
-        and tile_m == 192
+        and tile_m in (192, 256)
         and n_experts == 64
         and cluster_m == 1
         else (
@@ -300,6 +305,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     Q_MX_BLOCK_BYTES = 16 * 16
     Q_ROW_TILE_BYTES = Q_MX_BLOCKS_PER_WG * Q_MX_BLOCK_BYTES
     Q_M16_TILES = tile_m // 16
+    Q_STORE_M16 = wmma_m_rep if balanced_t256_m192 else quant_wmma_rep
     Q_SCALE_ROW_BYTES = 16 * 4
     Q_SCALE_TILE_BYTES = quant_wmma_rep * Q_SCALE_ROW_BYTES
     Q_SCALE_LDS_OFF = Q_M16_TILES * Q_ROW_TILE_BYTES
@@ -311,6 +317,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         f"_b{num_buffers}_K{K}_e{n_experts}"
         f"_act{stage1_act}_q{stage1_quant_out}r{quant_wmma_rep}"
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
+        f"{'_vm192' if balanced_t256_m192 else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -703,7 +710,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                 Kp16,
                 (mn_oob + 15) // 16,
                 PACK_TK * 16,
-                tile_m // 16,
+                A_LDS_OUTER,
                 on_i32=False,
                 lds_off=0,
                 lds_row=A_LDS_ROW,
@@ -1321,7 +1328,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         (
                             FENCE_COVER_MMA
                             if (
-                                tile_m > 32
+                                compute_tile_m > 32
                                 and not is_last
                                 and next_stage_lds_addr is not None
                             )
@@ -1510,7 +1517,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         next_stage_buf = (
                             (
                                 ptr_to_idx(buf_ptr((kt + 1) % num_buffers))
-                                if tile_m == 192
+                                if compute_tile_m == 192
                                 else buf_ptr_opaque((kt + 1) % num_buffers)
                             )
                             if const_expr(has_next)
@@ -1527,7 +1534,12 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         compute_ktile(
                             buf,
                             None,
-                            next_stage_on,
+                            next_stage_on
+                            and not (
+                                PERSISTENT_TASKS > 1
+                                and tile_m == 256
+                                and j > 0
+                            ),
                             next_stage_buf,
                             None,
                             (
@@ -1636,7 +1648,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         (fx.Int64(blk_m) // 16) * global_row_tile_stride
                         + (fx.Int64(blk_n) // 64) * Q_MX_BLOCK_BYTES
                     )
-                    local_m16_base = wave_m * quant_wmma_rep
+                    local_m16_base = wave_m * Q_STORE_M16
                     local_mx = wave_n
                     global_off = (
                         global_off
@@ -1647,7 +1659,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     gt_quant = global_view(
                         c_iter,
                         global_off,
-                        (quant_wmma_rep, Q_MX_BLOCK_BYTES),
+                        (Q_STORE_M16, Q_MX_BLOCK_BYTES),
                         (global_row_tile_stride, 1),
                     )
                     atom_quant = fx.rocdl.make_tdm_atom(
@@ -1661,7 +1673,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     src_quant = lds_view(
                         fx.recast_iter(fx.Int8, output_base_ptr)
                         + fx.index_cast(T.index, local_off),
-                        (quant_wmma_rep, Q_MX_BLOCK_BYTES),
+                        (Q_STORE_M16, Q_MX_BLOCK_BYTES),
                         (Q_MX_BLOCK_BYTES, 1),
                     )
                     fx.copy(atom_quant, src_quant, gt_quant)
@@ -1777,18 +1789,38 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                                     packed_i32 >> fx.Int32(16),
                                 )
                             if row_rel < mn_oob and is_kgrp0:
-                                scale_row_byte = Q_SCALE_LDS_OFF + (
-                                    (wave_m * quant_wmma_rep + wm) * 16 + lane16
-                                ) * 4
-                                lds_store_b8(
-                                    stC_idx,
-                                    scale_row_byte + wave_n,
-                                    e8m0_byte,
-                                )
+                                if const_expr(tile_m == 256):
+                                    row_i32 = fx.Int32(blk_m + row_rel)
+                                    row_tile32 = row_i32 >> 5
+                                    row_in_tile32 = row_i32 & 31
+                                    mx_blk_i = (
+                                        fx.Int32(blk_n) + fx.Int32(wave_n * 64)
+                                    ) >> 6
+                                    scale_dw = mx_blk_i >> 2
+                                    byte_in_dw = mx_blk_i & 3
+                                    dst_byte = (
+                                        row_tile32 * q_dst_scale_dwpr * 32
+                                        + scale_dw * 32
+                                        + row_in_tile32
+                                    ) * 4 + byte_in_dw
+                                    fx.ptr_store(e8m0_byte, scale_ptr + dst_byte)
+                                else:
+                                    scale_row_byte = Q_SCALE_LDS_OFF + (
+                                        (wave_m * quant_wmma_rep + wm) * 16
+                                        + lane16
+                                    ) * 4
+                                    lds_store_b8(
+                                        stC_idx,
+                                        scale_row_byte + wave_n,
+                                        e8m0_byte,
+                                    )
                     workgroup_barrier()
                     issue_quant_output()
-                    tdm_ops.tensor_wait(2)
-                    issue_quant_scale_output()
+                    if const_expr(tile_m == 256):
+                        rocdl.s_wait_storecnt(0)
+                    else:
+                        tdm_ops.tensor_wait(2)
+                        issue_quant_scale_output()
                 else:
                     # bf16/f16 activation (or passthrough) -> stage to LDS.
                     if const_expr(has_bias):
@@ -1971,8 +2003,9 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     next_stage_prefetch: Constexpr[int] = 0,
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
+    balanced_m192: Constexpr[int] = 0,
 ):
-    """Launch the t192/w2x4/b4 or t256/w2x2/b4 persistent GEMM2 kernel.
+    """Launch the t192/t256 w2x4/b4 or t256/w2x2/b4 persistent GEMM2 kernel.
 
     The caller enforces the validated gfx1250 A-preshuffle cluster contract.
     """
@@ -1981,6 +2014,8 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     WAVE = 32
     PACK_TK = tile_k // 2
     KWS = tile_k // WMMA_K
+    balanced_t256_m192 = bool(balanced_m192)
+    compute_tile_m = 192 if balanced_t256_m192 else tile_m
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
     # This launcher contains only the production A-preshuffle schedules. Other
@@ -1997,7 +2032,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     )
     gemm2_eight_wave_geometry = all(
         (
-            tile_m == 192,
+            tile_m in (192, 256),
             tile_n == 256,
             tile_k == 256,
             m_warp == 2,
@@ -2035,7 +2070,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         if gemm2_eight_wave_geometry or (gemm2_schedule and tile_m == 256)
         else fp4_prefill_schedule
     )
-    schedule_wmma_m_rep = tile_m // m_warp // WMMA_M
+    schedule_wmma_m_rep = compute_tile_m // m_warp // WMMA_M
     schedule_mma_n_rep = (tile_n // n_warp // WMMA_N) // 2
     schedule_mma_count = schedule_wmma_m_rep * schedule_mma_n_rep
     # Leave one four-MMA group before the closing group.  This gives t256 its
@@ -2056,6 +2091,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     cache_tag = (
         K,
         tile_m,
+        compute_tile_m,
         tile_n,
         tile_k,
         m_warp,
@@ -2083,7 +2119,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         output_store_wave_split,
     )
     _ = cache_tag
-    warp_tile_m = tile_m // m_warp
+    warp_tile_m = compute_tile_m // m_warp
     warp_tile_n = tile_n // n_warp
     wmma_m_rep = warp_tile_m // WMMA_M
     wmma_n_rep = warp_tile_n // WMMA_N
@@ -2100,7 +2136,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     ACT_ELEM = fx.Float4E2M1FN
     ACT_NDW = 8
 
-    A_LDS_OUTER = tile_m // 16
+    A_LDS_OUTER = compute_tile_m // 16
     A_LDS_ROW = PACK_TK * 16
     B_LDS_ROW = PACK_TK * 16
     STAGE_A = ((A_LDS_OUTER * A_LDS_ROW + 15) // 16) * 16
@@ -2109,7 +2145,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     SC_INNER = tile_k // 4
     SB_SUPERS = tile_n // 32
     AS_INNER = SC_INNER
-    AS_SUPERS = tile_m // 32
+    AS_SUPERS = compute_tile_m // 32
     # One outer row is one wave's M tile. Its inner (k128, wm, lane16)
     # layout gives each WMMA scale operand a contiguous 16-dword block.
     STAGE_SA = ((AS_SUPERS * AS_INNER * 4 + 15) // 16) * 16
@@ -2122,12 +2158,12 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     out_elem = T.f16 if out_is_f16 else T.bf16
     # +16 cols: the bf16 passthrough epilogue stages C with a padded row pitch
     # to break the ds_store bank conflict; reserve it so the padded tile fits.
-    C_STORE_B = ((tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
+    C_STORE_B = ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
     PERSISTENT_TASKS = (
         7
         if gemm2_schedule
         and (
-            (K == 2048 and tile_m == 192 and n_experts == 64)
+            (K == 2048 and tile_m in (192, 256) and n_experts == 64)
             or (K == 3072 and tile_m == 256 and n_experts == 96)
         )
         else 1
@@ -2135,7 +2171,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     OUTPUT_LDS_OFF = 2 * PITCH if PERSISTENT_TASKS > 1 else 0
     A_CACHE_STAGES = (
         2
-        if gemm2_eight_wave_geometry
+        if gemm2_eight_wave_geometry and compute_tile_m == 192
         else (1 if PERSISTENT_TASKS > 1 and tile_m == 256 else 0)
     )
     A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
@@ -2146,6 +2182,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
     )
     assert OUTPUT_LDS_OFF + C_STORE_B <= ARENA_B
+    assert ARENA_B <= 320 * 1024
 
     # Quant epilogue compile-time constants.
     QUANT_ROWS_PER_TILE = quant_wmma_rep * 16
@@ -2158,6 +2195,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
         f"_b{num_buffers}_K{K}_e{n_experts}"
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
+        f"{'_vm192' if balanced_t256_m192 else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -2527,7 +2565,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 Kp16,
                 (mn_oob + 15) // 16,
                 PACK_TK * 16,
-                tile_m // 16,
+                A_LDS_OUTER,
                 on_i32=False,
                 lds_off=0,
                 lds_row=A_LDS_ROW,
@@ -3112,7 +3150,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         (
                             FENCE_COVER_MMA
                             if (
-                                tile_m > 32
+                                compute_tile_m > 32
                                 and not is_last
                                 and next_stage_lds_addr is not None
                             )
@@ -3300,7 +3338,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         next_stage_buf = (
                             (
                                 ptr_to_idx(buf_ptr((kt + 1) % num_buffers))
-                                if tile_m == 192
+                                if compute_tile_m == 192
                                 else buf_ptr_opaque((kt + 1) % num_buffers)
                             )
                             if const_expr(has_next)
