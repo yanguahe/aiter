@@ -26,6 +26,103 @@ _WARNED_NAIVE_EPILOGUE = False
 # weight is materialized at most once (not re-copied on every fused_moe call).
 _GROUPED_WEIGHT_CACHE = {}
 
+
+def _make_tdm_token_profile(
+    tile_m: int,
+    gemm1_n_warp: int,
+    gemm2_n_warp: int,
+    num_buffers: int,
+    *,
+    balanced_m192: int = 0,
+    partial_m_direct_scale: int = 0,
+    auto_cluster: bool = False,
+) -> dict[str, int | None]:
+    m_warp = 1 if tile_m == 64 else 2
+    return {
+        "tile_m": tile_m,
+        "tile_n": 256,
+        "tile_k": 256,
+        "m_warp": m_warp,
+        # Keep GEMM1 at its A-preshuffle-compatible base geometry; the fused
+        # launcher override below selects w2x4 after layout resolution.
+        "n_warp": 4 if tile_m == 64 else 2,
+        "num_buffers": num_buffers,
+        "tile_m2": tile_m,
+        "tile_n2": 256,
+        "tile_k2": 256,
+        "m_warp2": m_warp,
+        "n_warp2": gemm2_n_warp,
+        "num_buffers2": num_buffers,
+        "cluster_m": -1 if auto_cluster else 1,
+        "cluster_n": -1 if auto_cluster else 4,
+        "cluster_m2": -1 if auto_cluster else 1,
+        "cluster_n2": -1 if auto_cluster else 4,
+        "waves_per_tensor_tdm": 2,
+        "waves_per_tensor_tdm2": 2,
+        "next_stage_prefetch": 0 if tile_m == 64 else 1,
+        "fused_gemm1_n_warp": gemm1_n_warp,
+        "balanced_m192": balanced_m192,
+        "partial_m_direct_scale": partial_m_direct_scale,
+    }
+
+
+_E64_TOPK8_TOKEN_PROFILES = {
+    "t64": _make_tdm_token_profile(64, 4, 4, 3, auto_cluster=True),
+    "t192_partial128": _make_tdm_token_profile(
+        192, 4, 4, 4, partial_m_direct_scale=1
+    ),
+    "t192_persistent": _make_tdm_token_profile(192, 4, 4, 4),
+    "t256_vm192": _make_tdm_token_profile(256, 4, 4, 4, balanced_m192=1),
+    "t256_persistent": _make_tdm_token_profile(256, 4, 4, 4),
+    "t256_w2x2_w2x4": _make_tdm_token_profile(256, 2, 4, 4),
+}
+
+# Left-closed, right-open dispatch intervals for the E64/topk8 token sweep.
+_E64_TOPK8_TOKEN_INTERVALS = (
+    (1, 1024, "t64"),
+    (1024, 1025, "t192_partial128"),
+    (1025, 1536, "t64"),
+    (1536, 1537, "t192_persistent"),
+    (1537, 2048, "t64"),
+    (2048, 2049, "t256_persistent"),
+    (2049, 4096, "t64"),
+    (4096, 4097, "t256_w2x2_w2x4"),
+    (4097, 4099, "t64"),
+)
+
+
+def _find_e64_topk8_token_profile(
+    *,
+    tokens: int,
+    experts: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+    activation: ActivationType,
+    is_grouped_a4w4: bool,
+    use_bias: bool,
+    is_ep: bool,
+    enable_ep_scatter: bool,
+) -> dict[str, int | None] | None:
+    if not all(
+        (
+            experts == 64,
+            topk == 8,
+            model_dim == 7168,
+            inter_dim == 2048,
+            activation == ActivationType.Silu,
+            is_grouped_a4w4,
+            not use_bias,
+            not is_ep,
+            not enable_ep_scatter,
+        )
+    ):
+        return None
+    for start, end, profile_name in _E64_TOPK8_TOKEN_INTERVALS:
+        if start <= tokens < end:
+            return dict(_E64_TOPK8_TOKEN_PROFILES[profile_name])
+    return None
+
 # Opt-in kernel-bench hook: a caller sets a list here to collect
 # (name, callable) per-kernel launches; None in production.
 kernel_bench_callable = None
@@ -594,6 +691,9 @@ def _grouped_a8w4_tdm_moe(
     tdm_as_in_prologue=0,
     tdm_b_th=0,
     lds_soa_load_interleave=0,
+    fused_gemm1_n_warp=None,
+    balanced_m192=-1,
+    partial_m_direct_scale=0,
     data_format="a8w4",
     expert_mask=None,
     num_local_tokens=None,
@@ -1093,7 +1193,7 @@ def _grouped_a8w4_tdm_moe(
         if (
             _fuse_quant
             and E == 64
-            and token_num == 1536
+            and token_num in (1536, 2048)
             and topk == 8
             and model_dim == 7168
             and inter_dim == 2048
@@ -1107,6 +1207,8 @@ def _grouped_a8w4_tdm_moe(
         )
         else n_warp
     )
+    if fused_gemm1_n_warp is not None and _fuse_quant:
+        _fused_gemm1_n_warp = int(fused_gemm1_n_warp)
     w1_u8 = _grouped_weight_uint8(w1)
     w1s_i32 = w1_scale.reshape(-1).view(torch.int32)
 
@@ -1158,6 +1260,8 @@ def _grouped_a8w4_tdm_moe(
             tdm_as_in_prologue=tdm_as_in_prologue,
             tdm_b_th=tdm_b_th,
             lds_soa_load_interleave=lds_soa_load_interleave,
+            balanced_m192=balanced_m192,
+            partial_m_direct_scale=partial_m_direct_scale,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1196,6 +1300,8 @@ def _grouped_a8w4_tdm_moe(
             tdm_as_in_prologue=tdm_as_in_prologue,
             tdm_b_th=tdm_b_th,
             lds_soa_load_interleave=lds_soa_load_interleave,
+            balanced_m192=balanced_m192,
+            partial_m_direct_scale=partial_m_direct_scale,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1289,6 +1395,8 @@ def _grouped_a8w4_tdm_moe(
         tdm_b_th=0,
         a_preshuffle=_gemm2_a_preshuffle,
         lds_soa_load_interleave=lds_soa_load_interleave,
+        balanced_m192=balanced_m192,
+        partial_m_direct_scale=partial_m_direct_scale,
         **_ep_gemm2_kwargs,
     )
 
@@ -1386,6 +1494,8 @@ def _grouped_a8w4_tdm_moe(
                         tdm_b_th=tdm_b_th,
                         a_preshuffle=_gemm1_a_preshuffle,
                         lds_soa_load_interleave=lds_soa_load_interleave,
+                        balanced_m192=balanced_m192,
+                        partial_m_direct_scale=partial_m_direct_scale,
                         **_situ_kw,
                     ),
                 )
@@ -1425,6 +1535,8 @@ def _grouped_a8w4_tdm_moe(
                         tdm_b_th=tdm_b_th,
                         a_preshuffle=_gemm1_a_preshuffle,
                         lds_soa_load_interleave=lds_soa_load_interleave,
+                        balanced_m192=balanced_m192,
+                        partial_m_direct_scale=partial_m_direct_scale,
                         **_situ_kw,
                     ),
                 )
@@ -1462,6 +1574,8 @@ def _grouped_a8w4_tdm_moe(
                     tdm_b_th=0,
                     a_preshuffle=_gemm2_a_preshuffle,
                     lds_soa_load_interleave=lds_soa_load_interleave,
+                    balanced_m192=balanced_m192,
+                    partial_m_direct_scale=partial_m_direct_scale,
                 ),
             )
         )
@@ -1744,6 +1858,25 @@ def grouped_gemm_gfx1250_a8w4(
             _tdm_kw["tdm_b_th"] = _as_int(cfg_row.get("tdm_b_th"), 0)
             _tdm_kw["lds_soa_load_interleave"] = _as_int(
                 cfg_row.get("lds_soa_load_interleave"), 0
+            )
+
+        token_profile = _find_e64_topk8_token_profile(
+            tokens=token_num,
+            experts=E,
+            topk=topk,
+            model_dim=model_dim,
+            inter_dim=inter_dim,
+            activation=activation,
+            is_grouped_a4w4=is_grouped_a4w4,
+            use_bias=bias1 is not None or bias2 is not None,
+            is_ep=_is_ep,
+            enable_ep_scatter=stage2_scatter is not None,
+        )
+        if token_profile is not None:
+            _tdm_kw.update(token_profile)
+            _grouped_dbg(
+                f"using E64/topk8 token-range config for tokens={token_num}: "
+                f"{token_profile}"
             )
 
         # Env overrides for tuning (present-check so any set value wins over CSV /

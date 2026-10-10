@@ -271,6 +271,8 @@ def flydsl_grouped_gemm_a8w4_masked(
     a_row_stride_bytes=0,
     a_scale_row_stride_bytes=0,
     a_preshuffle=0,
+    balanced_m192=-1,
+    partial_m_direct_scale=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
@@ -410,21 +412,23 @@ def flydsl_grouped_gemm_a8w4_masked(
             optimized_launcher = launch_gemm_a8w4_tdm_gemm2_persistent
         else:
             optimized_launcher = launch_gemm_a8w4_tdm_optimized
-        persistent_kwargs = (
-            {
-                # E64/T1536/topk8 has exactly 192 rows per expert under the
-                # balanced-routing contract. Keep the external 256-row stride,
-                # but compile the persistent kernels for 192 active rows.
-                "balanced_m192": int(
-                    tile_m == 256
-                    and n_experts == 64
-                    and contiguous_m == 28672
-                    and _balanced_expert_routing_enabled()
-                )
-            }
-            if use_fused_persistent or use_gemm2_persistent
-            else {}
+        auto_balanced_m192 = int(
+            tile_m == 256
+            and n_experts == 64
+            and contiguous_m == 28672
+            and _balanced_expert_routing_enabled()
         )
+        persistent_kwargs = {}
+        if use_fused_persistent or use_gemm2_persistent:
+            persistent_kwargs["balanced_m192"] = (
+                auto_balanced_m192
+                if int(balanced_m192) < 0
+                else int(bool(balanced_m192))
+            )
+        if use_fused_persistent:
+            persistent_kwargs["partial_m_direct_scale"] = int(
+                bool(partial_m_direct_scale)
+            )
         optimized_launcher(
             out,
             ptr_arg(a),

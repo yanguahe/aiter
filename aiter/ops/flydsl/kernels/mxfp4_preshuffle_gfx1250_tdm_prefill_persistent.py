@@ -72,10 +72,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
     balanced_m192: Constexpr[int] = 0,
+    partial_m_direct_scale: Constexpr[int] = 0,
 ):
     """Launch the t192/t256 w2x4/b4 persistent fused-quant GEMM1 kernel.
 
-    The caller enforces the validated E64/T1536 cluster contract.
+    The caller enforces the validated E64/T1024/T1536 cluster contract.
     """
     WMMA_M = WMMA_N = 16
     WMMA_K = 128
@@ -83,6 +84,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     PACK_TK = tile_k // 2
     KWS = tile_k // WMMA_K
     balanced_t256_m192 = bool(balanced_m192)
+    partial_m_direct_scale = bool(partial_m_direct_scale)
     compute_tile_m = 192 if balanced_t256_m192 else tile_m
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
@@ -130,6 +132,13 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
+    assert not partial_m_direct_scale or all(
+        (
+            fp4_prefill_schedule,
+            stage1_quant_out == 1,
+            tile_m == 192,
+        )
+    )
     epilogue_batch_wn = (
         (4 if gemm2_eight_wave_geometry else 8)
         if fp4_prefill_schedule
@@ -187,6 +196,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         fence_cover_mma,
         output_store_split_wm,
         output_store_wave_split,
+        partial_m_direct_scale,
     )
     _ = cache_tag
     warp_tile_m = compute_tile_m // m_warp
@@ -318,6 +328,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         f"_act{stage1_act}_q{stage1_quant_out}r{quant_wmma_rep}"
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
         f"{'_vm192' if balanced_t256_m192 else ''}"
+        f"{'_pmds' if partial_m_direct_scale else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -1789,7 +1800,13 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                                     packed_i32 >> fx.Int32(16),
                                 )
                             if row_rel < mn_oob and is_kgrp0:
-                                if const_expr(tile_m == 256):
+                                # A 128-row expert leaves two row32 groups empty
+                                # in t192's second 96-row scale tile. Its compile-
+                                # time specialization writes valid ScaleA bytes
+                                # directly in canonical row32 order.
+                                if const_expr(
+                                    tile_m == 256 or partial_m_direct_scale
+                                ):
                                     row_i32 = fx.Int32(blk_m + row_rel)
                                     row_tile32 = row_i32 >> 5
                                     row_in_tile32 = row_i32 & 31
@@ -1816,7 +1833,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                                     )
                     workgroup_barrier()
                     issue_quant_output()
-                    if const_expr(tile_m == 256):
+                    if const_expr(tile_m == 256 or partial_m_direct_scale):
                         rocdl.s_wait_storecnt(0)
                     else:
                         tdm_ops.tensor_wait(2)
