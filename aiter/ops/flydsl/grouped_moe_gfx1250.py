@@ -35,6 +35,7 @@ def _make_tdm_token_profile(
     *,
     balanced_m192: int = 0,
     partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
     auto_cluster: bool = False,
 ) -> dict[str, int | None]:
     m_warp = 1 if tile_m == 64 else 2
@@ -63,31 +64,69 @@ def _make_tdm_token_profile(
         "fused_gemm1_n_warp": gemm1_n_warp,
         "balanced_m192": balanced_m192,
         "partial_m_direct_scale": partial_m_direct_scale,
+        "partial_m_drain_output": partial_m_drain_output,
     }
 
 
 _E64_TOPK8_TOKEN_PROFILES = {
     "t64": _make_tdm_token_profile(64, 4, 4, 3, auto_cluster=True),
-    "t192_partial128": _make_tdm_token_profile(
-        192, 4, 4, 4, partial_m_direct_scale=1
+    "t192_partial_interval": _make_tdm_token_profile(
+        192,
+        4,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t192_aligned_drain": _make_tdm_token_profile(
+        192, 4, 4, 4, partial_m_drain_output=1
     ),
     "t192_persistent": _make_tdm_token_profile(192, 4, 4, 4),
     "t256_vm192": _make_tdm_token_profile(256, 4, 4, 4, balanced_m192=1),
+    "t256_partial_persistent": _make_tdm_token_profile(
+        256,
+        4,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t256_partial_w2x2_w2x4": _make_tdm_token_profile(
+        256,
+        2,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t256_partial_w2x2_w2x2": _make_tdm_token_profile(
+        256,
+        2,
+        2,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
     "t256_persistent": _make_tdm_token_profile(256, 4, 4, 4),
     "t256_w2x2_w2x4": _make_tdm_token_profile(256, 2, 4, 4),
+    "t256_w2x2_w2x2": _make_tdm_token_profile(256, 2, 2, 4),
 }
 
 # Left-closed, right-open dispatch intervals for the E64/topk8 token sweep.
 _E64_TOPK8_TOKEN_INTERVALS = (
     (1, 1024, "t64"),
-    (1024, 1025, "t192_partial128"),
-    (1025, 1536, "t64"),
+    (1024, 1536, "t192_partial_interval"),
     (1536, 1537, "t192_persistent"),
-    (1537, 2048, "t64"),
+    (1537, 2048, "t256_partial_persistent"),
     (2048, 2049, "t256_persistent"),
-    (2049, 4096, "t64"),
+    (2049, 3073, "t192_partial_interval"),
+    (3073, 3840, "t256_partial_persistent"),
+    (3840, 4096, "t256_partial_w2x2_w2x4"),
     (4096, 4097, "t256_w2x2_w2x4"),
-    (4097, 4099, "t64"),
+    (4097, 4104, "t256_partial_w2x2_w2x2"),
+    (4104, 4608, "t192_partial_interval"),
+    (4608, 4609, "t192_persistent"),
+    (4609, None, "t256_partial_w2x2_w2x2"),
 )
 
 
@@ -118,8 +157,13 @@ def _find_e64_topk8_token_profile(
         )
     ):
         return None
+    if tokens >= 4609:
+        routes_per_expert, remainder = divmod(tokens * topk, experts)
+        exact_profile = _E64_TOPK8_TOKEN_PROFILES["t256_w2x2_w2x2"]
+        if remainder == 0 and routes_per_expert % int(exact_profile["tile_m"]) == 0:
+            return dict(exact_profile)
     for start, end, profile_name in _E64_TOPK8_TOKEN_INTERVALS:
-        if start <= tokens < end:
+        if start <= tokens and (end is None or tokens < end):
             return dict(_E64_TOPK8_TOKEN_PROFILES[profile_name])
     return None
 
@@ -694,6 +738,7 @@ def _grouped_a8w4_tdm_moe(
     fused_gemm1_n_warp=None,
     balanced_m192=-1,
     partial_m_direct_scale=0,
+    partial_m_drain_output=0,
     data_format="a8w4",
     expert_mask=None,
     num_local_tokens=None,
@@ -1262,6 +1307,7 @@ def _grouped_a8w4_tdm_moe(
             lds_soa_load_interleave=lds_soa_load_interleave,
             balanced_m192=balanced_m192,
             partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1302,6 +1348,7 @@ def _grouped_a8w4_tdm_moe(
             lds_soa_load_interleave=lds_soa_load_interleave,
             balanced_m192=balanced_m192,
             partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1397,6 +1444,7 @@ def _grouped_a8w4_tdm_moe(
         lds_soa_load_interleave=lds_soa_load_interleave,
         balanced_m192=balanced_m192,
         partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
         **_ep_gemm2_kwargs,
     )
 
@@ -1496,6 +1544,7 @@ def _grouped_a8w4_tdm_moe(
                         lds_soa_load_interleave=lds_soa_load_interleave,
                         balanced_m192=balanced_m192,
                         partial_m_direct_scale=partial_m_direct_scale,
+                        partial_m_drain_output=partial_m_drain_output,
                         **_situ_kw,
                     ),
                 )
@@ -1537,6 +1586,7 @@ def _grouped_a8w4_tdm_moe(
                         lds_soa_load_interleave=lds_soa_load_interleave,
                         balanced_m192=balanced_m192,
                         partial_m_direct_scale=partial_m_direct_scale,
+                        partial_m_drain_output=partial_m_drain_output,
                         **_situ_kw,
                     ),
                 )
@@ -1576,6 +1626,7 @@ def _grouped_a8w4_tdm_moe(
                     lds_soa_load_interleave=lds_soa_load_interleave,
                     balanced_m192=balanced_m192,
                     partial_m_direct_scale=partial_m_direct_scale,
+                    partial_m_drain_output=partial_m_drain_output,
                 ),
             )
         )

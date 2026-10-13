@@ -36,6 +36,34 @@ from .tensor_shim import (
 TDM_DESCRIPTOR_VERSION = 1
 
 
+def _amax_inputs_from_bf16x16(all_vals_bf16):
+    """Reduce sixteen rounded BF16 values to two FP32 absolute maxima.
+
+    This is an IR builder, so the Python lists and loops are resolved while
+    compiling. Packed maximumNumber preserves the numeric-over-NaN behavior
+    of emit_amax_e8m0_native_scale; that helper still performs the FP32 clamp,
+    peer reduction, and E8M0 rounding.
+    """
+    bf16_words = all_vals_bf16.bitcast(fx.Int32)
+    abs_pairs = [
+        Vec.from_elements(
+            [bf16_words[i] & fx.Int32(0x7FFF7FFF)], fx.Int32
+        ).bitcast(fx.BFloat16)
+        for i in range(8)
+    ]
+    while len(abs_pairs) > 1:
+        abs_pairs = [
+            Vec(
+                fx.arith.maxnumf(
+                    abs_pairs[i].ir_value(), abs_pairs[i + 1].ir_value()
+                )
+            )
+            for i in range(0, len(abs_pairs), 2)
+        ]
+    maxima = abs_pairs[0].to(fx.Float32)
+    return [maxima[0], maxima[1]]
+
+
 # Optimized A-preshuffle path for the production gfx1250 MoE tiles.
 
 @flyc.jit
@@ -73,6 +101,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     tdm_b_th: Constexpr[int] = 0,
     balanced_m192: Constexpr[int] = 0,
     partial_m_direct_scale: Constexpr[int] = 0,
+    partial_m_drain_output: Constexpr[int] = 0,
 ):
     """Launch the t192/t256 w2x4/b4 persistent fused-quant GEMM1 kernel.
 
@@ -85,6 +114,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     KWS = tile_k // WMMA_K
     balanced_t256_m192 = bool(balanced_m192)
     partial_m_direct_scale = bool(partial_m_direct_scale)
+    partial_m_drain_output = bool(partial_m_drain_output)
     compute_tile_m = 192 if balanced_t256_m192 else tile_m
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
@@ -136,7 +166,14 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         (
             fp4_prefill_schedule,
             stage1_quant_out == 1,
-            tile_m == 192,
+            tile_m in (192, 256),
+        )
+    )
+    assert not partial_m_drain_output or all(
+        (
+            fp4_prefill_schedule,
+            stage1_quant_out == 1,
+            tile_m in (192, 256),
         )
     )
     epilogue_batch_wn = (
@@ -197,6 +234,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         output_store_split_wm,
         output_store_wave_split,
         partial_m_direct_scale,
+        partial_m_drain_output,
     )
     _ = cache_tag
     warp_tile_m = compute_tile_m // m_warp
@@ -276,7 +314,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     out_elem = T.f16 if out_is_f16 else T.bf16
     # +16 cols: the bf16 passthrough epilogue stages C with a padded row pitch
     # to break the ds_store bank conflict; reserve it so the padded tile fits.
-    C_STORE_B = ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
+    C_STORE_B = (
+        (tile_m // 16) * (tile_n // 64) * 256 + m_warp * quant_wmma_rep * 64
+        if stage1_quant_out == 1
+        else ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
+    )
     PERSISTENT_TASKS = (
         4
         if fp4_prefill_schedule
@@ -290,8 +332,23 @@ def launch_gemm_a8w4_tdm_fused_persistent(
             else 1
         )
     )
+    T192_TASK_OVERLAP = bool(
+        PERSISTENT_TASKS > 1
+        and SEGMENT_SPLIT_A
+        and tile_m == 192
+        and not partial_m_direct_scale
+        and not partial_m_drain_output
+    )
+    # The penultimate carry fence releases stage 2's front before the final
+    # K tile. Exact t192 quant output reuses that front; next-task I1 only
+    # writes stage 2's tail. Alternate schedules retain their placement.
+    OUTPUT_IN_RELEASED_STAGE = fp4_prefill_schedule and stage1_quant_out == 1
     OUTPUT_LDS_OFF = (
-        (3 if SEGMENT_SPLIT_A else 2) * PITCH
+        (
+            2 * PITCH
+            if T192_TASK_OVERLAP
+            else (3 * PITCH + A_TAIL_OFF if SEGMENT_SPLIT_A else 2 * PITCH)
+        )
         if PERSISTENT_TASKS > 1
         else 0
     )
@@ -302,6 +359,9 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         num_buffers * PITCH,
         OUTPUT_LDS_OFF + C_STORE_B,
         A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
+        # Preserve the established five-segment allocation for exact t192.
+        3 * PITCH + ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
+        if T192_TASK_OVERLAP else 0,
     )
     assert OUTPUT_LDS_OFF + C_STORE_B <= ARENA_B
     assert ARENA_B <= 320 * 1024
@@ -311,6 +371,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     # Each wn subtile produces 8 output cols (4 per kgrp) after silu/swiglu;
     # 4 wn subtiles = 32 output cols = 1 MX block for per-32 scaling.
     WN_PER_MX_BLOCK = 4
+    assert not T192_TASK_OVERLAP or WN_PER_MX_BLOCK * 4 == 16
     Q_MX_BLOCKS_PER_WG = tile_n // 64
     Q_MX_BLOCK_BYTES = 16 * 16
     Q_ROW_TILE_BYTES = Q_MX_BLOCKS_PER_WG * Q_MX_BLOCK_BYTES
@@ -320,6 +381,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     Q_SCALE_TILE_BYTES = quant_wmma_rep * Q_SCALE_ROW_BYTES
     Q_SCALE_LDS_OFF = Q_M16_TILES * Q_ROW_TILE_BYTES
     assert Q_SCALE_LDS_OFF + m_warp * Q_SCALE_TILE_BYTES <= C_STORE_B
+    if OUTPUT_IN_RELEASED_STAGE and PERSISTENT_TASKS > 1:
+        quant_lds_bytes = Q_SCALE_LDS_OFF + m_warp * Q_SCALE_TILE_BYTES
+        # Exact t192 output fits before stage 2's tail, which holds I1's
+        # wave_m=1 A/ScaleA. Final K input and I0 use other segments.
+        assert quant_lds_bytes <= (A_TAIL_OFF if SEGMENT_SPLIT_A else PITCH)
 
     _kname = (
         "a8w4_tdm_fp4"
@@ -329,6 +395,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
         f"{'_vm192' if balanced_t256_m192 else ''}"
         f"{'_pmds' if partial_m_direct_scale else ''}"
+        f"{'_pmdrain' if partial_m_drain_output else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -1202,6 +1269,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                 load_nxt_fn=None,
                 num_outstanding_tdm=None,
                 issue_fn=None,
+                release_input_lds=False,
             ):
                 """Compute one k128 while optionally loading the next LDS slot."""
                 reuse_cur_rmem = load_nxt_fn is not None and next_rmem is cur_rmem
@@ -1211,6 +1279,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     issue_fn()
                 if const_expr(load_nxt_fn is not None and not reuse_cur_rmem):
                     load_nxt_fn()
+                if const_expr(release_input_lds):
+                    # Final operands are in registers. Release input LDS while
+                    # the closing WMMA group runs, without waiting on I0/I1.
+                    rocdl.s_wait_dscnt(0)
+                    rocdl.s_barrier_signal(-1)
                 sa_k, sb_k = cur_rmem.sa.load(), cur_rmem.sb.load()
                 mma_rows(FRONT, cur_rmem.a[:front_wm], cur_rmem.b, sa_k, sb_k)
                 if const_expr(len(BACK) > 0):
@@ -1331,6 +1404,14 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                             next_stage_wait if const_expr(carries) else None
                         ),
                         issue_fn=do_issue if const_expr(tail_issue and is_last) else None,
+                        release_input_lds=(
+                            PERSISTENT_TASKS > 1
+                            and not partial_m_drain_output
+                            and not OUTPUT_IN_RELEASED_STAGE
+                            and prefetch_kt is None
+                            and next_stage_buf is None
+                            and is_last
+                        ),
                     )
                     # One region per k128: sched_group_barrier only partitions
                     # within a region, and only sched_barrier delimits one.
@@ -1428,36 +1509,42 @@ def launch_gemm_a8w4_tdm_fused_persistent(
 
                     if const_expr(PERSISTENT_TASKS > 1):
                         if tile_idx > 0:
-                            # Previous task issued I0,I1 before O0,O1.  Waiting
-                            # to two leaves only the old output stores outstanding.
-                            tdm_ops.tensor_wait(
-                                1 if gemm2_eight_wave_geometry else 2
-                            )
-                            workgroup_barrier()
-                            prime_stage(0)
-                            # Consume tile 0 while the previous output drains.
-                            compute_ktile(
-                                ptr_to_idx(buf_ptr(0)),
-                                None,
-                                True,
-                                ptr_to_idx(buf_ptr(1)),
-                                current_kt=0,
-                            )
-                            # Stages 2/3 overlap the high-address output arena;
-                            # drain O0/O1 before refilling them. Stage 4 reuses
-                            # stage 0, which tile 0 has now fully consumed.
-                            pipeline_fence(outstanding=0)
-                            issue(2, 2)
-                            issue(3, 3)
-                            # Stage 4 reuses buffer 0's A across persistent N tasks;
-                            # next-task stage 0/1 live in the read-only cache. Refill
-                            # B/ScaleA/ScaleB only and preserve A4 for later tasks.
-                            dispatch_wave_job(
-                                lambda stage_jobs: issue(0, 4, stage_jobs),
-                                cached_a_jobs,
-                            )
+                            if const_expr(partial_m_drain_output):
+                                for i in range_constexpr(PRE):
+                                    issue(i, i)
+                                pipeline_fence(outstanding=TDM_PER * (PRE - 1))
+                                prime_stage(0)
+                            else:
+                                # Previous task issued I0,I1 before O0,O1.  Waiting
+                                # to two leaves only the old output stores outstanding.
+                                tdm_ops.tensor_wait(
+                                    1 if gemm2_eight_wave_geometry else 2
+                                )
+                                workgroup_barrier()
+                                prime_stage(0)
+                                # Consume tile 0 while the previous output drains.
+                                compute_ktile(
+                                    ptr_to_idx(buf_ptr(0)),
+                                    None,
+                                    True,
+                                    ptr_to_idx(buf_ptr(1)),
+                                    current_kt=0,
+                                )
+                                # Stages 2/3 overlap the high-address output arena;
+                                # drain O0/O1 before refilling them. Stage 4 reuses
+                                # stage 0, which tile 0 has now fully consumed.
+                                pipeline_fence(outstanding=0)
+                                issue(2, 2)
+                                issue(3, 3)
+                                # Stage 4 reuses buffer 0's A across persistent N tasks;
+                                # next-task stage 0/1 live in the read-only cache. Refill
+                                # B/ScaleA/ScaleB only and preserve A4 for later tasks.
+                                dispatch_wave_job(
+                                    lambda stage_jobs: issue(0, 4, stage_jobs),
+                                    cached_a_jobs,
+                                )
 
-                            steady_start = fx.Int32(1)
+                                steady_start = fx.Int32(1)
                         else:
                             for i in range_constexpr(PRE):
                                 issue(
@@ -1540,8 +1627,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         if const_expr(  # noqa: SIM102 - preserve DSL staging
                             PERSISTENT_TASKS > 1 and j + 1 == PRE
                         ):
-                            if tile_idx + 1 < PERSISTENT_TASKS:
-                                dispatch_wave_job(prefetch_next, next_jobs)
+                            if (  # noqa: SIM102 - preserve DSL staging
+                                tile_idx + 1 < PERSISTENT_TASKS
+                            ):
+                                if const_expr(not partial_m_drain_output):
+                                    dispatch_wave_job(prefetch_next, next_jobs)
                         compute_ktile(
                             buf,
                             None,
@@ -1561,6 +1651,12 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                             current_kt=kt,
                         )
 
+                if const_expr(
+                    PERSISTENT_TASKS > 1
+                    and not partial_m_drain_output
+                    and not OUTPUT_IN_RELEASED_STAGE
+                ):
+                    rocdl.s_barrier_wait(-1)
                 if const_expr(a_is_fp4):
                     accs = []
                     for wm in range_constexpr(wmma_m_rep):
@@ -1759,12 +1855,16 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                             all_vals_bf16 = Vec.from_elements(
                                 row_vals, fx.Float32
                             ).to(fx.BFloat16)
-                            scale_vals = all_vals_bf16.to(fx.Float32)
-                            scale_f32, e8m0_byte = emit_amax_e8m0_native_scale(
-                                [
+                            if const_expr(T192_TASK_OVERLAP):
+                                scale_inputs = _amax_inputs_from_bf16x16(all_vals_bf16)
+                            else:
+                                scale_vals = all_vals_bf16.to(fx.Float32)
+                                scale_inputs = [
                                     scale_vals[i]
                                     for i in range_constexpr(WN_PER_MX_BLOCK * 4)
-                                ],
+                                ]
+                            scale_f32, e8m0_byte = emit_amax_e8m0_native_scale(
+                                scale_inputs,
                                 wave_size=WAVE,
                                 dtype=MxDtype.FP4_E2M1,
                             )
@@ -1836,8 +1936,24 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     if const_expr(tile_m == 256 or partial_m_direct_scale):
                         rocdl.s_wait_storecnt(0)
                     else:
-                        tdm_ops.tensor_wait(2)
+                        # Exact t192 output and I0/I1 do not alias. The next
+                        # task's prologue fences input completion, then drains
+                        # output before refilling its LDS region.
+                        if const_expr(not T192_TASK_OVERLAP):
+                            tdm_ops.tensor_wait(2)
                         issue_quant_scale_output()
+                    if const_expr(  # noqa: SIM102 - preserve DSL staging
+                        partial_m_drain_output and PERSISTENT_TASKS > 1
+                    ):
+                        if (  # noqa: SIM102 - preserve DSL staging
+                            tile_idx + 1 < PERSISTENT_TASKS
+                        ):
+                            if mn_oob < compute_tile_m:
+                                tdm_ops.tensor_wait(0)
+                                workgroup_barrier()
+                                if wave == 0:
+                                    rocdl.s_barrier_signal(-3)
+                                rocdl.s_barrier_wait(-3)
                 else:
                     # bf16/f16 activation (or passthrough) -> stage to LDS.
                     if const_expr(has_bias):
@@ -2021,6 +2137,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
     balanced_m192: Constexpr[int] = 0,
+    partial_m_drain_output: Constexpr[int] = 0,
 ):
     """Launch the t192/t256 w2x4/b4 or t256/w2x2/b4 persistent GEMM2 kernel.
 
@@ -2032,6 +2149,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     PACK_TK = tile_k // 2
     KWS = tile_k // WMMA_K
     balanced_t256_m192 = bool(balanced_m192)
+    partial_m_drain_output = bool(partial_m_drain_output)
     compute_tile_m = 192 if balanced_t256_m192 else tile_m
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
@@ -2079,6 +2197,14 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
+    assert not partial_m_drain_output or all(
+        (
+            gemm2_schedule,
+            K == 2048,
+            tile_m in (192, 256),
+            n_experts == 64,
+        )
+    )
     epilogue_batch_wn = 8 if fp4_prefill_schedule else 1
     relax_cluster_wrap_dscnt = fp4_prefill_schedule
     disable_xdl_arb_stall = 0 if fp4_prefill_schedule else -1
@@ -2134,6 +2260,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         fence_cover_mma,
         output_store_split_wm,
         output_store_wave_split,
+        partial_m_drain_output,
     )
     _ = cache_tag
     warp_tile_m = compute_tile_m // m_warp
@@ -2167,9 +2294,16 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     # layout gives each WMMA scale operand a contiguous 16-dword block.
     STAGE_SA = ((AS_SUPERS * AS_INNER * 4 + 15) // 16) * 16
     STAGE_SB = ((SB_SUPERS * SC_INNER * 4 + 15) // 16) * 16
+    CACHE_SCALE_A = bool(
+        gemm2_eight_wave_geometry
+        and tile_m == 192
+        and K == 2048
+        and n_experts == 64
+        and not partial_m_drain_output
+    )
     SA_OFF = STAGE_A + STAGE_B
     SB_OFF = STAGE_A + STAGE_B + STAGE_SA
-    # 512-align so per-buffer ptr offset preserves LDS alignment for TDM/ds_b128
+    # Keep the validated input-ring pitch while ScaleA is cached separately.
     PITCH = ((STAGE_A + STAGE_B + STAGE_SA + STAGE_SB + 511) // 512) * 512
 
     out_elem = T.f16 if out_is_f16 else T.bf16
@@ -2193,10 +2327,13 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     )
     A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
     A_CACHE_OFF = num_buffers * PITCH
+    SA_CACHE_OFF = A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH
+    SA_CACHE_BYTES = (K // tile_k) * STAGE_SA if CACHE_SCALE_A else 0
     ARENA_B = max(
         num_buffers * PITCH,
         OUTPUT_LDS_OFF + C_STORE_B,
         A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
+        SA_CACHE_OFF + SA_CACHE_BYTES,
     )
     assert OUTPUT_LDS_OFF + C_STORE_B <= ARENA_B
     assert ARENA_B <= 320 * 1024
@@ -2213,6 +2350,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         f"_b{num_buffers}_K{K}_e{n_experts}"
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
         f"{'_vm192' if balanced_t256_m192 else ''}"
+        f"{'_pmdrain' if partial_m_drain_output else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -2635,6 +2773,9 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 wv=waves[3],
                 wg_mask=b_mcast_mask,
             )
+            if const_expr(CACHE_SCALE_A):
+                # A and its scale do not change across persistent N tasks.
+                jobs[2] = jobs[2]._replace(a_cache_off=STAGE_A)
             next_jobs = jobs
             next_jobs_stage0 = jobs
             next_jobs_stage1 = jobs
@@ -2655,7 +2796,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         jobs[1]._replace(
                             g_off=next_b_off0, waves=tuple(range(4))
                         ),
-                        jobs[2],
+                        *([] if CACHE_SCALE_A else [jobs[2]]),
                         jobs[3]._replace(g_off=next_sb_off0),
                     ]
                     # When a persistent task reuses A4 from buffer 0, split B4
@@ -2705,7 +2846,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                     cache_pa = fx.recast_iter(p8_shared, cache_ptr)
                     cache_i32 = fx.recast_iter(p32_shared, cache_ptr)
 
-                def emit(j):
+                def emit_uncached(j):
                     split_i = j.split_inner and len(j.waves) > 1
                     if const_expr(len(j.waves) > 1):
                         if const_expr(split_i):
@@ -2751,23 +2892,35 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         atom = fx.atom_set_value(
                             atom, "workgroup_mask", fx.Int32(j.wg_mask)
                         )
-                    use_a_cache = cache_a and j.a_cache_off is not None
-                    base = (
-                        cache_i32 if j.on_i32 else cache_pa
-                    ) if use_a_cache else (base_i32 if j.on_i32 else pa)
-                    lds_off = (
-                        j.a_cache_off // 4 if j.on_i32 else j.a_cache_off
-                    ) if use_a_cache else j.lds_off
+                    use_scale_cache = CACHE_SCALE_A and j.a_cache_off == STAGE_A
+                    use_a_cache = cache_a and j.a_cache_off is not None and not use_scale_cache
+                    if const_expr(use_scale_cache):
+                        base = fx.recast_iter(p32_shared, base_ptr + SA_CACHE_OFF + kt * STAGE_SA)
+                        lds_off = 0
+                    else:
+                        base = (
+                            cache_i32 if j.on_i32 else cache_pa
+                        ) if use_a_cache else (base_i32 if j.on_i32 else pa)
+                        lds_off = (
+                            j.a_cache_off // 4 if j.on_i32 else j.a_cache_off
+                        ) if use_a_cache else j.lds_off
                     dst = lds_view(
                         base
                         + lds_off
                         + wave_outer_off * j.lds_row
                         + wave_inner_off
-                        + (so4 if j.on_i32 and not use_a_cache else 0),
+                        + (so4 if j.on_i32 and not use_a_cache and not use_scale_cache else 0),
                         (seg, inner_seg),
                         (j.lds_row, 1),
                     )
                     fx.copy(atom, gt, dst, imm_offset=fx.Int64(kt * j.k_adv))
+
+                def emit(j):
+                    if const_expr(CACHE_SCALE_A and j.a_cache_off == STAGE_A):
+                        if tile_idx == 0:
+                            emit_uncached(j)
+                    else:
+                        emit_uncached(j)
 
                 if const_expr(my_jobs is not None):
                     for j in my_jobs:
@@ -2856,6 +3009,14 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                             cache_a, fx.index_cast(T.i32, regular_a)
                         ),
                     )
+                    if const_expr(CACHE_SCALE_A):
+                        cache_sa = (
+                            fx.index_cast(T.i32, ptr_to_idx(base_ptr))
+                            + fx.Int32(SA_CACHE_OFF)
+                            + kt_i32 * fx.Int32(STAGE_SA)
+                            + fx.Int32(lds_sa_lane_rel)
+                        )
+                        regular_sa = fx.index_cast(T.index, cache_sa)
                 return LdsAddr(
                     a=regular_a,
                     b=lds_b_base(buf),
@@ -3256,36 +3417,49 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
 
                     if const_expr(PERSISTENT_TASKS > 1):
                         if tile_idx > 0:
-                            # Previous task issued I0,I1 before O0,O1.  Waiting
-                            # to two leaves only the old output stores outstanding.
-                            tdm_ops.tensor_wait(
-                                1 if gemm2_eight_wave_geometry else 2
-                            )
-                            workgroup_barrier()
-                            prime_stage(0)
-                            # Consume tile 0 while the previous output drains.
-                            compute_ktile(
-                                ptr_to_idx(buf_ptr(0)),
-                                None,
-                                True,
-                                ptr_to_idx(buf_ptr(1)),
-                                current_kt=0,
-                            )
-                            # Stages 2/3 overlap the high-address output arena;
-                            # drain O0/O1 before refilling them. Stage 4 reuses
-                            # stage 0, which tile 0 has now fully consumed.
-                            pipeline_fence(outstanding=0)
-                            issue(2, 2)
-                            issue(3, 3)
-                            # Stage 4 reuses buffer 0's A across persistent N tasks;
-                            # next-task stage 0/1 live in the read-only cache. Refill
-                            # B/ScaleA/ScaleB only and preserve A4 for later tasks.
-                            dispatch_wave_job(
-                                lambda stage_jobs: issue(0, 4, stage_jobs),
-                                cached_a_jobs,
-                            )
+                            if const_expr(partial_m_drain_output):
+                                for i in range_constexpr(PRE):
+                                    issue(
+                                        i,
+                                        i,
+                                        cache_a=(
+                                            A_CACHE_STAGES > 0
+                                            and i < A_CACHE_STAGES
+                                        ),
+                                    )
+                                pipeline_fence(outstanding=TDM_PER * (PRE - 1))
+                                prime_stage(0)
+                            else:
+                                # Previous task issued I0,I1 before O0,O1.  Waiting
+                                # to two leaves only the old output stores outstanding.
+                                tdm_ops.tensor_wait(
+                                    1 if gemm2_eight_wave_geometry else 2
+                                )
+                                workgroup_barrier()
+                                prime_stage(0)
+                                # Consume tile 0 while the previous output drains.
+                                compute_ktile(
+                                    ptr_to_idx(buf_ptr(0)),
+                                    None,
+                                    True,
+                                    ptr_to_idx(buf_ptr(1)),
+                                    current_kt=0,
+                                )
+                                # Stages 2/3 overlap the high-address output arena;
+                                # drain O0/O1 before refilling them. Stage 4 reuses
+                                # stage 0, which tile 0 has now fully consumed.
+                                pipeline_fence(outstanding=0)
+                                issue(2, 2)
+                                issue(3, 3)
+                                # Stage 4 reuses buffer 0's A across persistent N tasks;
+                                # next-task stage 0/1 live in the read-only cache. Refill
+                                # B/ScaleA/ScaleB only and preserve A4 for later tasks.
+                                dispatch_wave_job(
+                                    lambda stage_jobs: issue(0, 4, stage_jobs),
+                                    cached_a_jobs,
+                                )
 
-                            steady_start = fx.Int32(1)
+                                steady_start = fx.Int32(1)
                         else:
                             for i in range_constexpr(PRE):
                                 issue(
@@ -3367,18 +3541,25 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         if const_expr(  # noqa: SIM102 - preserve DSL staging
                             PERSISTENT_TASKS > 1 and j + 1 == PRE
                         ):
-                            if tile_idx + 1 < PERSISTENT_TASKS:
-                                if const_expr(A_CACHE_STAGES == 1):
-                                    dispatch_wave_job(
-                                        lambda stage_jobs: issue(0, 0, stage_jobs),
-                                        next_jobs_stage0,
-                                    )
-                                    dispatch_wave_job(
-                                        lambda stage_jobs: issue(1, 1, stage_jobs),
-                                        next_jobs_stage1,
-                                    )
-                                else:
-                                    dispatch_wave_job(prefetch_next, next_jobs)
+                            if (  # noqa: SIM102 - preserve DSL staging
+                                tile_idx + 1 < PERSISTENT_TASKS
+                            ):
+                                if const_expr(not partial_m_drain_output):
+                                    if const_expr(A_CACHE_STAGES == 1):
+                                        dispatch_wave_job(
+                                            lambda stage_jobs: issue(
+                                                0, 0, stage_jobs
+                                            ),
+                                            next_jobs_stage0,
+                                        )
+                                        dispatch_wave_job(
+                                            lambda stage_jobs: issue(
+                                                1, 1, stage_jobs
+                                            ),
+                                            next_jobs_stage1,
+                                        )
+                                    else:
+                                        dispatch_wave_job(prefetch_next, next_jobs)
                         # In a t256 persistent outer loop, vector-SSA
                         # promotion loses the three carries between the four
                         # constexpr-unrolled drain calls. Reload K128-0 from LDS
@@ -3433,6 +3614,12 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                 oc = fx.Float16 if out_is_f16 else fx.BFloat16
 
                 OUTPUT_SPLIT_WM = output_store_split_wm
+                PACKED_OUTPUT_SLICES = PERSISTENT_TASKS > 1 and not partial_m_drain_output
+                if const_expr(PACKED_OUTPUT_SLICES):
+                    # Both M waves' first output slices fit in released stage 2.
+                    # The existing barrier in issue_output_slice releases the
+                    # final K tile in stage 3 before either wave stages slice 2.
+                    assert m_warp * OUTPUT_SPLIT_WM * 16 * STORE_PITCH * 2 <= PITCH
 
                 def issue_output_slice(wm_base, wm_count):
                     """Store completed M rows while later accumulator rows stage."""
@@ -3484,9 +3671,19 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                             strides=[out_stride, None],
                             num_warps=1,
                         )
+                        src_row_start = row_start
+                        if const_expr(PACKED_OUTPUT_SLICES):
+                            if const_expr(gemm2_eight_wave_geometry):
+                                src_row_start = wave_m * slice_rows + store_wave * owned_rows
+                            elif const_expr(output_store_wave_split):
+                                src_row_start = wave_m * slice_rows + wave_n * owned_rows
+                            else:
+                                src_row_start = wave_m * slice_rows
+                            if const_expr(wm_base != 0):
+                                src_row_start += m_warp * OUTPUT_SPLIT_WM * 16
                         src_half = lds_view(
                             fx.recast_iter(oc, output_base_ptr)
-                            + fx.index_cast(T.index, row_start * STORE_PITCH),
+                            + fx.index_cast(T.index, src_row_start * STORE_PITCH),
                             (owned_rows, STORE_PITCH),
                             (STORE_PITCH, 1),
                         )
@@ -3593,6 +3790,36 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                         bias_map = fx.recast_iter(bias_ptr_type, arg_bias)
                     for wm in range_constexpr(wmma_m_rep):
                         row_rel = wmb + wm * 16 + lane16
+                        store_row_rel = row_rel
+                        store_base_idx = stC_idx
+                        store_col_rel = wnb + kgrp * 8
+                        if const_expr(PACKED_OUTPUT_SLICES):
+                            if const_expr(wm == 0 or wm == OUTPUT_SPLIT_WM):
+                                from flydsl._mlir.dialects import llvm as llvm_dialect
+
+                                # Keep each slice's dynamic LDS address in one VGPR
+                                # so all M16 offsets fit the DS 16-bit immediate.
+                                if const_expr(wm == 0):
+                                    slice_row = wave_m * OUTPUT_SPLIT_WM * 16 + lane16
+                                else:
+                                    slice_row = (
+                                        m_warp * OUTPUT_SPLIT_WM
+                                        + wave_m * (wmma_m_rep - OUTPUT_SPLIT_WM)
+                                    ) * 16 + lane16
+                                addr = fx.Int32(stC_idx) + fx.Int32(
+                                    (slice_row * STORE_PITCH + store_col_rel) * 2
+                                )
+                                slice_store_idx = fx.Int32(llvm_dialect.InlineAsmOp(
+                                    res=T.i32,
+                                    operands_=[addr.ir_value()],
+                                    asm_string='',
+                                    constraints='=v,0',
+                                    has_side_effects=False,
+                                    is_align_stack=False,
+                                ).res)
+                            store_base_idx = slice_store_idx
+                            store_col_rel = 0
+                            store_row_rel = wm * 16 if wm < OUTPUT_SPLIT_WM else (wm - OUTPUT_SPLIT_WM) * 16
                         if const_expr(stage1_act and epilogue_batch_wn > 1):
                             # Keep independent sigmoid chains in flight: batching
                             # overlaps serialized exp2 -> rcp TRANS work while bounding
@@ -3662,15 +3889,27 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                                     ).to(oc)
                                     hv_i32 = hv.bitcast(fx.Int32).ir_value()
                                     lds_store_b128(
-                                        stC_idx,
-                                        (row_rel * STORE_PITCH + col_rel) * 2,
+                                        store_base_idx,
+                                        (store_row_rel * STORE_PITCH + store_col_rel + wn * 16) * 2,
                                         hv_i32,
                                     )
                         if const_expr(wm + 1 == OUTPUT_SPLIT_WM):
                             issue_output_slice(0, OUTPUT_SPLIT_WM)
-                            if const_expr(gemm2_eight_wave_geometry):
+                            if const_expr(gemm2_eight_wave_geometry and not CACHE_SCALE_A):
                                 tdm_ops.tensor_wait(2)
                 issue_output_slice(OUTPUT_SPLIT_WM, wmma_m_rep - OUTPUT_SPLIT_WM)
+                if const_expr(  # noqa: SIM102 - preserve DSL staging
+                    partial_m_drain_output and PERSISTENT_TASKS > 1
+                ):
+                    if (  # noqa: SIM102 - preserve DSL staging
+                        tile_idx + 1 < PERSISTENT_TASKS
+                    ):
+                        if mn_oob < compute_tile_m:
+                            tdm_ops.tensor_wait(0)
+                            workgroup_barrier()
+                            if wave == 0:
+                                rocdl.s_barrier_signal(-3)
+                            rocdl.s_barrier_wait(-3)
 
         if const_expr(PERSISTENT_TASKS == 1):
             run_task(fx.Int32(0))

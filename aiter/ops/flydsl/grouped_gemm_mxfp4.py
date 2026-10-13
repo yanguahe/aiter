@@ -273,6 +273,7 @@ def flydsl_grouped_gemm_a8w4_masked(
     a_preshuffle=0,
     balanced_m192=-1,
     partial_m_direct_scale=0,
+    partial_m_drain_output=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
@@ -425,9 +426,13 @@ def flydsl_grouped_gemm_a8w4_masked(
                 if int(balanced_m192) < 0
                 else int(bool(balanced_m192))
             )
-        if use_fused_persistent:
+        if stage1_quant_out and stage1_act:
             persistent_kwargs["partial_m_direct_scale"] = int(
                 bool(partial_m_direct_scale)
+            )
+        if use_fused_persistent or use_gemm2_persistent:
+            persistent_kwargs["partial_m_drain_output"] = int(
+                bool(partial_m_drain_output)
             )
         optimized_launcher(
             out,

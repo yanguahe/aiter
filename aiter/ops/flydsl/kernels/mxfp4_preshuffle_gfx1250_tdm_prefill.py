@@ -71,6 +71,7 @@ def launch_gemm_a8w4_tdm_optimized(
     next_stage_prefetch: Constexpr[int] = 0,
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
+    partial_m_direct_scale: Constexpr[int] = 0,
 ):
     """Launch the tuned t256/w2x2/b4 A-preshuffle MoE prefill kernel.
 
@@ -125,6 +126,14 @@ def launch_gemm_a8w4_tdm_optimized(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
+    assert not partial_m_direct_scale or all(
+        (
+            fp4_prefill_schedule,
+            stage1_quant_out == 1,
+            tile_m == 256,
+            n_warp == 2,
+        )
+    )
     epilogue_batch_wn = min(8, tile_n // n_warp // WMMA_N) if fp4_prefill_schedule else 1
     relax_cluster_wrap_dscnt = fp4_prefill_schedule
     disable_xdl_arb_stall = 0 if fp4_prefill_schedule and n_warp == 2 else -1
@@ -171,6 +180,7 @@ def launch_gemm_a8w4_tdm_optimized(
         fence_cover_mma,
         output_store_split_wm,
         output_store_wave_split,
+        partial_m_direct_scale,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -274,6 +284,8 @@ def launch_gemm_a8w4_tdm_optimized(
             f"a8w4_tdm_fp4_t256x256x256_w2x2_b4_K{K}_e{n_experts}"
             "_cn4_prefetch_apre"
         )
+    if partial_m_direct_scale:
+        _kname += "_pmds"
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
     def kernel(
@@ -1557,30 +1569,57 @@ def launch_gemm_a8w4_tdm_optimized(
 
                         # Preshuffled e8m0 scale: one branch per wm (not per mx_blk).
                         if row_rel < mn_oob and is_kgrp0:
-                            scale_row_byte = Q_SCALE_LDS_OFF + (
-                                (wave_m * quant_wmma_rep + wm) * 16 + lane16
-                            ) * 4
-                            if const_expr(N_MX_BLKS == 2):
-                                packed_scale = fx.Int32(
-                                    arith.extui(T.i32, _raw(e8m0_bytes[0]))
-                                ) | (
-                                    fx.Int32(arith.extui(T.i32, _raw(e8m0_bytes[1])))
-                                    << fx.Int32(8)
-                                )
-                                lds_store_b16(
-                                    stC_idx,
-                                    scale_row_byte + wave_n * 2,
-                                    packed_scale,
-                                )
+                            if const_expr(partial_m_direct_scale):
+                                row_i32 = fx.Int32(blk_m + row_rel)
+                                row_tile32 = row_i32 >> 5
+                                row_in_tile32 = row_i32 & 31
+                                for mx_blk in range_constexpr(N_MX_BLKS):
+                                    mx_blk_i = (
+                                        fx.Int32(blk_n)
+                                        + fx.Int32(
+                                            (wave_n * N_MX_BLKS + mx_blk) * 64
+                                        )
+                                    ) >> 6
+                                    scale_dw = mx_blk_i >> 2
+                                    byte_in_dw = mx_blk_i & 3
+                                    dst_byte = (
+                                        row_tile32 * q_dst_scale_dwpr * 32
+                                        + scale_dw * 32
+                                        + row_in_tile32
+                                    ) * 4 + byte_in_dw
+                                    fx.ptr_store(
+                                        e8m0_bytes[mx_blk], scale_ptr + dst_byte
+                                    )
                             else:
-                                lds_store_b8(
-                                    stC_idx,
-                                    scale_row_byte + wave_n,
-                                    e8m0_bytes[0],
-                                )
+                                scale_row_byte = Q_SCALE_LDS_OFF + (
+                                    (wave_m * quant_wmma_rep + wm) * 16 + lane16
+                                ) * 4
+                                if const_expr(N_MX_BLKS == 2):
+                                    packed_scale = fx.Int32(
+                                        arith.extui(T.i32, _raw(e8m0_bytes[0]))
+                                    ) | (
+                                        fx.Int32(
+                                            arith.extui(T.i32, _raw(e8m0_bytes[1]))
+                                        )
+                                        << fx.Int32(8)
+                                    )
+                                    lds_store_b16(
+                                        stC_idx,
+                                        scale_row_byte + wave_n * 2,
+                                        packed_scale,
+                                    )
+                                else:
+                                    lds_store_b8(
+                                        stC_idx,
+                                        scale_row_byte + wave_n,
+                                        e8m0_bytes[0],
+                                    )
                 workgroup_barrier()
-                issue_quant_scale_output()
+                if const_expr(not partial_m_direct_scale):
+                    issue_quant_scale_output()
                 issue_quant_output()
+                if const_expr(partial_m_direct_scale):
+                    rocdl.s_wait_storecnt(0)
             else:
                 # bf16/f16 activation (or passthrough) -> stage to LDS.
                 if const_expr(has_bias):
