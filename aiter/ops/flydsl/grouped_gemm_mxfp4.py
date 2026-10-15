@@ -345,7 +345,7 @@ def flydsl_grouped_gemm_a8w4_masked(
 
     use_optimized = target_optimized and not any(
         (
-            enable_ep_scatter,
+            enable_ep_scatter and stage2_scatter.combine_quant_bits != 0,
             bool(tdm_as_in_prologue),
             bool(row_major_ascale),
             bool(a_row_stride_bytes),
@@ -373,7 +373,13 @@ def flydsl_grouped_gemm_a8w4_masked(
             )
         )
         use_gemm2_persistent = (
-            stage1_act == 0
+            (
+                not enable_ep_scatter
+                or (
+                    K == 2048 and (tile_m, m_warp, n_warp, n_experts) == (192, 2, 4, 64)
+                )
+            )
+            and stage1_act == 0
             and N == 7168
             and (
                 (
@@ -434,6 +440,18 @@ def flydsl_grouped_gemm_a8w4_masked(
             persistent_kwargs["partial_m_drain_output"] = int(
                 bool(partial_m_drain_output)
             )
+        if enable_ep_scatter:
+            persistent_kwargs.update(
+                enable_ep_scatter=1,
+                ep_arena_handle=int(stage2_scatter.arena_handle),
+                ep_combine_input_offset=int(stage2_scatter.combine_input_offset),
+                ep_slot_stride_bytes=int(stage2_scatter.slot_stride_bytes),
+                ep_destination_stride=int(ep_destination_stride),
+                ep_world_size=int(stage2_scatter.world_size),
+                arg_ep_row_map=ep_row_map,
+            )
+        elif not use_fused_persistent:
+            persistent_kwargs["arg_ep_row_map"] = out
         optimized_launcher(
             out,
             ptr_arg(a),

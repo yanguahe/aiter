@@ -22,6 +22,12 @@ from .gemm_common_gfx1250 import (
     pipeline_fence,
     workgroup_barrier,
 )
+from .mega_moe_gfx1250.gemm2_scatter import (
+    SCATTER_ROWS,
+    load_bf16_scatter_rows,
+    make_bf16_scatter_view,
+    store_bf16_scatter_group,
+)
 from .quant_utils import (
     emit_amax_e8m0_native_scale,
     emit_cvt_scalef32_pk8_fp4_bf16,
@@ -367,7 +373,6 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     assert ARENA_B <= 320 * 1024
 
     # Quant epilogue compile-time constants.
-    QUANT_ROWS_PER_TILE = quant_wmma_rep * 16
     # Each wn subtile produces 8 output cols (4 per kgrp) after silu/swiglu;
     # 4 wn subtiles = 32 output cols = 1 MX block for per-32 scaling.
     WN_PER_MX_BLOCK = 4
@@ -1800,36 +1805,38 @@ def launch_gemm_a8w4_tdm_fused_persistent(
 
                     def issue_quant_scale_output():
                         if wave_n == 0:
-                            global_scale_tile_stride = (
-                                fx.Int64(q_dst_scale_dwpr) * Q_SCALE_TILE_BYTES
+                            # A-preshuffled GEMM2 consumes canonical M32 scale
+                            # groups. A t192 wave owns three such groups; storing
+                            # one M96 row per N tile would transpose M and K.
+                            scale_rows32 = quant_wmma_rep // 2
+                            scale_row32_bytes = 32 * 4
+                            global_scale_stride = (
+                                fx.Int64(q_dst_scale_dwpr) * scale_row32_bytes
                             )
                             global_scale_off = (
-                                (fx.Int64(blk_m) // QUANT_ROWS_PER_TILE)
-                                * global_scale_tile_stride
-                                + (fx.Int64(blk_n) // 256) * Q_SCALE_TILE_BYTES
-                                + fx.Int64(wave_m) * global_scale_tile_stride
-                            )
+                                fx.Int64(blk_m) // 32 + fx.Int64(wave_m * scale_rows32)
+                            ) * global_scale_stride + (
+                                fx.Int64(blk_n) // 256
+                            ) * scale_row32_bytes
                             gt_scale = global_view(
                                 scale_ptr,
                                 global_scale_off,
-                                (quant_wmma_rep, Q_SCALE_ROW_BYTES),
-                                (Q_SCALE_ROW_BYTES, 1),
+                                (scale_rows32, scale_row32_bytes),
+                                (global_scale_stride, 1),
                             )
                             atom_scale = fx.rocdl.make_tdm_atom(
                                 gt_scale,
                                 [None, None],
-                                strides=[Q_SCALE_ROW_BYTES, None],
+                                strides=[global_scale_stride, None],
                                 num_warps=1,
                                 cache_modifier=0,
                             )
                             src_scale = lds_view(
                                 fx.recast_iter(fx.Int8, output_base_ptr)
                                 + Q_SCALE_LDS_OFF
-                                + fx.index_cast(
-                                    T.index, wave_m * Q_SCALE_TILE_BYTES
-                                ),
-                                (quant_wmma_rep, Q_SCALE_ROW_BYTES),
-                                (Q_SCALE_ROW_BYTES, 1),
+                                + fx.index_cast(T.index, wave_m * Q_SCALE_TILE_BYTES),
+                                (scale_rows32, scale_row32_bytes),
+                                (scale_row32_bytes, 1),
                             )
                             fx.copy(atom_scale, src_scale, gt_scale)
 
@@ -2103,6 +2110,7 @@ launch_gemm_a8w4_tdm_fused_persistent.compile_hints["llvm_options"] = {
 
 # Persistent GEMM2 specialization.
 
+
 @flyc.jit
 def launch_gemm_a8w4_tdm_gemm2_persistent(
     arg_c: fx.Tensor,
@@ -2138,6 +2146,13 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     tdm_b_th: Constexpr[int] = 0,
     balanced_m192: Constexpr[int] = 0,
     partial_m_drain_output: Constexpr[int] = 0,
+    enable_ep_scatter: Constexpr[int] = 0,
+    ep_arena_handle: Constexpr[int] = 0,
+    ep_combine_input_offset: Constexpr[int] = 0,
+    ep_slot_stride_bytes: Constexpr[int] = 0,
+    ep_destination_stride: Constexpr[int] = 0,
+    ep_world_size: Constexpr[int] = 0,
+    arg_ep_row_map: fx.Tensor = None,
 ):
     """Launch the t192/t256 w2x4/b4 or t256/w2x2/b4 persistent GEMM2 kernel.
 
@@ -2154,7 +2169,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
     # This launcher contains only the production A-preshuffle schedules. Other
-    # tiles and EP variants use launch_gemm_a8w4_tdm instead.
+    # tiles and quantized EP variants use launch_gemm_a8w4_tdm instead.
     standard_geometry = all(
         (
             tile_m in (192, 256),
@@ -2197,6 +2212,17 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
+    assert not enable_ep_scatter or all(
+        (
+            gemm2_schedule,
+            gemm2_eight_wave_geometry,
+            tile_m == 192,
+            K == 2048,
+            n_experts == 64,
+            not balanced_t256_m192,
+            not partial_m_drain_output,
+        )
+    )
     assert not partial_m_drain_output or all(
         (
             gemm2_schedule,
@@ -2261,6 +2287,12 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         output_store_split_wm,
         output_store_wave_split,
         partial_m_drain_output,
+        enable_ep_scatter,
+        ep_arena_handle,
+        ep_combine_input_offset,
+        ep_slot_stride_bytes,
+        ep_destination_stride,
+        ep_world_size,
     )
     _ = cache_tag
     warp_tile_m = compute_tile_m // m_warp
@@ -2276,6 +2308,11 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
     mma_n_acc = wmma_m_rep * mma_n_rep
     num_waves = m_warp * n_warp
     block = num_waves * WAVE
+    # Rotate slice 1 ownership by four waves: each of eight waves issues three
+    # eight-row stores in total. A fixed tensorcnt distance then fences I0/I1.
+    SCATTER_SECOND_WAVE_SHIFT = num_waves // 2
+    SCATTER_OUTPUT_TDM = compute_tile_m // (SCATTER_ROWS * num_waves)
+    assert not enable_ep_scatter or compute_tile_m % (SCATTER_ROWS * num_waves) == 0
 
     ACT_ELEM = fx.Float4E2M1FN
     ACT_NDW = 8
@@ -2351,6 +2388,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
         f"{'_vm192' if balanced_t256_m192 else ''}"
         f"{'_pmdrain' if partial_m_drain_output else ''}"
+        f"{'_epscatter' if enable_ep_scatter else ''}"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -2363,6 +2401,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         arg_m_tile_map: fx.Pointer,
         arg_bias: fx.Pointer,
         arg_quant_scale: fx.Tensor,
+        arg_ep_row_map: fx.Tensor,
         i32_m: fx.Int32,
         i32_n: fx.Int32,
         f32_swiglu_limit: fx.Float32,
@@ -2584,6 +2623,31 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
 
             output_base_ptr = base_ptr + OUTPUT_LDS_OFF
             stC_idx = ptr_to_idx(output_base_ptr)
+            if const_expr(enable_ep_scatter):
+                ep_view, ep_slots_per_rank, ep_oob = make_bf16_scatter_view(
+                    ep_arena_handle,
+                    ep_combine_input_offset,
+                    ep_slot_stride_bytes,
+                    ep_world_size,
+                    tile_n,
+                )
+                ep_weights, ep_destinations = load_bf16_scatter_rows(
+                    arg_ep_row_map,
+                    blk_m64,
+                    mn_oob,
+                    wave,
+                    lane,
+                    wave_m * warp_tile_m,
+                    lane16,
+                    wmma_m_rep=wmma_m_rep,
+                    split_wm=output_store_split_wm,
+                    m_warp=m_warp,
+                    num_waves=num_waves,
+                    destination_stride=ep_destination_stride,
+                    slots_per_rank=ep_slots_per_rank,
+                    oob=ep_oob,
+                    second_slice_wave_shift=SCATTER_SECOND_WAVE_SHIFT,
+                )
 
             def buf_ptr(s):
                 return base_ptr + s * PITCH
@@ -3430,10 +3494,14 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                                 pipeline_fence(outstanding=TDM_PER * (PRE - 1))
                                 prime_stage(0)
                             else:
-                                # Previous task issued I0,I1 before O0,O1.  Waiting
-                                # to two leaves only the old output stores outstanding.
+                                # Each wave issues I0/I1 before its old output.
+                                # The scatter rotation gives every wave exactly three
+                                # stores; waiting to that count fences input arrival.
+                                # A WG barrier also covers the other requester waves.
                                 tdm_ops.tensor_wait(
-                                    1 if gemm2_eight_wave_geometry else 2
+                                    SCATTER_OUTPUT_TDM
+                                    if enable_ep_scatter
+                                    else (1 if gemm2_eight_wave_geometry else 2)
                                 )
                                 workgroup_barrier()
                                 prime_stage(0)
@@ -3625,6 +3693,43 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                     """Store completed M rows while later accumulator rows stage."""
                     slice_rows = wm_count * 16
                     workgroup_barrier()
+                    if const_expr(enable_ep_scatter):
+                        groups = m_warp * slice_rows // SCATTER_ROWS
+                        passes = (groups + num_waves - 1) // num_waves
+                        slice_index = 0 if wm_base == 0 else 1
+                        slice_wave = (
+                            wave
+                            if wm_base == 0
+                            else (wave + SCATTER_SECOND_WAVE_SHIFT) % num_waves
+                        )
+                        lds_c = lds_view(
+                            fx.recast_iter(oc, output_base_ptr),
+                            (compute_tile_m, STORE_PITCH),
+                            (STORE_PITCH, 1),
+                        )
+                        for scatter_pass in range_constexpr(passes):
+                            scatter_group = slice_wave + fx.Int32(
+                                scatter_pass * num_waves
+                            )
+                            # Packed slices are contiguous across the two M waves.
+                            src_row = scatter_group * SCATTER_ROWS
+                            if const_expr(wm_base != 0):
+                                src_row += m_warp * OUTPUT_SPLIT_WM * 16
+                            if scatter_group < fx.Int32(groups):
+                                store_bf16_scatter_group(
+                                    ep_view,
+                                    lds_c,
+                                    ep_destinations[slice_index][scatter_pass // 4],
+                                    scatter_group,
+                                    scatter_pass % 4,
+                                    oob=ep_oob,
+                                    tile_n=tile_n,
+                                    store_pitch=STORE_PITCH,
+                                    slot_stride=ep_slot_stride_bytes,
+                                    lds_row=src_row,
+                                    column=blk_n64,
+                                )
+                        return
                     if const_expr(gemm2_eight_wave_geometry):
                         # Use one output descriptor per wave; the two N-wave halves
                         # store separate row slices. With next-task I0/I1, this caps
@@ -3859,6 +3964,8 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
                             for wn in range_constexpr(wmma_n_rep):
                                 col_rel = wnb + wn * 16 + kgrp * 8
                                 acc = Vec(accs[wm * wmma_n_rep + wn])
+                                if const_expr(enable_ep_scatter):
+                                    acc = acc * ep_weights[wm]
                                 if const_expr(has_bias):
                                     acc = acc + Vec(
                                         fx.ptr_load(
@@ -3931,6 +4038,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         arg_m_tile_map,
         arg_bias,
         arg_quant_scale,
+        arg_c if arg_ep_row_map is None else arg_ep_row_map,
         i32_m,
         N,
         f32_swiglu_limit,

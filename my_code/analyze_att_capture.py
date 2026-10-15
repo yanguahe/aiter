@@ -28,6 +28,10 @@ SIMD_IDS = (0, 1, 2, 3)
 EXPECTED_SE_NAMES = ("SE0", "SE1", "SE2", "SE3")
 DEFAULT_REFERENCE_HZ = 100_000_000.0
 UNWRAPPED_DEFAULT_SIMD_ID = 3
+# Decoder >= 0.2 (occupancy version 3.1.0) names its tuple columns in
+# "occupancy_fields"; these are its names for [shader_timestamp, packed_sa_wgp,
+# simd, wave_slot, start, kernel_pc_index] of the unnamed 3.0.0 six-tuple.
+NAMED_OCCUPANCY_FIELDS = ("time", "cu", "simd", "wave_id", "start", "kernel_id")
 COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red")
 LINE_STYLES = ("-", "--", "-.", ":")
 MARKERS = ("o", "s", "^", "D")
@@ -475,6 +479,27 @@ def load_and_validate_occupancy(
     if not isinstance(data, dict):
         raise ValueError(f"Top-level JSON value must be an object: {path}")
 
+    allowed_keys = {"dispatches", "version"}
+    field_indices = tuple(range(len(NAMED_OCCUPANCY_FIELDS)))
+    tuple_width = len(NAMED_OCCUPANCY_FIELDS)
+    if "occupancy_fields" in data:
+        field_names = data["occupancy_fields"]
+        if (
+            not isinstance(field_names, list)
+            or not all(isinstance(name, str) for name in field_names)
+            or len(set(field_names)) != len(field_names)
+            or not set(NAMED_OCCUPANCY_FIELDS) <= set(field_names)
+        ):
+            raise ValueError(
+                f"{path}: occupancy_fields must be a list of distinct names "
+                f"containing {list(NAMED_OCCUPANCY_FIELDS)}, got {field_names!r}"
+            )
+        allowed_keys |= {"events", "occupancy_fields"}
+        field_indices = tuple(
+            field_names.index(name) for name in NAMED_OCCUPANCY_FIELDS
+        )
+        tuple_width = len(field_names)
+
     canonical_numeric_key = re.compile(r"(?:0|[1-9]\d*)")
     numeric_keys = sorted(
         (
@@ -488,7 +513,7 @@ def load_and_validate_occupancy(
     unexpected_keys = sorted(
         str(key)
         for key in data
-        if key not in numeric_keys and key not in {"dispatches", "version"}
+        if key not in numeric_keys and key not in allowed_keys
     )
     if unexpected_keys:
         raise ValueError(
@@ -556,11 +581,16 @@ def load_and_validate_occupancy(
         events: list[OccupancyEvent] = []
         for event_index, raw_event in enumerate(raw_events):
             label = f"{path}: {numeric_key} ({se_name}) event {event_index}"
-            if not isinstance(raw_event, list) or len(raw_event) != 6:
+            if (
+                not isinstance(raw_event, list)
+                or len(raw_event) != tuple_width
+            ):
                 raise ValueError(
                     f"{label} must be [shader_timestamp, packed_sa_wgp, simd, "
-                    "wave_slot, start, kernel_pc_index]"
+                    f"wave_slot, start, kernel_pc_index] ({tuple_width} "
+                    "columns)"
                 )
+            raw_event = [raw_event[index] for index in field_indices]
             timestamp = _strict_nonnegative_int(
                 raw_event[0], f"{label} shader_timestamp"
             )
@@ -2752,6 +2782,58 @@ def run_self_test() -> None:
             ),
         )
         print("[PASS] bad occupancy schemas are rejected")
+        checks += 1
+
+        named_fields = [
+            "cu", "time", "simd", "wave_id", "start", "kernel_id",
+            "me_id", "pipe_id", "is_ext", "workgroup_id", "cluster_id",
+        ]
+        named_path = temp_root / "named_fields.json"
+        named_path.write_text(
+            json.dumps(
+                {
+                    "0": [
+                        [0x86, 10, 1, 1, 1, 1, 1, 0, 0, 0, 8],
+                        [0x86, 30, 1, 1, 0, 1, 0, 0, 0, 0, 8],
+                    ],
+                    "dispatches": {"1": "kernel"},
+                    "events": {"0": [{"kind": "event", "time": 5}]},
+                    "occupancy_fields": named_fields,
+                    "version": "3.1.0",
+                }
+            ),
+            encoding="utf-8",
+        )
+        named_event = load_and_validate_occupancy(
+            named_path, required_se_names=("SE0",)
+        ).events_by_se["SE0"][0]
+        if (
+            named_event.shader_timestamp,
+            named_event.packed_sa_wgp,
+            named_event.hw_simd,
+            named_event.wave_slot,
+            named_event.start,
+            named_event.kernel_pc_index,
+        ) != (10, 0x86, 1, 1, 1, 1):
+            raise AssertionError("named occupancy_fields were mapped wrongly")
+        unnamed_kernel_path = temp_root / "named_fields_missing.json"
+        unnamed_kernel_path.write_text(
+            json.dumps(
+                {
+                    "0": [[10, 0, 0, 0, 1, 1], [20, 0, 0, 0, 0, 1]],
+                    "occupancy_fields": named_fields[:5] + ["kernel"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        _expect_value_error(
+            "occupancy_fields without kernel_id",
+            "occupancy_fields must be",
+            lambda: load_and_validate_occupancy(
+                unnamed_kernel_path, required_se_names=("SE0",)
+            ),
+        )
+        print("[PASS] decoder 0.2 named occupancy_fields are mapped by name")
         checks += 1
 
         sequential_path = temp_root / "sequential.json"

@@ -4257,8 +4257,9 @@ def build_moe_invert_route_rows_module(source_topk: int = 0):
                     ptr_rsrc(topids_to_rows), route, vec_width=1, dtype=i32
                 )
             )
-            source = route // fx.Uint32(source_topk) if source_topk else route
-            buffer_ops.buffer_store(source, ptr_rsrc(rows_to_routes), row)
+            if fx.Int32(row) >= fx.Int32(0):
+                source = route // fx.Uint32(source_topk) if source_topk else route
+                buffer_ops.buffer_store(source, ptr_rsrc(rows_to_routes), row)
 
     @flyc.jit
     def launch_invert(
@@ -4294,6 +4295,7 @@ def build_moe_scatter_preshuffled_a_lds_module(
     payload_tiles_per_epoch: int = 1,
     stage_scale_in_lds: bool = False,
     skip_empty_row_tiles: bool = False,
+    src_scale_bytes_per_row: int = 0,
 ):
     """Gather token FP4 rows, transpose in LDS, and emit coalesced A stores."""
     if feat_dim % 128:
@@ -4304,6 +4306,10 @@ def build_moe_scatter_preshuffled_a_lds_module(
     payload_blocks_per_row = payload_bytes_per_row // 16
     scale_bytes_per_row = feat_dim // 32
     scale_dwords_per_row = scale_bytes_per_row // 4
+    src_scale_bytes_per_row = src_scale_bytes_per_row or scale_bytes_per_row
+    if src_scale_bytes_per_row < scale_bytes_per_row or src_scale_bytes_per_row % 4:
+        raise ValueError("source scale stride must hold a dword-aligned MX scale row")
+    src_scale_dwords_per_row = src_scale_bytes_per_row // 4
     waves_per_block = BLOCK_THREADS // 32
     rows_per_wave = 32 // waves_per_block
     payload_tiles = payload_blocks_per_row // waves_per_block
@@ -4330,6 +4336,7 @@ def build_moe_scatter_preshuffled_a_lds_module(
     module_name = (
         f"moe_scatter_preshuffled_a_fd{feat_dim}_r32_lds"
         f"{epoch_tag}{scale_tag}{skip_tag}"
+        f"{f'_ss{src_scale_bytes_per_row}' if src_scale_bytes_per_row != scale_bytes_per_row else ''}"
     )
 
     @flyc.kernel(name=module_name, known_block_size=[BLOCK_THREADS, 1, 1])
@@ -4429,7 +4436,7 @@ def build_moe_scatter_preshuffled_a_lds_module(
 
             token = dst_valid.select(fx.Uint32(token_i32), fx.Uint32(0))
             row_tile32 = row // fx.Uint32(32)
-            src_scale_base = token * fx.Uint32(scale_dwords_per_row)
+            src_scale_base = token * fx.Uint32(src_scale_dwords_per_row)
             if const_expr(stage_scale_in_lds):
                 scale_load_iters = (scale_dwords_per_row + 31) // 32
                 for it in range_constexpr(scale_load_iters):
@@ -4438,7 +4445,7 @@ def build_moe_scatter_preshuffled_a_lds_module(
                         for r in range_constexpr(rows_per_wave):
                             value = buffer_ops.buffer_load(
                                 src_scale_rsrc,
-                                source_tokens[r] * fx.Uint32(scale_dwords_per_row)
+                                source_tokens[r] * fx.Uint32(src_scale_dwords_per_row)
                                 + scale_dword,
                                 vec_width=1,
                                 dtype=i32,

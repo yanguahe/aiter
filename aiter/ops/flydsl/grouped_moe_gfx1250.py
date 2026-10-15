@@ -846,6 +846,27 @@ def _grouped_a8w4_tdm_moe(
     # surplus tiles fall past ``psum`` and exit early. The TDM batched GEMMs
     # themselves are EP-agnostic: they operate on the routed contiguous layout.
     _is_ep = expert_mask is not None
+    _ep_apreshuffle_input = all(
+        (
+            _is_ep,
+            not _compact,
+            data_format == "fp4",
+            a1_scale is not None,
+            hidden_states.dtype in (torch.uint8, dtypes.fp4x2),
+            dtype == torch.bfloat16,
+            E == 64,
+            model_dim == 7168,
+            inter_dim == 2048,
+            (tile_m, tile_n, tile_k, m_warp, n_warp, num_buffers)
+            == (192, 256, 256, 2, 2, 4),
+            cluster_n == 4,
+            cluster_m == 1,
+            next_stage_prefetch == 1,
+            not bool(tdm_as_in_prologue),
+            bias1 is None,
+            bias2 is None,
+        )
+    )
     _g2l_lut = None
     _g2l_counter = None
     _gather_w_buf = None
@@ -878,6 +899,7 @@ def _grouped_a8w4_tdm_moe(
         )
         _fuse_ep_route_quant = (
             _direct_ep_mask
+            and not _ep_apreshuffle_input
             and enable_ep_scatter
             and int(E) <= 256
             and a1_scale is not None
@@ -957,6 +979,7 @@ def _grouped_a8w4_tdm_moe(
             }
     _fuse_psum_quant = (
         _is_ep
+        and not _ep_apreshuffle_input
         and enable_ep_scatter
         and not _compact
         and not _fuse_ep_route_quant
@@ -1084,10 +1107,10 @@ def _grouped_a8w4_tdm_moe(
     _row_major_ascale = _compact and _prequantized
     _a_preshuffle_common = not any(
         (
-            enable_ep_scatter,
+            enable_ep_scatter and not _ep_apreshuffle_input,
             bool(tdm_as_in_prologue),
             bool(_row_major_ascale),
-            _prequantized,
+            _prequantized and not _ep_apreshuffle_input,
         )
     )
     # Serving captures decode and prefill shapes in the same process. Enable the
@@ -1117,9 +1140,22 @@ def _grouped_a8w4_tdm_moe(
     )
     # GEMM2 consumes expert-local grouped rows, so its producer switches layout
     # independently from the token-once GEMM1 producer.
+    _gemm2_cluster_n = cluster_n2
+    if (
+        _is_fp4
+        and _is_ep
+        and E == 64
+        and model_dim == 7168
+        and inter_dim == 2048
+        and cluster_n2 < 1
+    ):
+        _gemm2_cluster_n = 4
     _gemm2_a_preshuffle = (
         _is_fp4
-        and _a_preshuffle_common
+        # GEMM2's input is produced locally, independently of the dispatch wire
+        # and GEMM1's A layout. BF16 EP scatter is supported by its tuned epilogue.
+        and not bool(tdm_as_in_prologue)
+        and (not enable_ep_scatter or stage2_scatter.combine_quant_bits == 0)
         and supports_gfx1250_a_preshuffle(
             N=model_dim,
             K=inter_dim,
@@ -1134,11 +1170,13 @@ def _grouped_a8w4_tdm_moe(
             stage1_act=0,
             stage1_quant_out=0,
             has_bias=int(_b2 is not None),
-            cluster_n=cluster_n,
+            cluster_n=_gemm2_cluster_n,
             next_stage_prefetch=next_stage_prefetch,
             n_experts=E,
         )
     )
+    if _gemm2_a_preshuffle:
+        cluster_n2 = _gemm2_cluster_n
     # Local quant instead writes one compact row-major row per token and rebuilds
     # the interleaved layout gemm1 reads in a second pass, so neither write lands
     # 4 B per cache line. A compact plan drives the GEMM off recv rows and passes
@@ -1238,7 +1276,7 @@ def _grouped_a8w4_tdm_moe(
         if (
             _fuse_quant
             and E == 64
-            and token_num in (1536, 2048)
+            and (token_num in (1536, 2048) or _ep_apreshuffle_input)
             and topk == 8
             and model_dim == 7168
             and inter_dim == 2048

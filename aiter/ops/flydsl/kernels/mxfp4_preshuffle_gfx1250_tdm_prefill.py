@@ -23,6 +23,12 @@ from .gemm_common_gfx1250 import (
     pipeline_fence,
     workgroup_barrier,
 )
+from .mega_moe_gfx1250.gemm2_scatter import (
+    SCATTER_ROWS,
+    load_bf16_scatter_rows,
+    make_bf16_scatter_view,
+    store_bf16_scatter_group,
+)
 from .quant_utils import (
     emit_amax_e8m0_native_scale,
     emit_cvt_scalef32_pk8_fp4_bf16,
@@ -72,6 +78,13 @@ def launch_gemm_a8w4_tdm_optimized(
     num_waves_per_tensor_tdm: Constexpr[int] = 2,
     tdm_b_th: Constexpr[int] = 0,
     partial_m_direct_scale: Constexpr[int] = 0,
+    enable_ep_scatter: Constexpr[int] = 0,
+    ep_arena_handle: Constexpr[int] = 0,
+    ep_combine_input_offset: Constexpr[int] = 0,
+    ep_slot_stride_bytes: Constexpr[int] = 0,
+    ep_destination_stride: Constexpr[int] = 0,
+    ep_world_size: Constexpr[int] = 0,
+    arg_ep_row_map: fx.Tensor = None,
 ):
     """Launch the tuned t256/w2x2/b4 A-preshuffle MoE prefill kernel.
 
@@ -85,7 +98,7 @@ def launch_gemm_a8w4_tdm_optimized(
     # A spare LDS buffer is required while the next tile's first k128 is carried.
     next_stage_on = 1 if (next_stage_prefetch and num_buffers >= 3) else 0
     # This launcher contains only the production A-preshuffle schedules. Other
-    # tiles and EP variants use launch_gemm_a8w4_tdm instead.
+    # tiles and quantized EP combine variants use launch_gemm_a8w4_tdm instead.
     fused_quant_w2x4 = all(
         (
             stage1_quant_out == 1,
@@ -126,6 +139,7 @@ def launch_gemm_a8w4_tdm_optimized(
         )
     )
     assert fp4_prefill_schedule or gemm2_schedule
+    assert not enable_ep_scatter or gemm2_schedule
     assert not partial_m_direct_scale or all(
         (
             fp4_prefill_schedule,
@@ -181,6 +195,12 @@ def launch_gemm_a8w4_tdm_optimized(
         output_store_split_wm,
         output_store_wave_split,
         partial_m_direct_scale,
+        enable_ep_scatter,
+        ep_arena_handle,
+        ep_combine_input_offset,
+        ep_slot_stride_bytes,
+        ep_destination_stride,
+        ep_world_size,
     )
     _ = cache_tag
     warp_tile_m = tile_m // m_warp
@@ -286,6 +306,8 @@ def launch_gemm_a8w4_tdm_optimized(
         )
     if partial_m_direct_scale:
         _kname += "_pmds"
+    if enable_ep_scatter:
+        _kname += "_epscatter"
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
     def kernel(
@@ -297,6 +319,7 @@ def launch_gemm_a8w4_tdm_optimized(
         arg_m_tile_map: fx.Pointer,
         arg_bias: fx.Pointer,
         arg_quant_scale: fx.Tensor,
+        arg_ep_row_map: fx.Tensor,
         i32_m: fx.Int32,
         i32_n: fx.Int32,
         f32_swiglu_limit: fx.Float32,
@@ -443,6 +466,30 @@ def launch_gemm_a8w4_tdm_optimized(
             return fx.index_cast(T.index, fx.ptrtoint(p))
 
         stC_idx = ptr_to_idx(base_ptr)
+        if const_expr(enable_ep_scatter):
+            ep_view, ep_slots_per_rank, ep_oob = make_bf16_scatter_view(
+                ep_arena_handle,
+                ep_combine_input_offset,
+                ep_slot_stride_bytes,
+                ep_world_size,
+                tile_n,
+            )
+            ep_weights, ep_destinations = load_bf16_scatter_rows(
+                arg_ep_row_map,
+                blk_m64,
+                mn_oob,
+                wave,
+                lane,
+                wave_m * warp_tile_m,
+                lane16,
+                wmma_m_rep=wmma_m_rep,
+                split_wm=output_store_split_wm,
+                m_warp=m_warp,
+                num_waves=num_waves,
+                destination_stride=ep_destination_stride,
+                slots_per_rank=ep_slots_per_rank,
+                oob=ep_oob,
+            )
 
         def buf_ptr(s):
             return base_ptr + s * PITCH
@@ -1285,7 +1332,37 @@ def launch_gemm_a8w4_tdm_optimized(
                 """Store completed M rows while later accumulator rows stage."""
                 slice_rows = wm_count * 16
                 workgroup_barrier()
-                if output_store_wave_split or wave_n == 0:
+                if const_expr(enable_ep_scatter):
+                    groups = m_warp * slice_rows // SCATTER_ROWS
+                    passes = (groups + num_waves - 1) // num_waves
+                    slice_index = 0 if wm_base == 0 else 1
+                    lds_c = lds_view(
+                        fx.recast_iter(oc, base_ptr),
+                        (tile_m, STORE_PITCH),
+                        (STORE_PITCH, 1),
+                    )
+                    for scatter_pass in range_constexpr(passes):
+                        group = wave + fx.Int32(scatter_pass * num_waves)
+                        logical_row = (
+                            (group * SCATTER_ROWS // slice_rows) * warp_tile_m
+                            + wm_base * 16
+                            + group * SCATTER_ROWS % slice_rows
+                        )
+                        if group < fx.Int32(groups):
+                            store_bf16_scatter_group(
+                                ep_view,
+                                lds_c,
+                                ep_destinations[slice_index][scatter_pass // 4],
+                                group,
+                                scatter_pass % 4,
+                                oob=ep_oob,
+                                tile_n=tile_n,
+                                store_pitch=STORE_PITCH,
+                                slot_stride=ep_slot_stride_bytes,
+                                lds_row=logical_row,
+                                column=blk_n64,
+                            )
+                elif output_store_wave_split or wave_n == 0:
                     if const_expr(output_store_wave_split):
                         assert slice_rows % n_warp == 0
                         owned_rows = slice_rows // n_warp
@@ -1695,6 +1772,8 @@ def launch_gemm_a8w4_tdm_optimized(
                                     hv.bitcast(fx.Int32).ir_value(),
                                 )
                             else:
+                                if const_expr(enable_ep_scatter):
+                                    acc = acc * ep_weights[wm]
                                 hv = Vec.from_elements(
                                     [acc[i] for i in range_constexpr(8)], fx.Float32
                                 ).to(oc)
@@ -1721,6 +1800,7 @@ def launch_gemm_a8w4_tdm_optimized(
         arg_m_tile_map,
         arg_bias,
         arg_quant_scale,
+        arg_c if arg_ep_row_map is None else arg_ep_row_map,
         i32_m,
         N,
         f32_swiglu_limit,

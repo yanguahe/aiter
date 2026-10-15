@@ -3155,6 +3155,7 @@ def _get_compiled_scatter_preshuffled_a_lds(
     payload_tiles_per_epoch: int = 1,
     stage_scale_in_lds: bool = False,
     skip_empty_row_tiles: bool = False,
+    src_scale_bytes_per_row: int = 0,
 ):
     from aiter.ops.flydsl.kernels.moe_fused_route_quant_scatter import (
         build_moe_scatter_preshuffled_a_lds_module,
@@ -3165,6 +3166,7 @@ def _get_compiled_scatter_preshuffled_a_lds(
         payload_tiles_per_epoch=payload_tiles_per_epoch,
         stage_scale_in_lds=stage_scale_in_lds,
         skip_empty_row_tiles=skip_empty_row_tiles,
+        src_scale_bytes_per_row=src_scale_bytes_per_row,
     )
 
 
@@ -3333,7 +3335,7 @@ def _routeks_ep_psum_args(device, ep_psum_params: dict | None):
 
 
 class _TokenQuantThenScatterPath:
-    """Quantize each source token once, then scatter into A-preshuffled rows."""
+    """Scatter token MX rows, quantizing only when the source is BF16."""
 
     @staticmethod
     def supports(
@@ -3349,6 +3351,7 @@ class _TokenQuantThenScatterPath:
         numel: int,
         payload_bytes_per_row: int,
         scale_bytes_per_row: int,
+        prequantized: bool = False,
     ) -> bool:
         return (
             a_preshuffle
@@ -3356,7 +3359,7 @@ class _TokenQuantThenScatterPath:
             and source_topk > 1
             and not remap_rows
             and not fuse_ep_psum
-            and num_valid_routes is None
+            and (num_valid_routes is None or prequantized)
             and feat_dim % 1024 == 0
             and n_rows % 32 == 0
             and (numel // source_topk) * payload_bytes_per_row < 0x80000000
@@ -3381,31 +3384,36 @@ class _TokenQuantThenScatterPath:
         scale_bytes_per_row: int,
         warps_per_block: int,
         device,
+        prequantized_scale=None,
     ):
         token_rows = numel // source_topk
-        token_input = grouped_in_flat.view(-1, feat_dim)[:token_rows]
-        token_payload = torch.empty(
-            (token_rows, payload_bytes_per_row), dtype=torch.uint8, device=device
-        )
-        token_scale = torch.empty(
-            (token_rows, scale_bytes_per_row), dtype=torch.uint8, device=device
-        )
-        tdm_hidden_chunks = (
-            7
-            if feat_dim == 7168
-            and token_rows >= 1024
-            and token_rows % warps_per_block == 0
-            else 0
-        )
-        token_grid = (token_rows + warps_per_block - 1) // warps_per_block
-        _get_compiled_quant_token_fp4(feat_dim, tdm_hidden_chunks)(
-            ptr_arg(token_input.view(-1)),
-            ptr_arg(token_payload.view(-1)),
-            ptr_arg(token_scale.view(-1)),
-            token_rows,
-            token_grid,
-            stream=torch.cuda.current_stream(),
-        )
+        if prequantized_scale is None:
+            token_input = grouped_in_flat.view(-1, feat_dim)[:token_rows]
+            token_payload = torch.empty(
+                (token_rows, payload_bytes_per_row), dtype=torch.uint8, device=device
+            )
+            token_scale = torch.empty(
+                (token_rows, scale_bytes_per_row), dtype=torch.uint8, device=device
+            )
+            tdm_hidden_chunks = (
+                7
+                if feat_dim == 7168
+                and token_rows >= 1024
+                and token_rows % warps_per_block == 0
+                else 0
+            )
+            token_grid = (token_rows + warps_per_block - 1) // warps_per_block
+            _get_compiled_quant_token_fp4(feat_dim, tdm_hidden_chunks)(
+                ptr_arg(token_input.view(-1)),
+                ptr_arg(token_payload.view(-1)),
+                ptr_arg(token_scale.view(-1)),
+                token_rows,
+                token_grid,
+                stream=torch.cuda.current_stream(),
+            )
+        else:
+            token_payload = grouped_in_flat.view(-1, payload_bytes_per_row)[:token_rows]
+            token_scale = prequantized_scale
         rows_to_tokens = torch.full((n_rows,), -1, dtype=torch.int32, device=device)
         invert_grid = (numel + 255) // 256
         _get_compiled_invert_route_rows(source_topk)(
@@ -3425,6 +3433,7 @@ class _TokenQuantThenScatterPath:
             scatter_tiles_per_epoch,
             scatter_scale_lds,
             scatter_skip_empty,
+            int(token_scale.shape[-1]),
         )(
             ptr_arg(token_payload.view(torch.uint8)),
             ptr_arg(token_scale.view(torch.uint8)),
@@ -3636,9 +3645,9 @@ def flydsl_moe_fused_quant_preshuffle(
     # A quantizing EP dispatch (fp8 or fp4) already put the payload and its e8m0
     # row on the wire: nothing left to convert, only scatter + preshuffle.
     prequantized = prequantized_scale is not None
-    if a_preshuffle and prequantized:
+    if a_preshuffle and prequantized and quant_mode != "fp4":
         raise NotImplementedError(
-            "A-preshuffle currently requires bf16 input rather than a prequantized wire payload"
+            "A-preshuffle currently supports only FP4 prequantized wire payloads"
         )
     if prequantized:
         # torch dtypes, not aiter.dtypes: this module deliberately imports only
@@ -3750,6 +3759,7 @@ def flydsl_moe_fused_quant_preshuffle(
             numel=numel,
             payload_bytes_per_row=Pb,
             scale_bytes_per_row=Ws,
+            prequantized=prequantized,
         ):
             if numel % source_topk:
                 raise ValueError(
@@ -3770,6 +3780,7 @@ def flydsl_moe_fused_quant_preshuffle(
                 scale_bytes_per_row=Ws,
                 warps_per_block=warps_per_block,
                 device=device,
+                prequantized_scale=prequantized_scale,
             )
 
         if _GroupedRowsQuantPath.supports(

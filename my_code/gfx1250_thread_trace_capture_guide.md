@@ -15,6 +15,8 @@
 
 文中路径的链接相对于本文件所在的 `aiter/my_code/`。远端路径以 `/data/yanguahe/code/wk_sp1/` 为共享根目录。
 
+2026-10-15 起，三种方法各有一个一键脚本：[`get_att_a_selfbuilt.sh`](get_att_a_selfbuilt.sh)（A）、[`get_att_b_rocm_sdk.sh`](get_att_b_rocm_sdk.sh)（B）、[`get_att_c_multigpu_device.sh`](get_att_c_multigpu_device.sh)（C）。用法和实测结果见第 9 节。
+
 ---
 
 ## 0. 判断容器类型
@@ -668,6 +670,12 @@ FlyDSL 缓存（`/root/.flydsl/cache/.../*.pkl`）中编译后的 MLIR 以 `bin 
 | `docker exec` 中的相对路径找不到脚本 | 容器默认 cwd 不同 | 使用绝对路径 |
 | `gpu_users.sh` 空闲时也返回 1，脚本提前退出 | 脚本的返回值约定 | 加 `\|\| true`，用独立的 sysfs/KFD 检查判断是否空闲 |
 | 采集结束出现 `Failed to destroy queue: 4107` | SDK cleanup 警告 | 记录在案，不作为 kernel 故障证据 |
+| 预检报告 0 个 kernel，`kernel_trace/` 下只有 `<pid>_results.db` | `rocprofv3` 1.1.0 和 1.3.5 的默认输出都是 rocpd SQLite，不写 CSV | 预检加 `--output-format csv`；从 `.db` 取名字时用 `kernels` view（只含实际 dispatch），不要用 `kernel_symbols`（含所有已加载 code object 的符号和 `.kd`） |
+| A/B：`<name> was not dispatched in the preflight trace` | 传入的不是完整 kernel 名（例如只传了测试打印的前缀），或 `TEST_CMD` 没有运行这个 kernel | 从报错列出的候选里取完整名字。E64 测试还会 dispatch 参考 GEMM1 `a8w4_tdm_fp4_t192x256x256_w2x2_b4_K7168_..._ostore2p_s3`（用于 `gemm1_ref_output_hash128`），不要选错 |
+| C：`<name> is not a function symbol of any code object loaded by the traced rank`，随后 `stopped: ...` | 传入的不是完整符号 | 第一次采集后即停止，不再跑其余 SIMD；从候选或 `executed_kernels_simd*.txt` 取完整名字 |
+| `analyze_att_capture.py: ... occupancy.json: unexpected occupancy top-level keys: 'events', 'occupancy_fields'` | 方法 B 的 SDK decoder 0.2 输出 occupancy 3.1.0：11 列，带 `occupancy_fields` 字段名 | 2026-10-15 起分析器按字段名取 `time`/`cu`/`simd`/`wave_id`/`start`/`kernel_id` 六列；3.0.0 格式的输出不变 |
+| 方法 C 的 `executed_kernels_simd*.txt` 只有 `<code_object_N+0x...>` | AMDGPU kernel 符号是 `.protected`，`llvm-objdump -t` 多出一列，按固定列号解析失败 | 2026-10-15 已修复，按 `.text` 列定位 size |
+| 方法 A 预检日志里 GEMM 时间只有约 0.8 us | `rocprofv3` 1.1.0 kernel trace 与测试自带的 Kineto 计时冲突 | profiler 下打印的时间一律不作为性能数据 |
 
 ---
 
@@ -680,3 +688,119 @@ FlyDSL 缓存（`/root/.flydsl/cache/.../*.pkl`）中编译后的 MLIR 以 `bin 
 | 2026-10-03 | a07-3 / `hyg_fyd1` | 当时最优 GEMM1（exact symbol，先 SIMD3 再 SIMD0–3） | A（`_safe` 脚本因缺少 0.2 decoder 失败后改用 A） | `hyg/moe_a4w4_pr` 分支 `my_code/dsr1_e64_t1536_topk8_moe_opt.md`（当前工作区的同名文件是较早版本）；远端 `my_code/thread_trace_runs/e64_t1536_topk8_gemm1_best_ldsseg5_xorm_exact_a07_3_20261003` |
 | 2026-10-03 | a07-3 / `hyg_fyd_e2e`（同期另一工作线） | GEMM1 fused A-preshuffle quant v115，all-SIMD | B，`_safe` 脚本 | [`gemm1_fused_apre_quant_optimization_log.md`](gemm1_fused_apre_quant_optimization_log.md) |
 | 2026-10-13～10-14 | f01-1 / `dsr1_ep4`；f01-2 / 独立容器 `codex-dsr1-gemm2-att-20261014` | 四卡 EP `_persist` 与 `_persist_epscatter` GEMM2，SIMD0–3 及隔离诊断 | C，device-based | [`dsr1_moe_ep_decoder_bug_fix.md`](dsr1_moe_ep_decoder_bug_fix.md) 第 7 节；归档 `.codex_tmp/f01_1_dsr1_gemm2_att_20261014/gemm2_att_complete.tar.gz` 等 |
+| 2026-10-15 | a07-3 / `hyg_fyd1`、`hyg_fyd_e2e` | FlyDSL GEMM1、GEMM2（E64/T1536/topk8，random），SIMD0–3 + `--ana-att` | A、B 一键脚本 | 第 9.4 节 |
+| 2026-10-15 | f01-2 / 新建 `dsr1_ep4`；f01-1 / `dsr1_ep4`（仅 fused SIMD0） | 四卡 EP base `_persist` 与 fused `_persist_epscatter` GEMM2，graph 区间，SIMD0–3 | C 一键脚本 | 第 9.4 节 |
+
+---
+
+## 9. 一键脚本（2026-10-15 实测）
+
+### 9.1 概览
+
+| 脚本 | 方法 | 运行位置 | 工具链 |
+|---|---|---|---|
+| [`get_att_a_selfbuilt.sh`](get_att_a_selfbuilt.sh) | A | `hyg_fyd1` 类容器，仓库根目录 | `rocprof_env.sh` + 自编译 `rocprofv3` 1.1.0 + `decoder_new` 0.1.5 + `comgr_new` |
+| [`get_att_b_rocm_sdk.sh`](get_att_b_rocm_sdk.sh) | B | `hyg_fyd_e2e` / `dsr1_ep4` 类容器，仓库根目录 | `_rocm_sdk_core` 的 `rocprofv3` 1.3.5 + `_rocm_sdk_devel/lib` 的 decoder 0.2 + `comgr_new` + `rocminfo` shim |
+| [`get_att_c_multigpu_device.sh`](get_att_c_multigpu_device.sh) | C | `dsr1_ep4` 类多卡容器，仓库根目录 | 用 SDK 头文件和库现场编译 device tool 与 decoder；`llvm-objdump` 做 PC→ISA |
+
+三个脚本的共同行为：
+
+- 每次 profiled 运行前检查所有 GPU 是否空闲（KFD 进程、`gpu_busy_percent`、`mem_info_vram_used`），忙时每 6 秒重试；`--no-wait-idle` 可关闭。
+- 输出目录已存在就拒绝运行；用 `flock` 防止同一容器内并发采集。
+- 结束时对输出目录 `chmod -R a+rwX`，并写 `summary.log`；`--archive` 额外打包。
+
+### 9.2 方法 A / B：单卡 dispatch-based
+
+两个脚本的参数相同：
+
+```bash
+bash my_code/get_att_a_selfbuilt.sh <KERNEL_NAME> <output-dir-name> "<TEST_CMD>" \
+    [--all-simd | --simd N] [--iteration N] [--se-mask HEX] [--ana-att] [--no-wait-idle] [--archive]
+```
+
+流程：
+
+1. **kernel trace 预检**：`rocprofv3 --kernel-trace --stats --output-format csv` 完整运行一次 `TEST_CMD`，从 CSV（没有时从 rocpd `.db` 的 `kernels` view）读出所有 dispatch 过的 kernel，核对 `KERNEL_NAME`（完整符号）在其中。不在时，在任何 ATT 运行之前停止，并列出以它开头、或与它公共前缀最长的已 dispatch kernel。
+2. **逐 SIMD 采集**：每个 SIMD 单独运行一次，YAML 用 `re.escape` 后的完整 symbol 精确匹配，`kernel_iteration_range: "[N]"`（默认 1），`att_target_cu: 1`，`att_buffer_size: 0x10000000`。
+3. **校验**：`.att` 非空、恰好一个 `code.json`、有 wave JSON、`code.json` 含目标 symbol、没有 `.long` / `v_illegal`。
+4. **`--ana-att`**：运行 `analyze_att_capture.py --dir <out> --no-plot`（要求 SE mask `0xf`）。
+
+每次运行使用私有 FlyDSL cache（`FLYDSL_RUNTIME_CACHE_DIR=<out>/.flydsl_cache`，结束后删除），保证 trace 的 kernel 由当前源码编译，同时不动共享的 `~/.flydsl/cache`。
+
+a07-3 实测命令（分别在 `hyg_fyd1`、`hyg_fyd_e2e` 的仓库根目录执行）。workload 与 `ROUNDS=1 bash ./my_code/run_moe_prefill_switch_ab.sh e2e-random --experts 64 --tokens 1536 --topk 8 --model-dim 7168 --inter-dim 2048` 的唯一 case（`custom_current`）相同：同样的 6 个环境变量和测试参数，只把 `--iters 20` 改成 `--iters 2`。trace 只取第一次 dispatch，iters 只影响运行时间。
+
+```bash
+ENVS="ENABLE_CK=0 AITER_MOE_EXPERT_BALANCE=true AITER_LOG_MORE=1 AITER_USE_GROUPED_GEMM=1 AITER_GROUPED_DEBUG=0 AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1"
+TEST="python3 -u my_code/test_flydsl_grouped_gemm_gfx1250.py --scenario bench --data-format a4w4 --act silu --no-bias --no-check-aot-cache --experts 64 --tokens 1536 --topk 8 --model-dim 7168 --inter-dim 2048 --iters 2"
+
+# 方法 A（hyg_fyd1）；方法 B 把脚本换成 get_att_b_rocm_sdk.sh，输出名换成 *_att_b
+bash my_code/get_att_a_selfbuilt.sh a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_q1r6_cn4_cm1_prefetch_apre_persist \
+    e64_t1536_gemm1_att_a "env $ENVS $TEST" --all-simd --ana-att
+bash my_code/get_att_a_selfbuilt.sh a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_cm1_prefetch_apre_persist \
+    e64_t1536_gemm2_att_a "env $ENVS $TEST" --all-simd --ana-att
+```
+
+注意：
+
+- `KERNEL_NAME` 必须是完整符号。测试打印的 `[bench kernel timing] gemm1/gemm2 ... symbol=` 只是前缀（例如 `..._K7168_e64_act1_q1r6_cn4`）。把前缀传给脚本时，预检会停下并列出以它开头的完整名字。完整名字也可以从预检的 `kernel_trace/**/*kernel_stats.csv` 中查到。
+- 这个测试除目标 GEMM1 外，还会 dispatch 参考 GEMM1 `a8w4_tdm_fp4_t192x256x256_w2x2_b4_K7168_..._ostore2p_s3`，选名字时不要选错。
+- 方法 B 的 decoder 0.2 输出 occupancy 3.1.0（11 列，带 `occupancy_fields`）。`analyze_att_capture.py` 自 2026-10-15 起支持该格式，对 3.0.0 格式的输出逐字节不变（用 a07-3 的方法 A 结果做过回归）。
+- 新 worktree 第一次 `import aiter` 会 JIT 编译 `module_aiter_core`、`module_moe_asm`。建议先不加 profiler 跑一次预检，再开始采集。
+
+### 9.3 方法 C：多卡 device-based
+
+```bash
+# dsr1_ep4 内，仓库根目录；workload 环境变量（MORI_*、AITER_*、FLYDSL_*）由调用方提供
+bash my_code/get_att_c_multigpu_device.sh <KERNEL_NAME> <output-dir-name> "<BENCH_ARGS>" \
+    [--all-simd | --simd N] [--region graph|gemm2] [--rank N] [--nproc N] [--se-mask HEX] \
+    [--no-wait-idle] [--no-analyze] [--archive]
+```
+
+流程：
+
+1. 确认 `aiter` 从当前仓库导入，定位 SDK，编译 `libtrace_mega_moe_agent.so` 和 `decode_mega_moe_agent`，输出到 `my_code/.att_device_tools`。
+2. 每个 SIMD 运行一次：
+   - 启动 `torchrun --standalone --nproc_per_node=N --no-python my_code/trace_mega_moe_rank.sh <BENCH_ARGS>`，只有 `--rank` 指定的 rank 预加载 device tool。
+   - `trace_mega_moe_without_profiler.py` 关闭 Kineto，在一次 graph replay 前后调用 `aiter_att_start/stop`；`--region gemm2` 时圈一次 eager K2048 GEMM2。
+3. 核对 `KERNEL_NAME`：必须是被 trace rank 已加载 code object 中的完整函数符号（`llvm-objdump -t`）。不是时立即停止，不再跑其余 SIMD，并列出候选符号。
+4. 解码每个 capture，得到 `decoded_capture<N>`；`analyze_mega_moe_device_att.py` 把 `KERNEL_NAME` 的 PC 映射到 ISA，生成 `analysis_capture<N>/analysis.json`。内容包括目标 wave 数、active wave × task、span、等待点、时钟、warnings、missing PCs。
+5. `logs/executed_kernels_simd<N>.txt` 列出 traced CU 上所有有 wave 的 kernel 及 wave 数，例如 `moe_scatter_preshuffled_a_*`（dispatch）和 `moe_gather_reduce_bf16_*`（combine）。分析其他 kernel 不需要重新采集，对同一 PID 目录手动运行 `analyze_mega_moe_device_att.py <pid_dir> --kernel <name> --objdump <llvm-objdump> --decoded decoded_capture1 --output <新目录>` 即可，`LD_LIBRARY_PATH` 取 `att_env.sh`。
+
+f01-2 实测（宿主机通过 `docker exec -e` 传入用户命令里的环境变量）：
+
+```bash
+docker exec \
+    -e AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1 -e MORI_V2_KERNEL_BACKEND=hip -e MORI_EP_TOKOFF_EXT=0 \
+    -e MEGA_DISPATCH=mori -e FLYDSL_DUMP_IR=0 -e MORI_GPU_ARCHS=gfx1250 -e FLYDSL_GPU_ARCH=gfx1250 \
+    -e AITER_FORCE_A8W4=0 -e AITER_MOE_EXPERT_BALANCE=True \
+    -e TRACE_ROOT=/data/yanguahe/code/wk_sp1/.codex_tmp/att_c_f012_20261015/runs \
+    -w /data/yanguahe/code/wk_sp1/aiter_moe_a4w4_pr_refactor_wt_ep4 dsr1_ep4 \
+    bash my_code/get_att_c_multigpu_device.sh \
+        a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_cm1_prefetch_apre_persist_epscatter \
+        ep4_gemm2_fused_graph_all_simd \
+        "-e 256 -k 8 -hd 7168 -id 2048 --layers 16 -tpr 1536 -q a4w4_mxfp4 --combine fused --warmup 5 --iters 2 --prof_replays 0 --acc_verify 0 --profile_table 0 --save_trace 0 --dispatch_wire fp4" \
+        --all-simd
+# base：KERNEL_NAME 去掉 _epscatter，--combine base
+```
+
+与用户原命令的差别：
+
+- `--combine both` 拆成 base、fused 两次，每次只圈一个模式。
+- `--iters 20 --profile_table 1` 改成 `--warmup 5 --iters 2 --prof_replays 0 --profile_table 0 --save_trace 0`，trace 只覆盖一次 graph replay，Kineto 由 runner 关闭。
+- 模型参数不变。
+
+f01-2 的 `dsr1_ep4` 按用户给的 `docker run` 命令新建（镜像 `rocm/fw-bringup:gfx1250-atom-20260930-na`）。代码是宿主机 worktree `/data/yanguahe/code/wk_sp1/aiter_moe_a4w4_pr_refactor_wt_ep4`（基于 `e749e6cef339`，叠加本地工作区修改）。容器内已有 flydsl 0.3.4.1，`module_aiter_core` 由首次导入 JIT 生成。
+
+### 9.4 2026-10-15 实测结果
+
+| 采集 | 远端目录 | 结果 |
+|---|---|---|
+| A GEMM1 | a07-3 `/data/yanguahe/code/wk_sp1/aiter_t256w2x4_e64_20261007/my_code/thread_trace_runs/e64_t1536_gemm1_att_a` | SIMD0–3 全部通过校验；每个 SIMD 4 个 SE 的 `.att`，`code.json` 3666 条；completion imbalance 均值 2.1% |
+| A GEMM2 | 同上 `.../e64_t1536_gemm2_att_a` | 全部通过；`code.json` 2709 条；imbalance 均值 1.7% |
+| B GEMM1 | a07-3 `/data/yanguahe/code/wk_sp1/aiter_moe_a4w4_pr_refactor_wt_fyd_e2e/my_code/thread_trace_runs/e64_t1536_gemm1_att_b` | 全部通过；3666 条；imbalance 均值 2.9% |
+| B GEMM2 | 同上 `.../e64_t1536_gemm2_att_b` | 全部通过；2709 条；imbalance 均值 2.0% |
+| C base GEMM2 | f01-2 `/data/yanguahe/code/wk_sp1/.codex_tmp/att_c_f012_20261015/runs/ep4_gemm2_base_graph_all_simd` | SIMD0–3 采集、解码均为 0；每个 SIMD 674–718 个目标 wave，128 个 active wave × 7 task；span 中位约 7.3 万 cycles；missing PCs 为 0，无 buffer full；SIMD3 有一条 `Decoder INFO records need review` |
+| C fused GEMM2 | 同上 `.../ep4_gemm2_fused_graph_all_simd` | 768–864 个目标 wave，128 × 7；span 中位 23.0–23.5 万 cycles；最大等待 `0x2a3c s_wait_loadcnt_dscnt 0x0`，中位 1.6–1.8 万 cycles |
+| C fused GEMM2 SIMD0 | f01-1 `/data/yanguahe/code/wk_sp1/.codex_tmp/att_c_20261015/runs/ep4_gemm2_fused_graph_simd0` | 790 个目标 wave，span 中位 230,818 cycles，与 f01-2 一致 |
+
+观察（未定位原因）：同一 kernel 在方法 A 下的 per-WGP envelope 比方法 B 长。以 SIMD3-select / SE3 的中位数为例，GEMM1 为 154,181 vs 123,127 cycles，GEMM2 为 77,091 vs 73,760 cycles。两边 `code.json` 指令数相同。不加 profiler 的预检（`--iters 20`，GPU 空闲）中，GEMM1 为 87.561 / 87.852 us，GEMM2 为 52.963 / 52.615 us（A / B），基本一致。跨方法比较 cycle 数前需要先确认这一差异的来源。
