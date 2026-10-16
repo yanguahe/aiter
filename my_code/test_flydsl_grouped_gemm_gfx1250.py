@@ -20,6 +20,11 @@ per-kernel bench that times gemm1 and gemm2 in isolation
 (``--scenario verify``), or a full sweep of every setting in a tuned-config
 CSV (``--scenario csv``; defaults to ``aiter/configs/tuned_grouped_fmoe.csv``,
 one benched case per row, override the file with ``--csv-path``).
+
+CLI ``--experts`` and ``--topk`` are always physical totals. With
+``--shared-experts 1``, the final physical expert is appended to every token
+after routed top-k selection with weight 1, so E65/topk9 means routed E64/topk8
+plus shared expert ID 64.
 """
 
 from __future__ import annotations
@@ -27,20 +32,25 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import inspect
 import os
 import re
 import sys
 from contextlib import nullcontext
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+# The container may already put this worktree later in PYTHONPATH, after an
+# installed /app/aiter tree. Move it to the front so direct execution always
+# imports the aiter package paired with this script.
+if REPO_ROOT in sys.path:
+    sys.path.remove(REPO_ROOT)
+sys.path.insert(0, REPO_ROOT)
 
 import pytest
 import torch
 
 from aiter import ActivationType, QuantType, logger
-from aiter.aot.flydsl.common import run_only_env
+from aiter.aot.flydsl.common import override_env, run_only_env
 from aiter.fused_moe import (
     fused_moe,
     fused_topk,
@@ -60,9 +70,9 @@ pytestmark = [pytest.mark.l2_device, pytest.mark.rocm_lower]
 
 # Routing: normal (random) by default; round-robin balanced only when
 # AITER_MOE_EXPERT_BALANCE=1 (mirrors op_tests/test_moe_2stage.py).
-AITER_MOE_EXPERT_BALANCE = (
-    os.environ.get("AITER_MOE_EXPERT_BALANCE", "False").lower() == "true"
-)
+AITER_MOE_EXPERT_BALANCE = os.environ.get(
+    "AITER_MOE_EXPERT_BALANCE", "False"
+).strip().lower() in ("1", "true")
 
 
 # Force topk to activate only the first n experts (ids 0..n-1). 0 = unset.
@@ -78,6 +88,41 @@ def parse_num_expert_activated():
 
 
 AITER_MOE_NUM_EXPERT_ACTIVATED = parse_num_expert_activated()
+
+SHARED_EXPERTS_ENV = "AITER_MOE_NUM_SHARED_EXPERTS"
+
+
+def _resolve_moe_geometry(
+    experts: int,
+    topk: int,
+    shared_experts: int,
+) -> tuple[int, int]:
+    """Resolve physical CLI geometry into routed-only geometry.
+
+    ``experts`` and ``topk`` always describe the physical grouped-MoE launch.
+    The currently supported shared mode appends the final physical expert after
+    routed top-k selection, so routed geometry is ``(E - 1, topk - 1)``.
+    """
+    if shared_experts not in (0, 1):
+        raise ValueError(f"shared_experts must be 0 or 1, got {shared_experts}")
+    if experts <= shared_experts:
+        raise ValueError(
+            f"experts={experts} must be greater than shared_experts={shared_experts}"
+        )
+    if topk <= shared_experts:
+        raise ValueError(
+            f"topk={topk} must be greater than shared_experts={shared_experts}"
+        )
+    routed_experts = experts - shared_experts
+    routed_topk = topk - shared_experts
+    if routed_topk > routed_experts:
+        raise ValueError(
+            f"routed_topk={routed_topk} exceeds routed_experts={routed_experts} "
+            f"(physical experts={experts}, topk={topk}, "
+            f"shared_experts={shared_experts})"
+        )
+    return routed_experts, routed_topk
+
 
 SCALE_BLOCK = 32
 DEFAULT_SCALE_BYTE = 127  # e8m0 byte for 2^0 = 1.0
@@ -130,6 +175,40 @@ VERIFY_TOL_A8W4 = 0.02
 # logits_diff = ||x-y||^2 / (||x||^2 + ||y||^2).  rel_l2 is kept as an
 # informational print only; logits_diff < 0.01 is the actual pass/fail gate.
 LOGITS_DIFF_TOL = 0.01
+
+
+def _run_perftest_with_trace_compat(run_perftest, func, **perf_kwargs):
+    """Request profiler rows when the imported run_perftest API supports them.
+
+    Older aiter versions accept arbitrary ``**kwargs`` but forward them to
+    ``func``. Passing ``return_trace_df`` to those versions therefore reaches
+    the zero-argument benchmark closure and raises ``TypeError``. Detect the
+    explicit API parameter instead; the legacy path keeps end-to-end timing and
+    returns ``None`` for the unavailable profiler table.
+    """
+    try:
+        supports_trace_df = (
+            "return_trace_df" in inspect.signature(run_perftest).parameters
+        )
+    except (TypeError, ValueError):
+        supports_trace_df = False
+
+    if supports_trace_df:
+        return run_perftest(
+            func,
+            return_trace_df=True,
+            **perf_kwargs,
+        )
+
+    module = inspect.getmodule(run_perftest)
+    module_path = getattr(module, "__file__", None) or repr(module)
+    logger.warning(
+        "run_perftest from %s has no return_trace_df API; "
+        "using legacy timing path without per-kernel trace data",
+        module_path,
+    )
+    out, us = run_perftest(func, **perf_kwargs)
+    return out, us, None
 
 
 def _empty_gemm_summary() -> dict[str, str]:
@@ -588,6 +667,323 @@ def test_effective_bytes_are_tile_independent_fixture():
     assert fine_tiles["executed_flops"] != coarse_tiles_multicast["executed_flops"]
 
 
+def test_run_perftest_trace_api_compatibility_fixture():
+    """Legacy kwargs must reach the benchmark closure only when intentional."""
+    legacy_forwarded_kwargs = []
+
+    def legacy_run_perftest(
+        func,
+        *args,
+        num_iters=101,
+        num_warmup=2,
+        testGraph=False,
+        **kwargs,
+    ):
+        del num_iters, num_warmup, testGraph
+        legacy_forwarded_kwargs.append(kwargs.copy())
+        return func(*args, **kwargs), 1.25
+
+    legacy_out, legacy_us, legacy_trace = _run_perftest_with_trace_compat(
+        legacy_run_perftest,
+        lambda: "legacy-output",
+        num_warmup=3,
+        num_iters=7,
+        testGraph=False,
+    )
+    assert (legacy_out, legacy_us, legacy_trace) == (
+        "legacy-output",
+        1.25,
+        None,
+    )
+    assert legacy_forwarded_kwargs == [{}]
+
+    trace = object()
+    modern_trace_requests = []
+
+    def modern_run_perftest(
+        func,
+        *args,
+        num_iters=101,
+        num_warmup=2,
+        testGraph=False,
+        return_trace_df=False,
+        **kwargs,
+    ):
+        del num_iters, num_warmup, testGraph
+        modern_trace_requests.append(return_trace_df)
+        result = func(*args, **kwargs)
+        if return_trace_df:
+            return result, 2.5, trace
+        return result, 2.5
+
+    modern_out, modern_us, modern_trace = _run_perftest_with_trace_compat(
+        modern_run_perftest,
+        lambda: "modern-output",
+        num_warmup=3,
+        num_iters=7,
+        testGraph=False,
+    )
+    assert (modern_out, modern_us, modern_trace) == (
+        "modern-output",
+        2.5,
+        trace,
+    )
+    assert modern_trace_requests == [True]
+
+
+def test_e64_t1536_to_t2048_uses_exact_t256_for_any_routing(monkeypatch):
+    """T1536..T2048 select un-suffixed persistent t256 for any routing."""
+    from aiter.ops.flydsl.grouped_gemm_mxfp4 import (
+        supports_gfx1250_a_preshuffle,
+    )
+    from aiter.ops.flydsl.grouped_moe_gfx1250 import (
+        _apply_nonbalanced_partial_safe_profile,
+        _find_routed_e64_topk8_token_profile,
+    )
+
+    monkeypatch.delenv(SHARED_EXPERTS_ENV, raising=False)
+    common = {
+        "experts": 64,
+        "topk": 8,
+        "model_dim": 7168,
+        "inter_dim": 2048,
+        "activation": ActivationType.Silu,
+        "is_grouped_a4w4": True,
+        "use_bias": False,
+        "is_ep": False,
+        "enable_ep_scatter": False,
+    }
+    exact_t256 = {
+        "tile_m": 256,
+        "tile_m2": 256,
+        "n_warp": 2,
+        "fused_gemm1_n_warp": 4,
+        "n_warp2": 4,
+        "num_buffers": 4,
+        "balanced_m192": 0,
+        "partial_m_direct_scale": 0,
+        "partial_m_drain_output": 0,
+        "allow_partial_m_exact": 1,
+    }
+
+    def selected(profile):
+        return {key: profile[key] for key in exact_t256}
+
+    for tokens in (1536, 1537, 2047, 2048):
+        profile = _find_routed_e64_topk8_token_profile(tokens=tokens, **common)
+        assert profile is not None
+        assert selected(profile) == exact_t256
+        for balanced_routing in (False, True):
+            routed = dict(profile)
+            _apply_nonbalanced_partial_safe_profile(
+                routed,
+                fallback_tile_m=256,
+                balanced_routing=balanced_routing,
+                enable_ep_scatter=False,
+            )
+            assert selected(routed) == exact_t256
+
+    # Physical E65/topk9 is not inferred as shared. Explicit metadata converts
+    # it to routed E64/topk8 for profile selection only.
+    assert (
+        _find_routed_e64_topk8_token_profile(
+            tokens=1536,
+            **{**common, "experts": 65, "topk": 9},
+        )
+        is None
+    )
+    monkeypatch.setenv(SHARED_EXPERTS_ENV, "1")
+    e65_profile = _find_routed_e64_topk8_token_profile(
+        tokens=1536,
+        **{**common, "experts": 65, "topk": 9},
+    )
+    assert e65_profile is not None
+    assert selected(e65_profile) == exact_t256
+    assert (
+        _find_routed_e64_topk8_token_profile(
+            tokens=1536,
+            **{**common, "experts": 66, "topk": 9},
+        )
+        is None
+    )
+    assert (
+        _find_routed_e64_topk8_token_profile(
+            tokens=1536,
+            **{**common, "experts": 65, "topk": 10},
+        )
+        is None
+    )
+
+    monkeypatch.setenv(SHARED_EXPERTS_ENV, "0")
+    t4096 = _find_routed_e64_topk8_token_profile(tokens=4096, **common)
+    assert t4096 is not None
+    assert t4096["allow_partial_m_exact"] == 0
+    _apply_nonbalanced_partial_safe_profile(
+        t4096,
+        fallback_tile_m=256,
+        balanced_routing=False,
+        enable_ep_scatter=False,
+    )
+    assert (
+        t4096["partial_m_direct_scale"],
+        t4096["partial_m_drain_output"],
+        t4096["allow_partial_m_exact"],
+    ) == (1, 1, 0)
+
+    monkeypatch.setenv("AITER_MOE_EXPERT_BALANCE", "false")
+    support_common = {
+        "tile_m": 256,
+        "tile_n": 256,
+        "tile_k": 256,
+        "m_warp": 2,
+        "num_buffers": 4,
+        "out_is_f16": 0,
+        "a_is_fp4": 1,
+        "has_bias": 0,
+        "cluster_n": 4,
+        "next_stage_prefetch": 1,
+        "n_experts": 64,
+    }
+    gemm1_fused_w2x4 = {
+        "N": 4096,
+        "K": 7168,
+        "n_warp": 4,
+        "stage1_act": 1,
+        "stage1_quant_out": 1,
+    }
+    gemm2_w2x4 = {
+        "N": 7168,
+        "K": 2048,
+        "n_warp": 4,
+        "stage1_act": 0,
+        "stage1_quant_out": 0,
+    }
+    for stage in (gemm1_fused_w2x4, gemm2_w2x4):
+        assert not supports_gfx1250_a_preshuffle(**support_common, **stage)
+        assert supports_gfx1250_a_preshuffle(
+            **support_common, **stage, allow_partial_m_exact=1
+        )
+        assert supports_gfx1250_a_preshuffle(
+            **support_common,
+            **stage,
+            partial_m_direct_scale=1,
+            partial_m_drain_output=1,
+        )
+    assert supports_gfx1250_a_preshuffle(
+        **{**support_common, "n_experts": 65},
+        **gemm1_fused_w2x4,
+        allow_partial_m_exact=1,
+    )
+
+
+@pytest.mark.parametrize("raw", ["", "-1", "2", "not-an-int"])
+def test_shared_expert_selector_metadata_is_strict(monkeypatch, raw):
+    """Selector metadata accepts exactly integer 0 or 1."""
+    from aiter.ops.flydsl.grouped_moe_gfx1250 import (
+        _find_routed_e64_topk8_token_profile,
+    )
+
+    monkeypatch.setenv(SHARED_EXPERTS_ENV, raw)
+    with pytest.raises(ValueError, match=SHARED_EXPERTS_ENV):
+        _find_routed_e64_topk8_token_profile(
+            tokens=1536,
+            experts=65,
+            topk=9,
+            model_dim=7168,
+            inter_dim=2048,
+            activation=ActivationType.Silu,
+            is_grouped_a4w4=True,
+            use_bias=False,
+            is_ep=False,
+            enable_ep_scatter=False,
+        )
+
+
+@pytest.mark.parametrize(("experts", "topk"), [(1, 9), (65, 1), (3, 5)])
+def test_shared_expert_selector_rejects_invalid_geometry(monkeypatch, experts, topk):
+    """Shared selector metadata validates physical and routed geometry."""
+    from aiter.ops.flydsl.grouped_moe_gfx1250 import (
+        _find_routed_e64_topk8_token_profile,
+    )
+
+    monkeypatch.setenv(SHARED_EXPERTS_ENV, "1")
+    with pytest.raises(ValueError):
+        _find_routed_e64_topk8_token_profile(
+            tokens=1536,
+            experts=experts,
+            topk=topk,
+            model_dim=7168,
+            inter_dim=2048,
+            activation=ActivationType.Silu,
+            is_grouped_a4w4=True,
+            use_bias=False,
+            is_ep=False,
+            enable_ep_scatter=False,
+        )
+
+
+def test_t256_w2x4_gemm2_admission_ignores_expert_count(monkeypatch):
+    """The t256/w2x4 GEMM2 accepts K2048/K3072 for every positive E."""
+    from aiter.ops.flydsl.grouped_gemm_mxfp4 import (
+        supports_gfx1250_a_preshuffle,
+    )
+
+    monkeypatch.setenv("AITER_MOE_EXPERT_BALANCE", "false")
+    common = {
+        "N": 7168,
+        "tile_m": 256,
+        "tile_n": 256,
+        "tile_k": 256,
+        "m_warp": 2,
+        "n_warp": 4,
+        "num_buffers": 4,
+        "out_is_f16": 0,
+        "a_is_fp4": 1,
+        "stage1_act": 0,
+        "stage1_quant_out": 0,
+        "has_bias": 0,
+        "cluster_n": 4,
+        "next_stage_prefetch": 1,
+        "allow_partial_m_exact": 1,
+    }
+    for n_experts in (1, 32, 64, 96, 128):
+        for k_dim in (2048, 3072):
+            assert supports_gfx1250_a_preshuffle(
+                **common,
+                K=k_dim,
+                n_experts=n_experts,
+            )
+
+    assert not supports_gfx1250_a_preshuffle(
+        **common,
+        K=4096,
+        n_experts=64,
+    )
+    assert not supports_gfx1250_a_preshuffle(
+        **{**common, "N": 4096},
+        K=2048,
+        n_experts=64,
+    )
+
+    # Keep the legacy t192/w2x4 specialization scoped to E64/K2048.
+    t192 = {**common, "tile_m": 192, "allow_partial_m_exact": 0}
+    assert supports_gfx1250_a_preshuffle(
+        **t192,
+        K=2048,
+        n_experts=64,
+    )
+    assert not supports_gfx1250_a_preshuffle(
+        **t192,
+        K=2048,
+        n_experts=32,
+    )
+    assert not supports_gfx1250_a_preshuffle(
+        **t192,
+        K=3072,
+        n_experts=64,
+    )
+
+
 def test_profiled_grouped_gemm_timing_extraction_fixture():
     """CPU-only trace fixtures for A8W4/A4W4 matching and ambiguity guards."""
 
@@ -1003,7 +1399,13 @@ def init_weight_scales(
     return (r + (DEFAULT_SCALE_BYTE - 1)).to(torch.uint8)
 
 
-def _make_routing_score(tokens: int, experts: int, topk: int) -> torch.Tensor:
+def _make_routing_score(
+    tokens: int,
+    experts: int,
+    topk: int,
+    *,
+    device: torch.device | str | None = None,
+) -> torch.Tensor:
     """Build the ``(tokens, experts)`` gating score honoring the routing env
     controls: ``AITER_MOE_NUM_EXPERT_ACTIVATED=n`` (highest priority) activates
     n randomly-chosen experts (round-robin balanced); ``AITER_MOE_EXPERT_BALANCE``
@@ -1016,35 +1418,193 @@ def _make_routing_score(tokens: int, experts: int, topk: int) -> torch.Tensor:
                 f"AITER_MOE_NUM_EXPERT_ACTIVATED={n_act} is invalid: must be in "
                 f"[topk={topk}, min(experts={experts}, tokens*topk={tokens * topk})]"
             )
-        sel = torch.randperm(experts)[:n_act]  # random active expert ids
-        score = torch.full((tokens, experts), float("-inf"), dtype=torch.float32)
-        slot = torch.arange(tokens * topk) % n_act  # round-robin over active set
-        rows = torch.arange(tokens).repeat_interleave(topk)
+        sel = torch.randperm(experts, device=device)[:n_act]
+        score = torch.full(
+            (tokens, experts),
+            float("-inf"),
+            dtype=torch.float32,
+            device=device,
+        )
+        slot = torch.arange(tokens * topk, device=device) % n_act
+        rows = torch.arange(tokens, device=device).repeat_interleave(topk)
         score[rows, sel[slot]] = 1.0
     elif AITER_MOE_EXPERT_BALANCE:
-        score = torch.zeros((tokens, experts), dtype=torch.float32)
-        start_col, end_col = 0, topk
-        for token_id in range(tokens):
-            score[token_id, start_col:end_col] = 1.0
-            start_col = end_col % experts
-            end_col = start_col + topk
+        score = torch.zeros((tokens, experts), dtype=torch.float32, device=device)
+        slots = torch.arange(tokens * topk, device=device).view(tokens, topk)
+        score.scatter_(1, slots % experts, 1.0)
     else:
-        score = torch.randn((tokens, experts), dtype=torch.float32)
+        score = torch.randn((tokens, experts), dtype=torch.float32, device=device)
     return score
 
 
 def _make_topk(
-    hidden_states: torch.Tensor, experts: int, topk: int
+    hidden_states: torch.Tensor,
+    experts: int,
+    topk: int,
+    shared_experts: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Route via ``fused_topk``: normal (random gating) by default; round-robin
-    balanced gating when ``AITER_MOE_EXPERT_BALANCE=1`` (mirrors
-    op_tests/test_moe_2stage.py). ``AITER_MOE_NUM_EXPERT_ACTIVATED=n`` (highest
-    priority) restricts topk to the first n experts. Returns
-    ``(topk_ids, topk_weights)`` on the same device as ``hidden_states``."""
+    """Build physical routes while keeping shared experts out of routed top-k.
+
+    ``experts``/``topk`` are physical totals. With one shared expert, only
+    ``experts - 1`` score columns enter ``fused_topk(..., topk - 1, True)``;
+    physical expert ``experts - 1`` is then appended with weight exactly 1.
+    """
+    routed_experts, routed_topk = _resolve_moe_geometry(experts, topk, shared_experts)
     tokens = hidden_states.shape[0]
-    score = _make_routing_score(tokens, experts, topk)
-    topk_w, topk_id = fused_topk(hidden_states, score, topk, True)
-    return topk_id.to(torch.int32), topk_w
+    score = _make_routing_score(
+        tokens,
+        routed_experts,
+        routed_topk,
+        device=hidden_states.device,
+    )
+    topk_w, topk_id = fused_topk(hidden_states, score, routed_topk, True)
+    topk_id = topk_id.to(torch.int32)
+    if shared_experts == 0:
+        return topk_id, topk_w
+
+    expected_routed_shape = (tokens, routed_topk)
+    if tuple(topk_id.shape) != expected_routed_shape:
+        raise RuntimeError(
+            f"routed topk IDs must have shape {expected_routed_shape}, "
+            f"got {tuple(topk_id.shape)}"
+        )
+    if tuple(topk_w.shape) != expected_routed_shape:
+        raise RuntimeError(
+            f"routed topk weights must have shape {expected_routed_shape}, "
+            f"got {tuple(topk_w.shape)}"
+        )
+    if topk_w.dtype not in (torch.float32, torch.bfloat16):
+        raise TypeError(
+            "shared route weights require fused_topk weights in FP32 or BF16, "
+            f"got {topk_w.dtype}"
+        )
+    shared_id = routed_experts
+    shared_ids = torch.full(
+        (tokens, 1),
+        shared_id,
+        dtype=torch.int32,
+        device=topk_id.device,
+    )
+    shared_weights = torch.ones(
+        (tokens, 1),
+        dtype=topk_w.dtype,
+        device=topk_w.device,
+    )
+    physical_ids = torch.cat((topk_id, shared_ids), dim=1)
+    physical_weights = torch.cat((topk_w, shared_weights), dim=1)
+
+    routed_ids = physical_ids[:, :routed_topk]
+    if bool(((routed_ids < 0) | (routed_ids >= routed_experts)).any().item()):
+        raise RuntimeError("routed expert IDs escaped the routed expert range")
+    if routed_topk > 1:
+        sorted_ids = routed_ids.sort(dim=1).values
+        if bool((sorted_ids[:, 1:] == sorted_ids[:, :-1]).any().item()):
+            raise RuntimeError("a token contains duplicate routed expert IDs")
+    if not bool((physical_ids[:, -1] == shared_id).all().item()):
+        raise RuntimeError("shared expert must occupy the final physical route")
+    if int((physical_ids == shared_id).sum().item()) != tokens:
+        raise RuntimeError("shared expert route count must equal the token count")
+    if not bool((physical_weights[:, -1] == 1).all().item()):
+        raise RuntimeError("shared expert route weight must be exactly 1")
+    return physical_ids, physical_weights
+
+
+@pytest.mark.parametrize("balanced", [False, True], ids=["random", "balanced"])
+@pytest.mark.parametrize("weight_dtype", [torch.float32, torch.bfloat16])
+def test_shared_expert_physical_routing_fixture(monkeypatch, balanced, weight_dtype):
+    """CPU-only E65/topk9 construction keeps shared routes fixed and separate."""
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "AITER_MOE_EXPERT_BALANCE", balanced)
+    monkeypatch.setattr(module, "AITER_MOE_NUM_EXPERT_ACTIVATED", 0)
+    fused_calls = []
+
+    def _cpu_fused_topk(hidden, score, routed_topk, renormalize):
+        del hidden
+        fused_calls.append((tuple(score.shape), routed_topk, renormalize))
+        probs = torch.softmax(score.float(), dim=-1)
+        weights, ids = torch.topk(probs, routed_topk, dim=-1)
+        if renormalize:
+            weights = weights / weights.sum(dim=-1, keepdim=True)
+        return weights.to(weight_dtype), ids.to(torch.int32)
+
+    monkeypatch.setattr(module, "fused_topk", _cpu_fused_topk)
+    tokens = 16
+    hidden = torch.zeros((tokens, 4), dtype=torch.bfloat16, device="cpu")
+    topk_id, topk_w = _make_topk(
+        hidden,
+        experts=65,
+        topk=9,
+        shared_experts=1,
+    )
+
+    assert fused_calls == [((tokens, 64), 8, True)]
+    assert tuple(topk_id.shape) == (tokens, 9)
+    assert tuple(topk_w.shape) == (tokens, 9)
+    assert topk_w.dtype == weight_dtype
+    routed = topk_id[:, :8]
+    assert bool(((0 <= routed) & (routed < 64)).all())
+    sorted_routed = routed.sort(dim=1).values
+    assert bool((sorted_routed[:, 1:] != sorted_routed[:, :-1]).all())
+    assert bool((topk_id[:, -1] == 64).all())
+    assert torch.equal(
+        topk_w[:, -1],
+        torch.ones(tokens, dtype=weight_dtype, device="cpu"),
+    )
+    counts = torch.bincount(topk_id.reshape(-1).long(), minlength=65)
+    assert int(counts[64]) == tokens
+    if balanced:
+        assert counts[:64].tolist() == [2] * 64
+
+
+def test_shared_zero_preserves_legacy_routing_fixture(monkeypatch):
+    """CPU-only shared=0 path forwards the original E/topk unchanged."""
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "AITER_MOE_EXPERT_BALANCE", False)
+    monkeypatch.setattr(module, "AITER_MOE_NUM_EXPERT_ACTIVATED", 0)
+    expected_ids = torch.tensor([[1, 3], [0, 4]], dtype=torch.int32, device="cpu")
+    expected_weights = torch.tensor(
+        [[0.75, 0.25], [0.6, 0.4]], dtype=torch.float32, device="cpu"
+    )
+    calls = []
+
+    def _cpu_fused_topk(hidden, score, routed_topk, renormalize):
+        del hidden
+        calls.append((tuple(score.shape), routed_topk, renormalize))
+        return expected_weights, expected_ids
+
+    monkeypatch.setattr(module, "fused_topk", _cpu_fused_topk)
+    hidden = torch.zeros((2, 4), dtype=torch.bfloat16, device="cpu")
+    actual_ids, actual_weights = _make_topk(hidden, experts=5, topk=2)
+    assert calls == [((2, 5), 2, True)]
+    assert actual_ids is expected_ids
+    assert actual_weights is expected_weights
+
+
+@pytest.mark.parametrize(
+    ("experts", "topk", "shared_experts"),
+    [
+        (65, 9, -1),
+        (65, 9, 2),
+        (1, 2, 1),
+        (65, 1, 1),
+        (3, 4, 1),
+    ],
+)
+def test_shared_expert_geometry_rejects_invalid_combinations(
+    experts, topk, shared_experts
+):
+    with pytest.raises(ValueError):
+        _resolve_moe_geometry(experts, topk, shared_experts)
+
+
+def test_num_expert_activated_uses_routed_geometry(monkeypatch):
+    """CPU-only activation-count validation excludes the shared expert."""
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "AITER_MOE_EXPERT_BALANCE", False)
+    monkeypatch.setattr(module, "AITER_MOE_NUM_EXPERT_ACTIVATED", 65)
+    hidden = torch.zeros((16, 4), dtype=torch.bfloat16, device="cpu")
+    with pytest.raises(ValueError, match=r"experts=64"):
+        _make_topk(hidden, experts=65, topk=9, shared_experts=1)
 
 
 def _gguu_to_gugu_rows(t: torch.Tensor) -> torch.Tensor:
@@ -1064,6 +1624,7 @@ def _run_grouped_via_fused_moe(
     experts: int,
     tokens: int,
     topk: int,
+    shared_experts: int = 0,
     model_dim: int,
     inter_dim: int,
     data_format: str,  # "a4w4" | "a8w4"
@@ -1109,6 +1670,7 @@ def _run_grouped_via_fused_moe(
     """
     if data_format not in ("a4w4", "a8w4"):
         raise ValueError(f"data_format must be a4w4 or a8w4, got {data_format!r}")
+    _resolve_moe_geometry(experts, topk, shared_experts)
 
     pipeline_injection = nullcontext(None)
     pipeline_backend_raw = os.environ.get(
@@ -1180,7 +1742,12 @@ def _run_grouped_via_fused_moe(
         hidden = (torch.randn((tokens, K)) * 0.5).to(torch.bfloat16)
 
     # Routing: normal (random) by default; balanced if AITER_MOE_EXPERT_BALANCE.
-    topk_id, topk_w = _make_topk(hidden, experts, topk)
+    topk_id, topk_w = _make_topk(
+        hidden,
+        experts,
+        topk,
+        shared_experts=shared_experts,
+    )
     topk_w = topk_w.to(torch.bfloat16)
 
     # ---- prep grouped GEMM inputs ----
@@ -1269,12 +1836,12 @@ def _run_grouped_via_fused_moe(
             # data is the last profiled output.
             from aiter.test_common import run_perftest
 
-            out, us, trace_df = run_perftest(
+            out, us, trace_df = _run_perftest_with_trace_compat(
+                run_perftest,
                 _call,
                 num_warmup=warmup,
                 num_iters=iters,
                 testGraph=False,
-                return_trace_df=True,
             )
         else:
             # Verify: validate the eager (graph-off) path; no timing.
@@ -1341,6 +1908,11 @@ def _run_grouped_via_fused_moe(
     route_counts = (
         torch.bincount(topk_id.reshape(-1).long(), minlength=experts).cpu().tolist()
     )
+    if shared_experts == 1 and route_counts[-1] != tokens:
+        raise RuntimeError(
+            f"shared expert route count must equal tokens={tokens}, "
+            f"got {route_counts[-1]}"
+        )
     return (
         out,
         ref,
@@ -1412,6 +1984,7 @@ def run_moe(
     experts: int = 4,
     tokens: int = 8,
     topk: int = 2,
+    shared_experts: int = 0,
     model_dim: int = 512,
     inter_dim: int = 512,
     activation: ActivationType = ActivationType.Swiglu,
@@ -1436,6 +2009,7 @@ def run_moe(
     (op_tests/test_moe_2stage.py).  rel_l2 (~= sqrt(2*logits_diff)) is printed
     for reference only.  Returns a metrics dict (with ``us`` when benched).
     """
+    routed_experts, routed_topk = _resolve_moe_geometry(experts, topk, shared_experts)
     _require_gfx1250()
     act = {
         ActivationType.Silu: "silu",
@@ -1446,7 +2020,7 @@ def run_moe(
 
     # --- grouped FlyDSL vs PyTorch fp32 ref (profiled eager if bench) ---
     run_only = run_only_env() if check_aot_cache else nullcontext()
-    with run_only:
+    with override_env(SHARED_EXPERTS_ENV, str(shared_experts)), run_only:
         (
             out,
             ref,
@@ -1462,6 +2036,7 @@ def run_moe(
             experts=experts,
             tokens=tokens,
             topk=topk,
+            shared_experts=shared_experts,
             model_dim=model_dim,
             inter_dim=inter_dim,
             data_format=data_format,
@@ -1529,6 +2104,12 @@ def run_moe(
         "gemm2_output_hash128": gemm2_output_hash128,
         "ref_output_hash128": ref_output_hash128,
         "moe_output_hash128": moe_output_hash128,
+        "route_counts": route_counts,
+        "physical_experts": experts,
+        "physical_topk": topk,
+        "routed_experts": routed_experts,
+        "routed_topk": routed_topk,
+        "shared_experts": shared_experts,
     }
     metrics.update(_empty_gemm_summary())
 
@@ -1925,7 +2506,8 @@ def run_csv_scenario(args) -> None:
         print(
             f"\n===== csv row {idx}: {data_format} {act} "
             f"tokens={tokens} model_dim={model_dim} inter_dim={inter_dim} "
-            f"experts={experts} topk={topk} =====",
+            f"experts={experts} topk={topk} "
+            f"shared_experts={args.shared_experts} =====",
             flush=True,
         )
         # Route each row to its format (a8w4 needs AITER_FORCE_A8W4=1).
@@ -1937,6 +2519,7 @@ def run_csv_scenario(args) -> None:
                 experts=experts,
                 tokens=tokens,
                 topk=topk,
+                shared_experts=args.shared_experts,
                 model_dim=model_dim,
                 inter_dim=inter_dim,
                 tol=tol,
@@ -1963,6 +2546,7 @@ def run_csv_scenario(args) -> None:
                     "inter_dim": inter_dim,
                     "experts": experts,
                     "topk": topk,
+                    "shared_experts": args.shared_experts,
                     "logits_diff": float("nan"),
                     "rel_l2": float("nan"),
                     "pass": False,
@@ -1985,6 +2569,7 @@ def run_csv_scenario(args) -> None:
                 "inter_dim": inter_dim,
                 "experts": experts,
                 "topk": topk,
+                "shared_experts": args.shared_experts,
                 "logits_diff": metrics["logits_diff"],
                 "rel_l2": metrics["rel_l2"],
                 "pass": metrics["passed"],
@@ -2016,9 +2601,6 @@ def run_csv_scenario(args) -> None:
 
 
 def main() -> None:
-    if not is_gfx1250():
-        print("skipping: requires gfx1250")
-        sys.exit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
@@ -2036,7 +2618,12 @@ def main() -> None:
         f"(default: {DEFAULT_CSV_PATH}). Each row is one case.",
     )
     parser.add_argument("--data-format", choices=("a4w4", "a8w4"), default="a8w4")
-    parser.add_argument("--experts", type=int, default=256)
+    parser.add_argument(
+        "--experts",
+        type=int,
+        default=256,
+        help="physical total experts, including --shared-experts",
+    )
     parser.add_argument(
         "--tokens",
         type=int,
@@ -2046,7 +2633,20 @@ def main() -> None:
         help="one or more space-separated token counts; the scenario runs "
         "once per value, e.g. --tokens 64 128 256",
     )
-    parser.add_argument("--topk", type=int, default=8)
+    parser.add_argument(
+        "--topk",
+        type=int,
+        default=8,
+        help="physical routes per token, including --shared-experts",
+    )
+    parser.add_argument(
+        "--shared-experts",
+        type=int,
+        default=0,
+        help="number of always-appended physical experts (currently only 0 or 1); "
+        "with 1, the final expert is shared and routed geometry is "
+        "(experts - 1, topk - 1)",
+    )
     parser.add_argument("--model-dim", type=int, default=7168)
     parser.add_argument("--inter-dim", type=int, default=256)
     parser.add_argument("--warmup", type=int, default=5)
@@ -2108,6 +2708,20 @@ def main() -> None:
         "miss raises. Pass this flag to allow runtime JIT compilation.",
     )
     args = parser.parse_args()
+    if args.shared_experts not in (0, 1):
+        parser.error(f"--shared-experts must be 0 or 1, got {args.shared_experts}")
+    if args.scenario != "csv":
+        try:
+            _resolve_moe_geometry(
+                args.experts,
+                args.topk,
+                args.shared_experts,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    if not is_gfx1250():
+        print("skipping: requires gfx1250")
+        sys.exit(0)
     if not args.real_gemm:
         _mock_grouped_gemm()
 
@@ -2147,6 +2761,7 @@ def main() -> None:
             experts=args.experts,
             tokens=args.tokens,
             topk=args.topk,
+            shared_experts=args.shared_experts,
             model_dim=args.model_dim,
             inter_dim=args.inter_dim,
             tol=tol,
@@ -2171,6 +2786,7 @@ def main() -> None:
                 "experts": args.experts,
                 "tokens": _tok,
                 "topk": args.topk,
+                "shared_experts": args.shared_experts,
                 "model_dim": args.model_dim,
                 "inter_dim": args.inter_dim,
                 "logits_diff": metrics["logits_diff"],

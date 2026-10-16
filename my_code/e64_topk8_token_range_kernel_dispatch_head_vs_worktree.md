@@ -1265,24 +1265,36 @@ Ruff 和 `git diff --check`。本地和 a07-3 仅同步任务所需文件，未 
 
 ### 最终 GEMM1/GEMM2 kernel 选择配置表
 
-aligned override 的条件是 `tokens * topk` 能整除 `experts`，且每个 expert 的 route
-行数能整除 `tile_m=256`。该行优先于 `[4609,+∞)` 的 non-aligned 默认配置。
-cluster 两列按 `(cluster_m, cluster_n)` 记录实际传给 kernel launcher 的值；未指定且
-无法解析时填写 `None`。t64 profile 的自动值在 launch 前解析为 `(1,1)`。
+aligned override 的代码判定是 `tokens * topk` 能整除 `experts`，且平均 route 数
+`routes_per_expert = (tokens * topk) // experts` 能整除 `tile_m=256`；它不读取实际
+per-expert route count。该 profile 选择优先于 `[4609,+∞)` 的 non-aligned 默认配置，
+随后仍会经过 non-balanced 后处理。
+`routing=balanced` 表示 `AITER_MOE_EXPERT_BALANCE=true`，`non-balanced` 表示未提供
+该保证，`all` 表示两种 routing 相同。cluster 两列按
+`(cluster_m, cluster_n)` 记录实际传给 kernel launcher 的值；t64 profile 的自动值
+在 launch 前解析为 `(1,1)`。
 
-| token 区间/条件 | GEMM1 | GEMM1 cluster `(m,n)` | GEMM2 | GEMM2 cluster `(m,n)` |
-|---|---|---|---|---|
-| `[1, 1024)` | `t64/w1x4/b3` | `(1,1)` | `t64/w1x4/b3` | `(1,1)` |
-| `[1024, 1536)` | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
-| `[1536, 1537)` | persistent `t192/w2x4/b4` | `(1,4)` | persistent `t192/w2x4/b4` | `(1,4)` |
-| `[1537, 2048)` | persistent `t256/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
-| `[2048, 2049)` | persistent `t256/w2x4/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
-| `[2049, 3073)` | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
-| `[3073, 3840)` | persistent `t256/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
-| `[3840, 4096)` | optimized `t256/w2x2/b4_pmds` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
-| `[4096, 4097)` | optimized `t256/w2x2/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
-| `[4097, 4104)` | optimized `t256/w2x2/b4_pmds` | `(1,4)` | persistent `t256/w2x2/b4_pmdrain` | `(1,4)` |
-| `[4104, 4608)` | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
-| `[4608, 4609)` | persistent `t192/w2x4/b4` | `(1,4)` | persistent `t192/w2x4/b4` | `(1,4)` |
-| `[4609, +∞)`, non-aligned | optimized `t256/w2x2/b4_pmds` | `(1,4)` | persistent `t256/w2x2/b4_pmdrain` | `(1,4)` |
-| `>=4609`, aligned override | optimized `t256/w2x2/b4` | `(1,4)` | persistent `t256/w2x2/b4` | `(1,4)` |
+`[1536,2049)` profile 显式设置 `allow_partial_m_exact=1`，因此 non-balanced
+后处理也保留无后缀 persistent t256。optimized `t256/w2x2` GEMM2 不接收
+`partial_m_drain_output`，所以即使 profile 设置了该 flag，实际 launcher 和 symbol
+仍是无 `_pmdrain` 后缀的 optimized kernel。
+
+| token 区间/条件 | routing | GEMM1 | GEMM1 cluster `(m,n)` | GEMM2 | GEMM2 cluster `(m,n)` |
+|---|---|---|---|---|---|
+| `[1, 1024)` | all | `t64/w1x4/b3` | `(1,1)` | `t64/w1x4/b3` | `(1,1)` |
+| `[1024, 1536)` | all | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
+| `[1536, 1537)` | all | persistent `t256/w2x4/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
+| `[1537, 2048)` | all | persistent `t256/w2x4/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
+| `[2048, 2049)` | all | persistent `t256/w2x4/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
+| `[2049, 3073)` | all | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
+| `[3073, 3840)` | all | persistent `t256/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
+| `[3840, 4096)` | all | optimized `t256/w2x2/b4_pmds` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
+| `[4096, 4097)` | balanced | optimized `t256/w2x2/b4` | `(1,4)` | persistent `t256/w2x4/b4` | `(1,4)` |
+| `[4096, 4097)` | non-balanced | optimized `t256/w2x2/b4_pmds` | `(1,4)` | persistent `t256/w2x4/b4_pmdrain` | `(1,4)` |
+| `[4097, 4104)` | all | optimized `t256/w2x2/b4_pmds` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
+| `[4104, 4608)` | all | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
+| `[4608, 4609)` | balanced | persistent `t192/w2x4/b4` | `(1,4)` | persistent `t192/w2x4/b4` | `(1,4)` |
+| `[4608, 4609)` | non-balanced | persistent `t192/w2x4/b4_pmds_pmdrain` | `(1,4)` | persistent `t192/w2x4/b4_pmdrain` | `(1,4)` |
+| `[4609, +∞)`, non-aligned | all | optimized `t256/w2x2/b4_pmds` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
+| `>=4609`, aligned override | balanced | optimized `t256/w2x2/b4` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
+| `>=4609`, aligned override | non-balanced | optimized `t256/w2x2/b4_pmds` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |

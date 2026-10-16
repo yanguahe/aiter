@@ -26,6 +26,102 @@ _WARNED_NAIVE_EPILOGUE = False
 # weight is materialized at most once (not re-copied on every fused_moe call).
 _GROUPED_WEIGHT_CACHE = {}
 
+_SHARED_EXPERTS_ENV = "AITER_MOE_NUM_SHARED_EXPERTS"
+
+
+def _routed_geometry_from_metadata(
+    physical_experts: int,
+    physical_topk: int,
+) -> tuple[int, int, int]:
+    """Return routed E/topk plus shared count from strict caller metadata.
+
+    The grouped launch always keeps the physical geometry. This metadata is
+    used only by routed-geometry selectors, so E65/topk9 can explicitly reuse
+    an E64/topk8 routing profile without making arbitrary topk9 calls eligible.
+    """
+    raw = os.environ.get(_SHARED_EXPERTS_ENV, "0")
+    try:
+        shared_experts = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{_SHARED_EXPERTS_ENV} must be integer 0 or 1, got {raw!r}"
+        ) from exc
+    if shared_experts not in (0, 1):
+        raise ValueError(f"{_SHARED_EXPERTS_ENV} must be 0 or 1, got {shared_experts}")
+    if shared_experts == 0:
+        return int(physical_experts), int(physical_topk), 0
+    if physical_experts <= shared_experts:
+        raise ValueError(
+            f"physical experts={physical_experts} must exceed "
+            f"{_SHARED_EXPERTS_ENV}={shared_experts}"
+        )
+    if physical_topk <= shared_experts:
+        raise ValueError(
+            f"physical topk={physical_topk} must exceed "
+            f"{_SHARED_EXPERTS_ENV}={shared_experts}"
+        )
+    routed_experts = int(physical_experts) - shared_experts
+    routed_topk = int(physical_topk) - shared_experts
+    if routed_topk > routed_experts:
+        raise ValueError(
+            f"routed topk={routed_topk} exceeds routed experts={routed_experts} "
+            f"for physical E={physical_experts}/topk={physical_topk}"
+        )
+    return routed_experts, routed_topk, shared_experts
+
+
+def _balanced_expert_routing_enabled() -> bool:
+    """Return whether the caller guarantees balanced per-expert route counts."""
+    return os.environ.get("AITER_MOE_EXPERT_BALANCE", "false").strip().lower() in (
+        "1",
+        "true",
+    )
+
+
+def _apply_nonbalanced_partial_safe_profile(
+    tdm_kw: dict[str, int | None],
+    *,
+    fallback_tile_m: int,
+    balanced_routing: bool,
+    enable_ep_scatter: bool,
+) -> str | None:
+    """Select partial-M codegen for tuned tiles without a balance guarantee.
+
+    Profiles with ``allow_partial_m_exact`` keep the un-suffixed t256 persistent
+    kernels; every other tuned tile compiles the safe ScaleA store and drain.
+    """
+    if balanced_routing:
+        return None
+
+    tile_m = int(tdm_kw.get("tile_m", fallback_tile_m) or fallback_tile_m)
+    tile_m2_value = tdm_kw.get("tile_m2")
+    tile_m2 = tile_m if tile_m2_value is None else int(tile_m2_value)
+    if tile_m not in (192, 256) and tile_m2 not in (192, 256):
+        return None
+
+    if enable_ep_scatter:
+        # The persistent GEMM2 EP-scatter launcher currently requires
+        # partial_m_drain_output=0. A non-balanced router cannot prove full
+        # expert tiles, so use the generic partial-M-safe schedule instead of
+        # selecting an unsafe persistent specialization or tripping its assert.
+        tdm_kw.update(_make_tdm_token_profile(64, 4, 4, 3, auto_cluster=True))
+        return "generic t64/w1x4/b3 for EP scatter"
+
+    if tdm_kw.get("allow_partial_m_exact") and tile_m == 256 and tile_m2 == 256:
+        tdm_kw["balanced_m192"] = 0
+        tdm_kw["partial_m_direct_scale"] = 0
+        tdm_kw["partial_m_drain_output"] = 0
+        return "exact t256 pmds=0/pmdrain=0"
+
+    # A non-balanced router can produce partial expert tiles even when the
+    # average routes/expert equals tile_m. Keep the launch geometry fixed for
+    # CUDAGraph, but compile the safe ScaleA store and task-drain paths.
+    tdm_kw["allow_partial_m_exact"] = 0
+    tdm_kw["balanced_m192"] = 0
+    tdm_kw["partial_m_direct_scale"] = 1
+    tdm_kw["partial_m_drain_output"] = 1
+    return "pmds=1/pmdrain=1"
+
 
 def _make_tdm_token_profile(
     tile_m: int,
@@ -36,6 +132,7 @@ def _make_tdm_token_profile(
     balanced_m192: int = 0,
     partial_m_direct_scale: int = 0,
     partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
     auto_cluster: bool = False,
 ) -> dict[str, int | None]:
     m_warp = 1 if tile_m == 64 else 2
@@ -65,6 +162,7 @@ def _make_tdm_token_profile(
         "balanced_m192": balanced_m192,
         "partial_m_direct_scale": partial_m_direct_scale,
         "partial_m_drain_output": partial_m_drain_output,
+        "allow_partial_m_exact": allow_partial_m_exact,
     }
 
 
@@ -108,6 +206,9 @@ _E64_TOPK8_TOKEN_PROFILES = {
         partial_m_drain_output=1,
     ),
     "t256_persistent": _make_tdm_token_profile(256, 4, 4, 4),
+    "t256_persistent_any_routing": _make_tdm_token_profile(
+        256, 4, 4, 4, allow_partial_m_exact=1
+    ),
     "t256_w2x2_w2x4": _make_tdm_token_profile(256, 2, 4, 4),
     "t256_w2x2_w2x2": _make_tdm_token_profile(256, 2, 2, 4),
 }
@@ -116,9 +217,9 @@ _E64_TOPK8_TOKEN_PROFILES = {
 _E64_TOPK8_TOKEN_INTERVALS = (
     (1, 1024, "t64"),
     (1024, 1536, "t192_partial_interval"),
-    (1536, 1537, "t192_persistent"),
-    (1537, 2048, "t256_partial_persistent"),
-    (2048, 2049, "t256_persistent"),
+    (1536, 1537, "t256_persistent_any_routing"),
+    (1537, 2048, "t256_persistent_any_routing"),
+    (2048, 2049, "t256_persistent_any_routing"),
     (2049, 3073, "t192_partial_interval"),
     (3073, 3840, "t256_partial_persistent"),
     (3840, 4096, "t256_partial_w2x2_w2x4"),
@@ -130,7 +231,7 @@ _E64_TOPK8_TOKEN_INTERVALS = (
 )
 
 
-def _find_e64_topk8_token_profile(
+def _find_routed_e64_topk8_token_profile(
     *,
     tokens: int,
     experts: int,
@@ -143,10 +244,17 @@ def _find_e64_topk8_token_profile(
     is_ep: bool,
     enable_ep_scatter: bool,
 ) -> dict[str, int | None] | None:
+    """Select the E64/topk8 routed profile for a physical grouped launch.
+
+    ``experts``/``topk`` are physical launch geometry. Only explicit
+    ``AITER_MOE_NUM_SHARED_EXPERTS=1`` maps physical E65/topk9 to routed
+    E64/topk8; absent metadata keeps the historical physical interpretation.
+    """
+    routed_experts, routed_topk, _ = _routed_geometry_from_metadata(experts, topk)
     if not all(
         (
-            experts == 64,
-            topk == 8,
+            routed_experts == 64,
+            routed_topk == 8,
             model_dim == 7168,
             inter_dim == 2048,
             activation == ActivationType.Silu,
@@ -158,7 +266,12 @@ def _find_e64_topk8_token_profile(
     ):
         return None
     if tokens >= 4609:
-        routes_per_expert, remainder = divmod(tokens * topk, experts)
+        # The aligned override follows routed geometry: balanced routing spreads
+        # tokens*routed_topk over routed_experts. With one shared expert its
+        # count is tokens; for E64/topk8, a tile-aligned routed count also makes
+        # that shared count tile-aligned. The physical E/topk still size and
+        # launch every contiguous grouped row below.
+        routes_per_expert, remainder = divmod(tokens * routed_topk, routed_experts)
         exact_profile = _E64_TOPK8_TOKEN_PROFILES["t256_w2x2_w2x2"]
         if remainder == 0 and routes_per_expert % int(exact_profile["tile_m"]) == 0:
             return dict(exact_profile)
@@ -166,6 +279,7 @@ def _find_e64_topk8_token_profile(
         if start <= tokens and (end is None or tokens < end):
             return dict(_E64_TOPK8_TOKEN_PROFILES[profile_name])
     return None
+
 
 # Opt-in kernel-bench hook: a caller sets a list here to collect
 # (name, callable) per-kernel launches; None in production.
@@ -739,6 +853,7 @@ def _grouped_a8w4_tdm_moe(
     balanced_m192=-1,
     partial_m_direct_scale=0,
     partial_m_drain_output=0,
+    allow_partial_m_exact=0,
     data_format="a8w4",
     expert_mask=None,
     num_local_tokens=None,
@@ -1136,6 +1251,9 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=cluster_n,
             next_stage_prefetch=next_stage_prefetch,
             n_experts=E,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
         )
     )
     # GEMM2 consumes expert-local grouped rows, so its producer switches layout
@@ -1173,6 +1291,9 @@ def _grouped_a8w4_tdm_moe(
             cluster_n=_gemm2_cluster_n,
             next_stage_prefetch=next_stage_prefetch,
             n_experts=E,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
         )
     )
     if _gemm2_a_preshuffle:
@@ -1346,6 +1467,7 @@ def _grouped_a8w4_tdm_moe(
             balanced_m192=balanced_m192,
             partial_m_direct_scale=partial_m_direct_scale,
             partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1387,6 +1509,7 @@ def _grouped_a8w4_tdm_moe(
             balanced_m192=balanced_m192,
             partial_m_direct_scale=partial_m_direct_scale,
             partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
@@ -1483,6 +1606,7 @@ def _grouped_a8w4_tdm_moe(
         balanced_m192=balanced_m192,
         partial_m_direct_scale=partial_m_direct_scale,
         partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
         **_ep_gemm2_kwargs,
     )
 
@@ -1583,6 +1707,7 @@ def _grouped_a8w4_tdm_moe(
                         balanced_m192=balanced_m192,
                         partial_m_direct_scale=partial_m_direct_scale,
                         partial_m_drain_output=partial_m_drain_output,
+                        allow_partial_m_exact=allow_partial_m_exact,
                         **_situ_kw,
                     ),
                 )
@@ -1625,6 +1750,7 @@ def _grouped_a8w4_tdm_moe(
                         balanced_m192=balanced_m192,
                         partial_m_direct_scale=partial_m_direct_scale,
                         partial_m_drain_output=partial_m_drain_output,
+                        allow_partial_m_exact=allow_partial_m_exact,
                         **_situ_kw,
                     ),
                 )
@@ -1665,6 +1791,7 @@ def _grouped_a8w4_tdm_moe(
                     balanced_m192=balanced_m192,
                     partial_m_direct_scale=partial_m_direct_scale,
                     partial_m_drain_output=partial_m_drain_output,
+                    allow_partial_m_exact=allow_partial_m_exact,
                 ),
             )
         )
@@ -1949,7 +2076,7 @@ def grouped_gemm_gfx1250_a8w4(
                 cfg_row.get("lds_soa_load_interleave"), 0
             )
 
-        token_profile = _find_e64_topk8_token_profile(
+        token_profile = _find_routed_e64_topk8_token_profile(
             tokens=token_num,
             experts=E,
             topk=topk,
@@ -1963,8 +2090,11 @@ def grouped_gemm_gfx1250_a8w4(
         )
         if token_profile is not None:
             _tdm_kw.update(token_profile)
+            _, _, shared_experts = _routed_geometry_from_metadata(E, topk)
             _grouped_dbg(
-                f"using E64/topk8 token-range config for tokens={token_num}: "
+                "using routed E64/topk8 token-range config for "
+                f"physical E={E}/topk={topk}/shared={shared_experts}, "
+                f"tokens={token_num}: "
                 f"{token_profile}"
             )
 
@@ -2026,6 +2156,17 @@ def grouped_gemm_gfx1250_a8w4(
             _tdm_kw["n_warp2"] = _ov_nw2 if _ov_nw2 is not None else _base_nw
         if _ov_wpt is not None:
             _tdm_kw["waves_per_tensor_tdm"] = _ov_wpt
+        nonbalanced_profile = _apply_nonbalanced_partial_safe_profile(
+            _tdm_kw,
+            fallback_tile_m=tile_m,
+            balanced_routing=_balanced_expert_routing_enabled(),
+            enable_ep_scatter=stage2_scatter is not None,
+        )
+        if nonbalanced_profile is not None:
+            _grouped_dbg(
+                "non-balanced routing: partial-M specialization: "
+                f"{nonbalanced_profile}"
+            )
         return _grouped_a8w4_tdm_moe(
             hidden_states,
             w1,

@@ -122,8 +122,24 @@ def _supports_gfx1250_a_preshuffle_resolved(
     cluster_n: int,
     next_stage_prefetch: int,
     n_experts: int,
+    partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
 ) -> bool:
     """Check an A-preshuffle schedule after launch options are resolved."""
+    partial_safe_t256 = bool(
+        tile_m == 256
+        and partial_m_drain_output
+        and (stage1_act == 0 or partial_m_direct_scale)
+    )
+    partial_t256 = partial_safe_t256 or bool(tile_m == 256 and allow_partial_m_exact)
+    gemm2_eight_wave_shape = (
+        K == 2048 and tile_m == 192 and n_experts == 64
+    ) or (
+        K in (2048, 3072)
+        and tile_m == 256
+        and (_balanced_expert_routing_enabled() or partial_t256)
+    )
     gemm2_eight_wave = all(
         (
             a_is_fp4,
@@ -131,11 +147,8 @@ def _supports_gfx1250_a_preshuffle_resolved(
             stage1_quant_out == 0,
             out_is_f16 == 0,
             has_bias == 0,
-            n_experts == 64,
             N == 7168,
-            K == 2048,
-            tile_m == 192
-            or (tile_m == 256 and _balanced_expert_routing_enabled()),
+            gemm2_eight_wave_shape,
             (tile_n, tile_k) == (256, 256),
             (m_warp, n_warp, num_buffers) == (2, 4, 4),
             cluster_n == 4,
@@ -151,7 +164,10 @@ def _supports_gfx1250_a_preshuffle_resolved(
             N == 4096,
             K == 7168,
             tile_m == 192
-            or (tile_m == 256 and _balanced_expert_routing_enabled()),
+            or (
+                tile_m == 256
+                and (_balanced_expert_routing_enabled() or partial_t256)
+            ),
             n_warp == 4,
         )
     )
@@ -202,6 +218,9 @@ def supports_gfx1250_a_preshuffle(
     cluster_n: int,
     next_stage_prefetch: int,
     n_experts: int,
+    partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
 ) -> bool:
     """Return whether this stage resolves to an A-preshuffle tuned tile."""
     num_buffers = min(num_buffers, max(1, K // tile_k))
@@ -225,6 +244,9 @@ def supports_gfx1250_a_preshuffle(
             "AITER_TDM_NEXT_STAGE_PREFETCH", next_stage_prefetch
         ),
         n_experts=n_experts,
+        partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
     )
 
 
@@ -274,6 +296,7 @@ def flydsl_grouped_gemm_a8w4_masked(
     balanced_m192=-1,
     partial_m_direct_scale=0,
     partial_m_drain_output=0,
+    allow_partial_m_exact=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
@@ -325,6 +348,9 @@ def flydsl_grouped_gemm_a8w4_masked(
         cluster_n=cluster_n,
         next_stage_prefetch=next_stage_prefetch,
         n_experts=n_experts,
+        partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
     )
     if target_optimized:
         waves_per_tensor_tdm = 2
@@ -367,7 +393,6 @@ def flydsl_grouped_gemm_a8w4_masked(
                 tile_m in (192, 256),
                 (tile_n, tile_k) == (256, 256),
                 (m_warp, n_warp, num_buffers) == (2, 4, 4),
-                n_experts == 64,
                 cluster_n == 4,
                 cluster_m == 1,
             )
@@ -396,8 +421,19 @@ def flydsl_grouped_gemm_a8w4_masked(
                     in (
                         (192, 256, 256, 2, 2, 4, 64),
                         (192, 256, 256, 2, 4, 4, 64),
-                        (256, 256, 256, 2, 4, 4, 64),
                     )
+                )
+                or (
+                    K in (2048, 3072)
+                    and (
+                        tile_m,
+                        tile_n,
+                        tile_k,
+                        m_warp,
+                        n_warp,
+                        num_buffers,
+                    )
+                    == (256, 256, 256, 2, 4, 4)
                 )
                 or (
                     K,

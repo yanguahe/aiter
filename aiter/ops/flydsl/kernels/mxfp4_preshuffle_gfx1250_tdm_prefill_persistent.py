@@ -330,7 +330,6 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         if fp4_prefill_schedule
         and K == 7168
         and tile_m in (192, 256)
-        and n_experts == 64
         and cluster_m == 1
         else (
             7
@@ -2211,6 +2210,14 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
             stage1_act == 0,
         )
     )
+    t256_eight_wave_gemm2 = all(
+        (
+            gemm2_schedule,
+            gemm2_eight_wave_geometry,
+            tile_m == 256,
+            K in (2048, 3072),
+        )
+    )
     assert fp4_prefill_schedule or gemm2_schedule
     assert not enable_ep_scatter or all(
         (
@@ -2223,12 +2230,15 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
             not partial_m_drain_output,
         )
     )
-    assert not partial_m_drain_output or all(
-        (
-            gemm2_schedule,
-            K == 2048,
-            tile_m in (192, 256),
-            n_experts == 64,
+    assert not partial_m_drain_output or (
+        t256_eight_wave_gemm2
+        or all(
+            (
+                gemm2_schedule,
+                K == 2048,
+                tile_m in (192, 256),
+                n_experts == 64,
+            )
         )
     )
     epilogue_batch_wn = 8 if fp4_prefill_schedule else 1
@@ -2353,6 +2363,7 @@ def launch_gemm_a8w4_tdm_gemm2_persistent(
         and (
             (K == 2048 and tile_m in (192, 256) and n_experts == 64)
             or (K == 3072 and tile_m == 256 and n_experts == 96)
+            or t256_eight_wave_gemm2
         )
         else 1
     )
