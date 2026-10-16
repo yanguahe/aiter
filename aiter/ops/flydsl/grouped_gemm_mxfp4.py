@@ -16,6 +16,13 @@ _SUPPORTED_CLUSTER_M = (1, 2, 4)
 _SUPPORTED_CLUSTER_N = (1, 2, 3, 4)
 
 
+def _balanced_expert_routing_enabled() -> bool:
+    return os.environ.get("AITER_MOE_EXPERT_BALANCE", "false").lower() in (
+        "1",
+        "true",
+    )
+
+
 def _select_bool_env(name: str, csv_value: int) -> int:
     """Select a strict 0/1 environment override or the CSV setting."""
     value = os.environ.get(name)
@@ -97,6 +104,152 @@ def _select_num_waves_per_tensor_tdm(csv_num_waves: int) -> int:
     return num_waves
 
 
+def _supports_gfx1250_a_preshuffle_resolved(
+    *,
+    N: int,
+    K: int,
+    tile_m: int,
+    tile_n: int,
+    tile_k: int,
+    m_warp: int,
+    n_warp: int,
+    num_buffers: int,
+    out_is_f16: int,
+    a_is_fp4: int,
+    stage1_act: int,
+    stage1_quant_out: int,
+    has_bias: int,
+    cluster_n: int,
+    next_stage_prefetch: int,
+    n_experts: int,
+    partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
+) -> bool:
+    """Check an A-preshuffle schedule after launch options are resolved."""
+    partial_safe_t256 = bool(
+        tile_m == 256
+        and partial_m_drain_output
+        and (stage1_act == 0 or partial_m_direct_scale)
+    )
+    partial_t256 = partial_safe_t256 or bool(tile_m == 256 and allow_partial_m_exact)
+    gemm2_eight_wave_shape = (
+        K == 2048 and tile_m == 192 and n_experts == 64
+    ) or (
+        K in (2048, 3072)
+        and tile_m == 256
+        and (_balanced_expert_routing_enabled() or partial_t256)
+    )
+    gemm2_eight_wave = all(
+        (
+            a_is_fp4,
+            stage1_act == 0,
+            stage1_quant_out == 0,
+            out_is_f16 == 0,
+            has_bias == 0,
+            N == 7168,
+            gemm2_eight_wave_shape,
+            (tile_n, tile_k) == (256, 256),
+            (m_warp, n_warp, num_buffers) == (2, 4, 4),
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+        )
+    )
+    if gemm2_eight_wave:
+        return True
+    fused_quant_w2x4 = all(
+        (
+            stage1_quant_out == 1,
+            stage1_act == 1,
+            N == 4096,
+            K == 7168,
+            tile_m == 192
+            or (
+                tile_m == 256
+                and (_balanced_expert_routing_enabled() or partial_t256)
+            ),
+            n_warp == 4,
+        )
+    )
+    common = all(
+        (
+            a_is_fp4,
+            out_is_f16 == 0,
+            has_bias == 0,
+            n_experts > 0,
+            tile_m in (192, 256),
+            (tile_n, tile_k, m_warp, num_buffers) == (256, 256, 2, 4),
+            n_warp == 2 or fused_quant_w2x4,
+            cluster_n == 4,
+            next_stage_prefetch == 1,
+        )
+    )
+    if not common:
+        return False
+    if stage1_act == 1:
+        return (
+            stage1_quant_out in (0, 1)
+            and K == 7168
+            and N in (4096, 6144)
+        )
+    return (
+        stage1_quant_out == 0
+        and stage1_act == 0
+        and N == 7168
+        and K in (2048, 3072)
+    )
+
+
+def supports_gfx1250_a_preshuffle(
+    *,
+    N: int,
+    K: int,
+    tile_m: int,
+    tile_n: int,
+    tile_k: int,
+    m_warp: int,
+    n_warp: int,
+    num_buffers: int,
+    out_is_f16: int,
+    a_is_fp4: int,
+    stage1_act: int,
+    stage1_quant_out: int,
+    has_bias: int,
+    cluster_n: int,
+    next_stage_prefetch: int,
+    n_experts: int,
+    partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
+) -> bool:
+    """Return whether this stage resolves to an A-preshuffle tuned tile."""
+    num_buffers = min(num_buffers, max(1, K // tile_k))
+    n_tiles = (N + tile_n - 1) // tile_n
+    return _supports_gfx1250_a_preshuffle_resolved(
+        N=N,
+        K=K,
+        tile_m=tile_m,
+        tile_n=tile_n,
+        tile_k=tile_k,
+        m_warp=m_warp,
+        n_warp=n_warp,
+        num_buffers=num_buffers,
+        out_is_f16=out_is_f16,
+        a_is_fp4=a_is_fp4,
+        stage1_act=stage1_act,
+        stage1_quant_out=stage1_quant_out,
+        has_bias=has_bias,
+        cluster_n=_select_cluster_n(n_tiles, cluster_n),
+        next_stage_prefetch=_select_bool_env(
+            "AITER_TDM_NEXT_STAGE_PREFETCH", next_stage_prefetch
+        ),
+        n_experts=n_experts,
+        partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
+    )
+
+
 def flydsl_grouped_gemm_a8w4_masked(
     out,
     a,
@@ -139,9 +292,21 @@ def flydsl_grouped_gemm_a8w4_masked(
     row_major_ascale=0,
     a_row_stride_bytes=0,
     a_scale_row_stride_bytes=0,
+    a_preshuffle=0,
+    balanced_m192=-1,
+    partial_m_direct_scale=0,
+    partial_m_drain_output=0,
+    allow_partial_m_exact=0,
 ):
     """Launches a contiguous-M grouped a8w4 GEMM on the TDM kernel."""
     from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
+    from .kernels.mxfp4_preshuffle_gfx1250_tdm_prefill import (
+        launch_gemm_a8w4_tdm_optimized,
+    )
+    from .kernels.mxfp4_preshuffle_gfx1250_tdm_prefill_persistent import (
+        launch_gemm_a8w4_tdm_fused_persistent,
+        launch_gemm_a8w4_tdm_gemm2_persistent,
+    )
 
     if stream is None:
         stream = torch.cuda.current_stream()
@@ -158,11 +323,38 @@ def flydsl_grouped_gemm_a8w4_masked(
     cluster_n = _select_cluster_n(n_tiles, cluster_n)
     cluster_m = _select_cluster_m(cluster_m, cluster_n, stage1_act)
     waves_per_tensor_tdm = _select_num_waves_per_tensor_tdm(waves_per_tensor_tdm)
+    next_stage_prefetch = _select_bool_env(
+        "AITER_TDM_NEXT_STAGE_PREFETCH", next_stage_prefetch
+    )
     if cluster_n > 1 and n_tiles % cluster_n:
         raise ValueError(
             f"[grouped-moe tdm] cluster_n={cluster_n} needs n_tiles={n_tiles} "
             f"(N={N}, tile_n={tile_n}) to be an exact multiple"
         )
+    target_optimized = bool(a_preshuffle) and _supports_gfx1250_a_preshuffle_resolved(
+        N=N,
+        K=K,
+        tile_m=tile_m,
+        tile_n=tile_n,
+        tile_k=tile_k,
+        m_warp=m_warp,
+        n_warp=n_warp,
+        num_buffers=num_buffers,
+        out_is_f16=out_is_f16,
+        a_is_fp4=a_is_fp4,
+        stage1_act=stage1_act,
+        stage1_quant_out=stage1_quant_out,
+        has_bias=has_bias,
+        cluster_n=cluster_n,
+        next_stage_prefetch=next_stage_prefetch,
+        n_experts=n_experts,
+        partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
+    )
+    if target_optimized:
+        waves_per_tensor_tdm = 2
+
     enable_ep_scatter = stage2_scatter is not None
     if enable_ep_scatter and stage2_scatter.combine_quant_bits:
         # N is the payload plane's length and so the scale plane's base, which
@@ -176,6 +368,161 @@ def flydsl_grouped_gemm_a8w4_masked(
                 f"{stage2_scatter.combine_quant_bits} needs N % {n_align} == 0 to "
                 f"keep the scale plane cache-line aligned, got N={N}"
             )
+
+    use_optimized = target_optimized and not any(
+        (
+            enable_ep_scatter and stage2_scatter.combine_quant_bits != 0,
+            bool(tdm_as_in_prologue),
+            bool(row_major_ascale),
+            bool(a_row_stride_bytes),
+            bool(a_scale_row_stride_bytes),
+        )
+    )
+    if a_preshuffle and not use_optimized:
+        raise ValueError(
+            "A-preshuffled input is only supported by the retained gfx1250 "
+            "GEMM1/GEMM2 optimized shapes"
+        )
+    if use_optimized:
+        use_fused_persistent = all(
+            (
+                stage1_quant_out == 1,
+                stage1_act == 1,
+                N == 4096,
+                K == 7168,
+                tile_m in (192, 256),
+                (tile_n, tile_k) == (256, 256),
+                (m_warp, n_warp, num_buffers) == (2, 4, 4),
+                cluster_n == 4,
+                cluster_m == 1,
+            )
+        )
+        use_gemm2_persistent = (
+            (
+                not enable_ep_scatter
+                or (
+                    K == 2048 and (tile_m, m_warp, n_warp, n_experts) == (192, 2, 4, 64)
+                )
+            )
+            and stage1_act == 0
+            and N == 7168
+            and (
+                (
+                    K == 2048
+                    and (
+                        tile_m,
+                        tile_n,
+                        tile_k,
+                        m_warp,
+                        n_warp,
+                        num_buffers,
+                        n_experts,
+                    )
+                    in (
+                        (192, 256, 256, 2, 2, 4, 64),
+                        (192, 256, 256, 2, 4, 4, 64),
+                    )
+                )
+                or (
+                    K in (2048, 3072)
+                    and (
+                        tile_m,
+                        tile_n,
+                        tile_k,
+                        m_warp,
+                        n_warp,
+                        num_buffers,
+                    )
+                    == (256, 256, 256, 2, 4, 4)
+                )
+                or (
+                    K,
+                    tile_m,
+                    tile_n,
+                    tile_k,
+                    m_warp,
+                    n_warp,
+                    num_buffers,
+                    n_experts,
+                    contiguous_m,
+                )
+                == (3072, 256, 256, 256, 2, 2, 4, 96, 122880)
+            )
+        )
+        if use_fused_persistent:
+            optimized_launcher = launch_gemm_a8w4_tdm_fused_persistent
+        elif use_gemm2_persistent:
+            optimized_launcher = launch_gemm_a8w4_tdm_gemm2_persistent
+        else:
+            optimized_launcher = launch_gemm_a8w4_tdm_optimized
+        auto_balanced_m192 = int(
+            tile_m == 256
+            and n_experts == 64
+            and contiguous_m == 28672
+            and _balanced_expert_routing_enabled()
+        )
+        persistent_kwargs = {}
+        if use_fused_persistent or use_gemm2_persistent:
+            persistent_kwargs["balanced_m192"] = (
+                auto_balanced_m192
+                if int(balanced_m192) < 0
+                else int(bool(balanced_m192))
+            )
+        if stage1_quant_out and stage1_act:
+            persistent_kwargs["partial_m_direct_scale"] = int(
+                bool(partial_m_direct_scale)
+            )
+        if use_fused_persistent or use_gemm2_persistent:
+            persistent_kwargs["partial_m_drain_output"] = int(
+                bool(partial_m_drain_output)
+            )
+        if enable_ep_scatter:
+            persistent_kwargs.update(
+                enable_ep_scatter=1,
+                ep_arena_handle=int(stage2_scatter.arena_handle),
+                ep_combine_input_offset=int(stage2_scatter.combine_input_offset),
+                ep_slot_stride_bytes=int(stage2_scatter.slot_stride_bytes),
+                ep_destination_stride=int(ep_destination_stride),
+                ep_world_size=int(stage2_scatter.world_size),
+                arg_ep_row_map=ep_row_map,
+            )
+        elif not use_fused_persistent:
+            persistent_kwargs["arg_ep_row_map"] = out
+        optimized_launcher(
+            out,
+            ptr_arg(a),
+            ptr_arg(w),
+            a_scales.view(torch.int32),
+            w_scales.view(torch.int32),
+            contiguous_m,
+            stream,
+            N,
+            K,
+            tile_m,
+            tile_n,
+            tile_k,
+            m_warp,
+            n_warp,
+            out_is_f16,
+            num_buffers,
+            a_is_fp4,
+            ptr_arg(m_tile_map),
+            n_experts,
+            stage1_act,
+            has_bias,
+            bias_ptr,
+            float(swiglu_limit),
+            stage1_quant_out,
+            quant_wmma_rep,
+            quant_scale_tensor,
+            cluster_n,
+            cluster_m,
+            next_stage_prefetch,
+            waves_per_tensor_tdm,
+            _select_tdm_b_th(tdm_b_th),
+            **persistent_kwargs,
+        )
+        return out
     ep_row_map_tensor = ep_row_map if ep_row_map is not None else out
     launch_gemm_a8w4_tdm(
         out,
@@ -206,7 +553,7 @@ def flydsl_grouped_gemm_a8w4_masked(
         quant_scale_tensor,
         cluster_n,
         cluster_m,
-        _select_bool_env("AITER_TDM_NEXT_STAGE_PREFETCH", next_stage_prefetch),
+        next_stage_prefetch,
         waves_per_tensor_tdm,
         _select_bool_env("AITER_GROUPED_GEMM_AS_PROLOGUE", tdm_as_in_prologue),
         _select_tdm_b_th(tdm_b_th),

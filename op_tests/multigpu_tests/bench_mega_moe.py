@@ -31,7 +31,7 @@ Launch (4x gfx1250; every env knob below is already the script's default):
 
 Env / CLI: --layers --logits_tol --acc_verify --dispatch_backend
            --stage1_fused --dispatch_wire --combine --combine_quant
-           -tpr -hd -id -e -k --shared_E -q
+           -tpr -hd -id -e -k --shared_experts --fused_shared_route -q
            --data-init --seed --warmup --iters --prof_replays
 
 ``--data-init`` / ``--scale-init`` / ``--seed`` are the shared ubench knobs from
@@ -46,30 +46,215 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 import time
+from dataclasses import dataclass
 
-import pandas as pd
-import torch
-import torch.distributed as dist
-import torch.profiler as tprof
 
-from aiter import (
+_FUSED_ROUTED_SCALING_FACTOR = 2.5
+_FUSED_SHARED_ROUTE_SELF_TEST = "--self_test_fused_shared_route"
+
+
+@dataclass(frozen=True)
+class ExpertLayout:
+    """Logical router geometry and the physical EP dispatch geometry."""
+
+    routed_experts: int
+    routed_topk: int
+    world_size: int
+    routed_experts_per_rank: int
+    physical_experts: int
+    physical_topk: int
+    physical_experts_per_rank: int
+    shared_physical_ids: tuple[int, ...]
+    fused_shared_route: bool
+
+    def routed_to_physical(self, routed_id: int) -> int:
+        """Map one logical routed id into the physical LOCAL_REPLICA space."""
+        routed_id = int(routed_id)
+        if not 0 <= routed_id < self.routed_experts:
+            raise ValueError(
+                f"routed expert id must be in [0, {self.routed_experts}), "
+                f"got {routed_id}"
+            )
+        if not self.fused_shared_route:
+            return routed_id
+        return routed_id + routed_id // self.routed_experts_per_rank
+
+    def shared_physical_id(self, rank: int) -> int:
+        """The source-local shared replica used by tokens from ``rank``."""
+        rank = int(rank)
+        if not self.fused_shared_route:
+            raise ValueError("the default layout has no fused shared route")
+        if not 0 <= rank < self.world_size:
+            raise ValueError(f"rank must be in [0, {self.world_size}), got {rank}")
+        return self.shared_physical_ids[rank]
+
+
+def build_expert_layout(
+    routed_experts: int,
+    routed_topk: int,
+    world_size: int,
+    fused_shared_route: bool = False,
+) -> ExpertLayout:
+    """Resolve CLI routed geometry into the geometry every EP op must see."""
+    routed_experts = int(routed_experts)
+    routed_topk = int(routed_topk)
+    world_size = int(world_size)
+    if routed_experts <= 0:
+        raise ValueError(f"routed experts must be positive, got {routed_experts}")
+    if world_size <= 0:
+        raise ValueError(f"world_size must be positive, got {world_size}")
+    if routed_experts % world_size:
+        raise ValueError(
+            f"routed E={routed_experts} must be divisible by "
+            f"world_size={world_size}"
+        )
+    if not 0 < routed_topk <= routed_experts:
+        raise ValueError(
+            f"routed topk must be in [1, {routed_experts}], got {routed_topk}"
+        )
+
+    routed_epr = routed_experts // world_size
+    if not fused_shared_route:
+        return ExpertLayout(
+            routed_experts=routed_experts,
+            routed_topk=routed_topk,
+            world_size=world_size,
+            routed_experts_per_rank=routed_epr,
+            physical_experts=routed_experts,
+            physical_topk=routed_topk,
+            physical_experts_per_rank=routed_epr,
+            shared_physical_ids=(),
+            fused_shared_route=False,
+        )
+
+    physical_epr = routed_epr + 1
+    return ExpertLayout(
+        routed_experts=routed_experts,
+        routed_topk=routed_topk,
+        world_size=world_size,
+        routed_experts_per_rank=routed_epr,
+        physical_experts=world_size * physical_epr,
+        physical_topk=routed_topk + 1,
+        physical_experts_per_rank=physical_epr,
+        shared_physical_ids=tuple(
+            physical_epr * rank + routed_epr for rank in range(world_size)
+        ),
+        fused_shared_route=True,
+    )
+
+
+def _fuse_shared_route_row(
+    routed_ids,
+    routed_weights,
+    layout: ExpertLayout,
+    source_rank: int,
+    routed_scaling_factor: float = _FUSED_ROUTED_SCALING_FACTOR,
+):
+    """Pure-Python model of one fused route row, used by the CPU self-check."""
+    if not layout.fused_shared_route:
+        raise ValueError("fused route rows require a fused shared-route layout")
+    if len(routed_ids) != layout.routed_topk:
+        raise ValueError(
+            f"expected {layout.routed_topk} routed ids, got {len(routed_ids)}"
+        )
+    if len(routed_weights) != layout.routed_topk:
+        raise ValueError(
+            f"expected {layout.routed_topk} routed weights, "
+            f"got {len(routed_weights)}"
+        )
+    physical_ids = tuple(layout.routed_to_physical(e) for e in routed_ids)
+    if len(set(physical_ids)) != len(physical_ids):
+        raise ValueError("routed ids must be distinct within one token")
+    shared_id = layout.shared_physical_id(source_rank)
+    if shared_id in physical_ids:
+        raise ValueError("a routed id mapped onto the reserved shared slot")
+    physical_weights = tuple(
+        float(w) * float(routed_scaling_factor) for w in routed_weights
+    )
+    return physical_ids + (shared_id,), physical_weights + (1.0,)
+
+
+def _run_fused_shared_route_self_test():
+    """CPU-only invariant check for the service EP4 E256/topk8 layout."""
+    default_layout = build_expert_layout(256, 8, 4)
+    assert default_layout.physical_experts == 256
+    assert default_layout.physical_topk == 8
+    assert default_layout.physical_experts_per_rank == 64
+    assert default_layout.shared_physical_ids == ()
+
+    layout = build_expert_layout(256, 8, 4, fused_shared_route=True)
+    assert layout.physical_experts == 260
+    assert layout.physical_topk == 9
+    assert layout.physical_experts_per_rank == 65
+    assert layout.shared_physical_ids == (64, 129, 194, 259)
+
+    routed_physical = tuple(layout.routed_to_physical(p) for p in range(256))
+    assert len(set(routed_physical)) == 256
+    assert not set(routed_physical).intersection(layout.shared_physical_ids)
+    assert set(routed_physical).union(layout.shared_physical_ids) == set(range(260))
+    for rank in range(4):
+        logical_start = rank * 64
+        local_routed = tuple(
+            layout.routed_to_physical(p)
+            for p in range(logical_start, logical_start + 64)
+        )
+        physical_start = rank * 65
+        assert local_routed == tuple(range(physical_start, physical_start + 64))
+        assert layout.shared_physical_id(rank) == physical_start + 64
+
+        ids, weights = _fuse_shared_route_row(
+            (0, 64, 128, 192, 1, 65, 129, 193),
+            (0.125,) * 8,
+            layout,
+            rank,
+        )
+        assert len(ids) == len(weights) == 9
+        assert ids[-1] == layout.shared_physical_id(rank)
+        assert weights[-1] == 1.0
+        assert sum(weights[:-1]) == _FUSED_ROUTED_SCALING_FACTOR
+        assert len(set(ids)) == 9
+        assert min(ids) >= 0 and max(ids) < layout.physical_experts
+
+
+# Keep this invariant check runnable on a CPU-only checkout without importing
+# torch/pandas/aiter. The argparse option below documents the same entry point.
+if __name__ == "__main__" and _FUSED_SHARED_ROUTE_SELF_TEST in sys.argv:
+    if sys.argv[1:] != [_FUSED_SHARED_ROUTE_SELF_TEST]:
+        raise SystemExit(f"{_FUSED_SHARED_ROUTE_SELF_TEST} must be used by itself")
+    _run_fused_shared_route_self_test()
+    print("fused shared-route self-test: PASS")
+    raise SystemExit(0)
+
+
+# Runtime imports intentionally follow the CPU-only early-exit self-test.
+import pandas as pd  # noqa: E402
+import torch  # noqa: E402
+import torch.distributed as dist  # noqa: E402
+import torch.profiler as tprof  # noqa: E402
+
+from aiter import (  # noqa: E402
     ActivationType,
     QuantType,
     dtypes,
     get_gfx,
     get_torch_quant,
 )
-from aiter.benchmark_data_init import add_data_init_args, fill, make_generator
-from aiter.benchmark_reporting import print_json_table
-from aiter.fused_moe import fused_moe
-from aiter.ops.flydsl.moe_common import GateMode
-from aiter.ops.quant import per_1x32_mx_quant_hip
-from aiter.ops.shuffle import moe_shuffle_scale, shuffle_weight
-from aiter.utility import fp4_utils
+from aiter.benchmark_data_init import (  # noqa: E402
+    add_data_init_args,
+    fill,
+    make_generator,
+)
+from aiter.benchmark_reporting import print_json_table  # noqa: E402
+from aiter.fused_moe import fused_moe  # noqa: E402
+from aiter.ops.flydsl.moe_common import GateMode  # noqa: E402
+from aiter.ops.quant import per_1x32_mx_quant_hip  # noqa: E402
+from aiter.ops.shuffle import moe_shuffle_scale, shuffle_weight  # noqa: E402
+from aiter.utility import fp4_utils  # noqa: E402
 
 try:
-    from aiter.test_common import get_trace_perf
+    from aiter.test_common import get_trace_perf  # noqa: E402
 except Exception:  # noqa: BLE001 # pragma: no cover
     get_trace_perf = None
 
@@ -202,6 +387,39 @@ def resolve_combine_modes(combine):
     if combine != "both":
         return [combine]
     return ["base", "fused"]
+
+
+def validate_shared_modes(args, spec):
+    """Reject dense/fused shared semantics that cannot be combined safely."""
+    if args.shared_experts < 0:
+        raise ValueError(
+            f"--shared_experts must be non-negative, got {args.shared_experts}"
+        )
+    if not args.fused_shared_route:
+        return
+    if args.shared_experts != 0:
+        raise ValueError(
+            "--fused_shared_route already supplies exactly one shared expert; "
+            "it cannot be combined with the independent dense "
+            "--shared_experts mode"
+        )
+    if args.quant_type != "a4w4_mxfp4":
+        raise ValueError("--fused_shared_route only supports -q a4w4_mxfp4")
+    if spec["dispatch_wire"] != "fp4":
+        raise ValueError(
+            "--fused_shared_route models the service FP4 MORI dispatch and "
+            "requires --dispatch_wire fp4 (or auto)"
+        )
+    if spec["stage1_fused"]:
+        raise ValueError(
+            "--fused_shared_route models MORI dispatch and requires "
+            "--stage1_fused=0"
+        )
+    if args.combine in ("fused", "both") and spec["dispatch_backend"] != "mori":
+        raise ValueError(
+            "--fused_shared_route with fused combine requires "
+            "--dispatch_backend=mori to match the service path"
+        )
 
 
 # Weight quantization + shuffle (device path) / dequant (reference)
@@ -338,6 +556,56 @@ def make_shared_weights(
     return w1, w2, sw1, sw2
 
 
+def make_fused_shared_route_weights(
+    layout: ExpertLayout,
+    hdim,
+    idim,
+    dtype,
+    dev,
+    seed=_WEIGHT_SEED,
+    data_dist="norm",
+):
+    """Build physical LOCAL_REPLICA weights without a second full-size copy.
+
+    The routed weights are generated into each rank's contiguous physical
+    partition. One logical shared w1/w2 pair is then copied into the last local
+    slot of every rank. The caller deliberately receives no dense shared FFN
+    weights: all physical rows, including the replicas, take the same
+    MXFP4 quantize/shuffle/grouped-GEMM path.
+    """
+    if not layout.fused_shared_route:
+        raise ValueError("physical shared-route weights require the fused layout")
+    gen = make_generator(seed, device=dev)
+
+    def _w(experts, rows, cols):
+        weight = fill(
+            (experts * rows, cols), data_dist, gen, dtype=dtype, device=dev
+        )
+        return weight.mul_(_WEIGHT_AMPL).view(experts, rows, cols)
+
+    def _routed_physical(rows, cols):
+        physical = torch.empty(
+            (layout.physical_experts, rows, cols), dtype=dtype, device=dev
+        )
+        for rank in range(layout.world_size):
+            physical_start = rank * layout.physical_experts_per_rank
+            chunk = _w(layout.routed_experts_per_rank, rows, cols)
+            physical[
+                physical_start : physical_start + layout.routed_experts_per_rank
+            ].copy_(chunk)
+            del chunk
+        return physical
+
+    w1 = _routed_physical(2 * idim, hdim)
+    w2 = _routed_physical(hdim, idim)
+    shared_w1 = _w(1, 2 * idim, hdim)
+    shared_w2 = _w(1, hdim, idim)
+    for shared_id in layout.shared_physical_ids:
+        w1[shared_id : shared_id + 1].copy_(shared_w1)
+        w2[shared_id : shared_id + 1].copy_(shared_w2)
+    return w1, w2, None, None
+
+
 def make_routings(n_layers, ct, E, topk, dev, seed, expert_balance=False):
     """Build retained per-layer routing for device and reference replay.
 
@@ -363,6 +631,45 @@ def make_routings(n_layers, ct, E, topk, dev, seed, expert_balance=False):
         wts = wts / wts.sum(dim=-1, keepdim=True).clamp_min(1e-9)
         routings.append((ids.to(dtypes.i32), wts))
     return routings
+
+
+def fuse_shared_routings(
+    routings,
+    layout: ExpertLayout,
+    source_rank,
+    routed_scaling_factor=_FUSED_ROUTED_SCALING_FACTOR,
+):
+    """Remap routed ids and append this source rank's FP32 shared route."""
+    if not layout.fused_shared_route:
+        raise ValueError("fused routing requires a fused shared-route layout")
+    shared_id = layout.shared_physical_id(source_rank)
+    physical = []
+    for ids, wts in routings:
+        if tuple(ids.shape[1:]) != (layout.routed_topk,):
+            raise ValueError(
+                f"routed ids must have width {layout.routed_topk}, "
+                f"got shape {tuple(ids.shape)}"
+            )
+        if tuple(wts.shape) != tuple(ids.shape) or wts.dtype != torch.float32:
+            raise ValueError("routed weights must match ids and use float32")
+        physical_ids = ids + torch.div(
+            ids, layout.routed_experts_per_rank, rounding_mode="floor"
+        )
+        shared_ids = torch.full(
+            (ids.shape[0], 1), shared_id, dtype=ids.dtype, device=ids.device
+        )
+        shared_weights = torch.ones(
+            (wts.shape[0], 1), dtype=torch.float32, device=wts.device
+        )
+        physical.append(
+            (
+                torch.cat((physical_ids, shared_ids), dim=1).contiguous(),
+                torch.cat(
+                    (wts * float(routed_scaling_factor), shared_weights), dim=1
+                ).contiguous(),
+            )
+        )
+    return physical
 
 
 def _rmsnorm(x, eps=1e-6):
@@ -467,8 +774,11 @@ class Dist:
 class RefModel:
     """fp32 reference. mxfp4-dequant weights (shared, lazily per expert), per-token
     routed FFN summed over topk, dense shared expert, chained N layers with a
-    residual. Uses only torch + fp4_utils -- NO mori/cco/fused_moe. Runs in fp32
-    on `dev`; for tractable memory/time use a modest token count for --check."""
+    residual. In fused shared-route mode the shared replica is already one of
+    the physical routes and ``sw1/sw2`` are None, so it is accumulated exactly
+    once through the routed loop. Uses only torch + fp4_utils -- NO
+    mori/cco/fused_moe. Runs in fp32 on `dev`; for tractable memory/time use a
+    modest token count for --check."""
 
     def __init__(self, w1_bf, w2_bf, sw1, sw2, spec, dev):
         self.w1_bf, self.w2_bf = w1_bf, w2_bf
@@ -526,7 +836,12 @@ class RefModel:
 
 # Device pipeline: N-layer dispatch->gemm->combine, one CUDA graph (ISOLATED)
 class DeviceMoEPipeline:
-    """Owns the cco Communicator + EpDispatchCombineOp + a8w4 shuffled weights.
+    """Owns the communicator, EP op and physical shuffled expert weights.
+
+    ``physical_experts``/``physical_topk`` are the actual dispatch and grouped
+    GEMM geometry. In fused shared-route mode that is E+ranks/topk+1, not the
+    logical router geometry exposed by ``-e``/``-k``.
+
     Each layer recomputes its own routing inside dispatch (e2e-faithful), and the
     whole N-layer chain is captured into ONE CUDA graph and timed with
     torch.profiler. No fp32-reference logic here."""
@@ -534,10 +849,10 @@ class DeviceMoEPipeline:
     def __init__(
         self,
         dist_ctx,
-        E,
+        physical_experts,
         hdim,
         idim,
-        topk,
+        physical_topk,
         spec,
         n_layers,
         w1_bf,
@@ -550,7 +865,9 @@ class DeviceMoEPipeline:
         combine_quant="none",
     ):
         self.dist_ctx = dist_ctx
-        self.E, self.hdim, self.idim, self.topk = E, hdim, idim, topk
+        self.physical_experts = physical_experts
+        self.physical_topk = physical_topk
+        self.hdim, self.idim = hdim, idim
         self.spec = spec
         self.n_layers = n_layers
         self.w1_bf, self.w2_bf = w1_bf, w2_bf
@@ -559,7 +876,7 @@ class DeviceMoEPipeline:
         self.ct = ct
         self.combine_mode = combine_mode
         self.combine_quant = combine_quant
-        self.EPR = E // dist_ctx.world
+        self.physical_experts_per_rank = physical_experts // dist_ctx.world
         self.dev = torch.device("cuda", dist_ctx.local_rank)
         self.comm = None
         self.op = None
@@ -580,15 +897,25 @@ class DeviceMoEPipeline:
         torch.cuda.set_device(self.dist_ctx.local_rank)
         dev, r = self.dev, self.dist_ctx.rank
 
-        # this rank's LOCAL expert weights (quant + layout shuffle), a8w4.
-        w1_g = self.w1_bf[r * self.EPR : (r + 1) * self.EPR].contiguous()
-        w2_g = self.w2_bf[r * self.EPR : (r + 1) * self.EPR].contiguous()
+        # This rank's contiguous physical experts, including a fused shared
+        # replica when enabled, all take the same MXFP4 quant/shuffle path.
+        local_start = r * self.physical_experts_per_rank
+        local_end = local_start + self.physical_experts_per_rank
+        w1_g = self.w1_bf[local_start:local_end].contiguous()
+        w2_g = self.w2_bf[local_start:local_end].contiguous()
         q1, gs1, q2, gs2 = raw_quant_weights(w1_g, w2_g)
         self.w1_a, self.w2_a, self.w1_s, self.w2_s = shuffle_group(
-            q1, gs1, q2, gs2, self.spec, self.EPR
+            q1,
+            gs1,
+            q2,
+            gs2,
+            self.spec,
+            self.physical_experts_per_rank,
         )
-        self.expert_mask = torch.zeros((self.E,), dtype=dtypes.i32, device=dev)
-        self.expert_mask[self.EPR * r : self.EPR * (r + 1)] = 1
+        self.expert_mask = torch.zeros(
+            (self.physical_experts,), dtype=dtypes.i32, device=dev
+        )
+        self.expert_mask[local_start:local_end] = 1
 
         self.transport_dtype = torch.bfloat16  # bf16 transport (mxfp4 path)
 
@@ -610,8 +937,8 @@ class DeviceMoEPipeline:
                 world_size=self.dist_ctx.world,
                 model_dim=self.hdim,
                 inter_dim=self.idim,
-                experts=self.E,
-                topk=self.topk,
+                experts=self.physical_experts,
+                topk=self.physical_topk,
                 max_tokens_per_rank=self.ct,
                 activation=self.spec["activation"],
                 gate_mode=self.spec["gate_mode"].value,
@@ -651,8 +978,8 @@ class DeviceMoEPipeline:
                 world_size=self.dist_ctx.world,
                 hidden_dim=self.hdim,
                 max_num_inp_token_per_rank=self.ct,
-                num_experts_per_rank=self.EPR,
-                num_experts_per_token=self.topk,
+                num_experts_per_rank=self.physical_experts_per_rank,
+                num_experts_per_token=self.physical_topk,
                 data_type=self.transport_dtype,
                 combine_mode="gather",  # mori's name for the `base` combine
                 **wire_kw,
@@ -1098,7 +1425,7 @@ def _emit_table(name, rows, max_col_width=72):
 
 
 def _device_shared_ffn(tokens, sw1, sw2):
-    """Dense shared-expert FFN (SwiGLU), graph-capturable (all on-device)."""
+    """Legacy ``--shared_experts`` dense FFN; never used by fused route mode."""
     x = tokens.float()
     acc = torch.zeros(
         tokens.shape[0], sw2.shape[1], device=tokens.device, dtype=torch.float32
@@ -1112,6 +1439,11 @@ def _device_shared_ffn(tokens, sw1, sw2):
 # Driver
 def main():
     args = _parse_args()
+    if args.self_test_fused_shared_route:
+        _run_fused_shared_route_self_test()
+        print("fused shared-route self-test: PASS")
+        return
+
     dist_ctx = Dist()
     dev = torch.device("cuda", dist_ctx.local_rank)
     # Set, not setdefault: the wire has to match this, so a stale environment
@@ -1123,6 +1455,13 @@ def main():
     spec["stage1_fused"] = bool(args.stage1_fused)
     if spec["stage1_fused"] and spec["dispatch_backend"] != "flydsl":
         raise ValueError("--stage1_fused=1 requires --dispatch_backend=flydsl")
+    validate_shared_modes(args, spec)
+    layout = build_expert_layout(
+        args.expert,
+        args.topk,
+        dist_ctx.world,
+        fused_shared_route=args.fused_shared_route,
+    )
 
     if get_gfx() not in ("gfx950", "gfx1250"):
         if dist_ctx.rank == 0:
@@ -1132,27 +1471,36 @@ def main():
         dist_ctx.shutdown()
         return
 
-    E, hdim, idim, topk = args.expert, args.hidden, args.inter, args.topk
+    E, topk = layout.physical_experts, layout.physical_topk
+    hdim, idim = args.hidden, args.inter
     ct, n_layers = args.token_per_rank, args.layers
+    routed_scaling_factor = (
+        _FUSED_ROUTED_SCALING_FACTOR if layout.fused_shared_route else 1.0
+    )
     expert_balance = (
         os.environ.get("AITER_MOE_EXPERT_BALANCE", "False").lower() == "true"
     )
-    assert (
-        E % dist_ctx.world == 0
-    ), f"E={E} must be divisible by world_size={dist_ctx.world}"
 
     data_dist = resolve_data_init(args.data_init)
 
     if dist_ctx.rank == 0:
         print(
             f"[cfg] world={dist_ctx.world} layers={n_layers} tokens/rank={ct} hidden={hdim} "
-            f"inter={idim} E={E} topk={topk} EPR={E // dist_ctx.world} quant={args.quant_type} "
+            f"inter={idim} E={E} topk={topk} "
+            f"EPR={layout.physical_experts_per_rank} "
+            f"routed_E={layout.routed_experts} "
+            f"routed_topk={layout.routed_topk} physical_E={E} "
+            f"physical_topk={topk} physical_EPR={layout.physical_experts_per_rank} "
+            f"quant={args.quant_type} "
             f"combine={args.combine} dispatch={spec['dispatch_backend']} "
             f"stage1_fused={spec['stage1_fused']} "
             f"dispatch_wire={spec['dispatch_wire']} "
             f"combine_quant={args.combine_quant} "
             f"force_a8w4={os.environ['AITER_FORCE_A8W4']} "
             f"gate={spec['gate_mode'].name} shared_E={args.shared_experts} "
+            f"fused_shared_route={layout.fused_shared_route} "
+            f"shared_physical_ids={layout.shared_physical_ids or 'none'} "
+            f"routed_scaling_factor={routed_scaling_factor} "
             f"expert_balance={expert_balance} data_init={data_dist} "
             f"seed={args.seed} gfx={get_gfx()}",
             flush=True,
@@ -1170,16 +1518,27 @@ def main():
     # --data-init picks how the weights and the layer-0 tokens are filled; the
     # routing stays random in every mode, since a zero/constant routing would
     # collapse every token onto expert 0 and stop measuring dispatch/combine.
-    w1_bf, w2_bf, sw1, sw2 = make_shared_weights(
-        E,
-        hdim,
-        idim,
-        dtypes.bf16,
-        dev,
-        shared_E=args.shared_experts,
-        seed=_WEIGHT_SEED + args.seed,
-        data_dist=data_dist,
-    )
+    if layout.fused_shared_route:
+        w1_bf, w2_bf, sw1, sw2 = make_fused_shared_route_weights(
+            layout,
+            hdim,
+            idim,
+            dtypes.bf16,
+            dev,
+            seed=_WEIGHT_SEED + args.seed,
+            data_dist=data_dist,
+        )
+    else:
+        w1_bf, w2_bf, sw1, sw2 = make_shared_weights(
+            layout.routed_experts,
+            hdim,
+            idim,
+            dtypes.bf16,
+            dev,
+            shared_E=args.shared_experts,
+            seed=_WEIGHT_SEED + args.seed,
+            data_dist=data_dist,
+        )
     x0 = fill(
         (ct, hdim),
         data_dist,
@@ -1190,12 +1549,19 @@ def main():
     routings = make_routings(
         n_layers,
         ct,
-        E,
-        topk,
+        layout.routed_experts,
+        layout.routed_topk,
         dev,
         seed=4242 + 100 * dist_ctx.rank + args.seed,
         expert_balance=expert_balance,
     )
+    if layout.fused_shared_route:
+        routings = fuse_shared_routings(
+            routings,
+            layout,
+            dist_ctx.rank,
+            routed_scaling_factor=routed_scaling_factor,
+        )
 
     # ---- device path (isolated): setup -> capture 61 layers in one graph -> bench,
     # once per combine mode. Every rank walks `modes` in the same order, so the
@@ -1293,6 +1659,17 @@ def main():
                 "tokens_per_rank": ct,
                 "experts": E,
                 "topk": topk,
+                "experts_per_rank": layout.physical_experts_per_rank,
+                "routed_experts": layout.routed_experts,
+                "routed_topk": layout.routed_topk,
+                "fused_shared_route": layout.fused_shared_route,
+                "dense_shared_experts": args.shared_experts,
+                "shared_physical_ids": (
+                    ",".join(map(str, layout.shared_physical_ids))
+                    if layout.shared_physical_ids
+                    else None
+                ),
+                "routed_scaling_factor": routed_scaling_factor,
                 "hidden": hdim,
                 "intermediate": idim,
                 "layers": n_layers,
@@ -1399,6 +1776,18 @@ def _parse_args():
     )
     p.add_argument("-k", "--topk", type=int, default=6, help="top-k")
     p.add_argument("--shared_experts", type=int, default=0, help="dense shared experts")
+    p.add_argument(
+        "--fused_shared_route",
+        action="store_true",
+        help="service-equivalent LOCAL_REPLICA mode: treat -e/-k as routed "
+        "geometry, insert one physical shared replica per rank, append the "
+        "source-local shared route, and scale routed weights by 2.5",
+    )
+    p.add_argument(
+        _FUSED_SHARED_ROUTE_SELF_TEST,
+        action="store_true",
+        help="run the CPU-only EP4 E256/topk8 layout invariant check and exit",
+    )
     p.add_argument("--layers", type=int, default=61, help="number of MoE layers")
     # The shared ubench data-init knobs: --data-init, --scale-init and --seed.
     # default_dist=norm reproduces the historical N(0,1)*0.1 weights, which is

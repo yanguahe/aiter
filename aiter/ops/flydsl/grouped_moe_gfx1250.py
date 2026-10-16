@@ -26,9 +26,274 @@ _WARNED_NAIVE_EPILOGUE = False
 # weight is materialized at most once (not re-copied on every fused_moe call).
 _GROUPED_WEIGHT_CACHE = {}
 
+_SHARED_EXPERTS_ENV = "AITER_MOE_NUM_SHARED_EXPERTS"
+
+
+def _routed_geometry_from_metadata(
+    physical_experts: int,
+    physical_topk: int,
+) -> tuple[int, int, int]:
+    """Return routed E/topk plus shared count from strict caller metadata.
+
+    The grouped launch always keeps the physical geometry. This metadata is
+    used only by routed-geometry selectors, so E65/topk9 can explicitly reuse
+    an E64/topk8 routing profile without making arbitrary topk9 calls eligible.
+    """
+    raw = os.environ.get(_SHARED_EXPERTS_ENV, "0")
+    try:
+        shared_experts = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{_SHARED_EXPERTS_ENV} must be integer 0 or 1, got {raw!r}"
+        ) from exc
+    if shared_experts not in (0, 1):
+        raise ValueError(f"{_SHARED_EXPERTS_ENV} must be 0 or 1, got {shared_experts}")
+    if shared_experts == 0:
+        return int(physical_experts), int(physical_topk), 0
+    if physical_experts <= shared_experts:
+        raise ValueError(
+            f"physical experts={physical_experts} must exceed "
+            f"{_SHARED_EXPERTS_ENV}={shared_experts}"
+        )
+    if physical_topk <= shared_experts:
+        raise ValueError(
+            f"physical topk={physical_topk} must exceed "
+            f"{_SHARED_EXPERTS_ENV}={shared_experts}"
+        )
+    routed_experts = int(physical_experts) - shared_experts
+    routed_topk = int(physical_topk) - shared_experts
+    if routed_topk > routed_experts:
+        raise ValueError(
+            f"routed topk={routed_topk} exceeds routed experts={routed_experts} "
+            f"for physical E={physical_experts}/topk={physical_topk}"
+        )
+    return routed_experts, routed_topk, shared_experts
+
+
+def _balanced_expert_routing_enabled() -> bool:
+    """Return whether the caller guarantees balanced per-expert route counts."""
+    return os.environ.get("AITER_MOE_EXPERT_BALANCE", "false").strip().lower() in (
+        "1",
+        "true",
+    )
+
+
+def _apply_nonbalanced_partial_safe_profile(
+    tdm_kw: dict[str, int | None],
+    *,
+    fallback_tile_m: int,
+    balanced_routing: bool,
+    enable_ep_scatter: bool,
+) -> str | None:
+    """Select partial-M codegen for tuned tiles without a balance guarantee.
+
+    Profiles with ``allow_partial_m_exact`` keep the un-suffixed t256 persistent
+    kernels; every other tuned tile compiles the safe ScaleA store and drain.
+    """
+    if balanced_routing:
+        return None
+
+    tile_m = int(tdm_kw.get("tile_m", fallback_tile_m) or fallback_tile_m)
+    tile_m2_value = tdm_kw.get("tile_m2")
+    tile_m2 = tile_m if tile_m2_value is None else int(tile_m2_value)
+    if tile_m not in (192, 256) and tile_m2 not in (192, 256):
+        return None
+
+    if enable_ep_scatter:
+        # The persistent GEMM2 EP-scatter launcher currently requires
+        # partial_m_drain_output=0. A non-balanced router cannot prove full
+        # expert tiles, so use the generic partial-M-safe schedule instead of
+        # selecting an unsafe persistent specialization or tripping its assert.
+        tdm_kw.update(_make_tdm_token_profile(64, 4, 4, 3, auto_cluster=True))
+        return "generic t64/w1x4/b3 for EP scatter"
+
+    if tdm_kw.get("allow_partial_m_exact") and tile_m == 256 and tile_m2 == 256:
+        tdm_kw["balanced_m192"] = 0
+        tdm_kw["partial_m_direct_scale"] = 0
+        tdm_kw["partial_m_drain_output"] = 0
+        return "exact t256 pmds=0/pmdrain=0"
+
+    # A non-balanced router can produce partial expert tiles even when the
+    # average routes/expert equals tile_m. Keep the launch geometry fixed for
+    # CUDAGraph, but compile the safe ScaleA store and task-drain paths.
+    tdm_kw["allow_partial_m_exact"] = 0
+    tdm_kw["balanced_m192"] = 0
+    tdm_kw["partial_m_direct_scale"] = 1
+    tdm_kw["partial_m_drain_output"] = 1
+    return "pmds=1/pmdrain=1"
+
+
+def _make_tdm_token_profile(
+    tile_m: int,
+    gemm1_n_warp: int,
+    gemm2_n_warp: int,
+    num_buffers: int,
+    *,
+    balanced_m192: int = 0,
+    partial_m_direct_scale: int = 0,
+    partial_m_drain_output: int = 0,
+    allow_partial_m_exact: int = 0,
+    auto_cluster: bool = False,
+) -> dict[str, int | None]:
+    m_warp = 1 if tile_m == 64 else 2
+    return {
+        "tile_m": tile_m,
+        "tile_n": 256,
+        "tile_k": 256,
+        "m_warp": m_warp,
+        # Keep GEMM1 at its A-preshuffle-compatible base geometry; the fused
+        # launcher override below selects w2x4 after layout resolution.
+        "n_warp": 4 if tile_m == 64 else 2,
+        "num_buffers": num_buffers,
+        "tile_m2": tile_m,
+        "tile_n2": 256,
+        "tile_k2": 256,
+        "m_warp2": m_warp,
+        "n_warp2": gemm2_n_warp,
+        "num_buffers2": num_buffers,
+        "cluster_m": -1 if auto_cluster else 1,
+        "cluster_n": -1 if auto_cluster else 4,
+        "cluster_m2": -1 if auto_cluster else 1,
+        "cluster_n2": -1 if auto_cluster else 4,
+        "waves_per_tensor_tdm": 2,
+        "waves_per_tensor_tdm2": 2,
+        "next_stage_prefetch": 0 if tile_m == 64 else 1,
+        "fused_gemm1_n_warp": gemm1_n_warp,
+        "balanced_m192": balanced_m192,
+        "partial_m_direct_scale": partial_m_direct_scale,
+        "partial_m_drain_output": partial_m_drain_output,
+        "allow_partial_m_exact": allow_partial_m_exact,
+    }
+
+
+_E64_TOPK8_TOKEN_PROFILES = {
+    "t64": _make_tdm_token_profile(64, 4, 4, 3, auto_cluster=True),
+    "t192_partial_interval": _make_tdm_token_profile(
+        192,
+        4,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t192_aligned_drain": _make_tdm_token_profile(
+        192, 4, 4, 4, partial_m_drain_output=1
+    ),
+    "t192_persistent": _make_tdm_token_profile(192, 4, 4, 4),
+    "t256_vm192": _make_tdm_token_profile(256, 4, 4, 4, balanced_m192=1),
+    "t256_partial_persistent": _make_tdm_token_profile(
+        256,
+        4,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t256_partial_w2x2_w2x4": _make_tdm_token_profile(
+        256,
+        2,
+        4,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t256_partial_w2x2_w2x2": _make_tdm_token_profile(
+        256,
+        2,
+        2,
+        4,
+        partial_m_direct_scale=1,
+        partial_m_drain_output=1,
+    ),
+    "t256_persistent": _make_tdm_token_profile(256, 4, 4, 4),
+    "t256_persistent_any_routing": _make_tdm_token_profile(
+        256, 4, 4, 4, allow_partial_m_exact=1
+    ),
+    "t256_w2x2_w2x4": _make_tdm_token_profile(256, 2, 4, 4),
+    "t256_w2x2_w2x2": _make_tdm_token_profile(256, 2, 2, 4),
+}
+
+# Left-closed, right-open dispatch intervals for the E64/topk8 token sweep.
+_E64_TOPK8_TOKEN_INTERVALS = (
+    (1, 1024, "t64"),
+    (1024, 1536, "t192_partial_interval"),
+    (1536, 1537, "t256_persistent_any_routing"),
+    (1537, 2048, "t256_persistent_any_routing"),
+    (2048, 2049, "t256_persistent_any_routing"),
+    (2049, 3073, "t192_partial_interval"),
+    (3073, 3840, "t256_partial_persistent"),
+    (3840, 4096, "t256_partial_w2x2_w2x4"),
+    (4096, 4097, "t256_w2x2_w2x4"),
+    (4097, 4104, "t256_partial_w2x2_w2x2"),
+    (4104, 4608, "t192_partial_interval"),
+    (4608, 4609, "t192_persistent"),
+    (4609, None, "t256_partial_w2x2_w2x2"),
+)
+
+
+def _find_routed_e64_topk8_token_profile(
+    *,
+    tokens: int,
+    experts: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+    activation: ActivationType,
+    is_grouped_a4w4: bool,
+    use_bias: bool,
+    is_ep: bool,
+    enable_ep_scatter: bool,
+) -> dict[str, int | None] | None:
+    """Select the E64/topk8 routed profile for a physical grouped launch.
+
+    ``experts``/``topk`` are physical launch geometry. Only explicit
+    ``AITER_MOE_NUM_SHARED_EXPERTS=1`` maps physical E65/topk9 to routed
+    E64/topk8; absent metadata keeps the historical physical interpretation.
+    """
+    routed_experts, routed_topk, _ = _routed_geometry_from_metadata(experts, topk)
+    if not all(
+        (
+            routed_experts == 64,
+            routed_topk == 8,
+            model_dim == 7168,
+            inter_dim == 2048,
+            activation == ActivationType.Silu,
+            is_grouped_a4w4,
+            not use_bias,
+            not is_ep,
+            not enable_ep_scatter,
+        )
+    ):
+        return None
+    if tokens >= 4609:
+        # The aligned override follows routed geometry: balanced routing spreads
+        # tokens*routed_topk over routed_experts. With one shared expert its
+        # count is tokens; for E64/topk8, a tile-aligned routed count also makes
+        # that shared count tile-aligned. The physical E/topk still size and
+        # launch every contiguous grouped row below.
+        routes_per_expert, remainder = divmod(tokens * routed_topk, routed_experts)
+        exact_profile = _E64_TOPK8_TOKEN_PROFILES["t256_w2x2_w2x2"]
+        if remainder == 0 and routes_per_expert % int(exact_profile["tile_m"]) == 0:
+            return dict(exact_profile)
+    for start, end, profile_name in _E64_TOPK8_TOKEN_INTERVALS:
+        if start <= tokens and (end is None or tokens < end):
+            return dict(_E64_TOPK8_TOKEN_PROFILES[profile_name])
+    return None
+
+
 # Opt-in kernel-bench hook: a caller sets a list here to collect
 # (name, callable) per-kernel launches; None in production.
 kernel_bench_callable = None
+
+# Opt-in grouped-MoE correctness hook. A diagnostic launch exposes GEMM1's
+# logical BF16 output, route-to-grouped-row map, and GEMM2's grouped output.
+# It is None in production, so the extra untimed launch is disabled.
+stage_output_capture = None
+
+# Opt-in hook comparing fused GEMM1 activation/quant with the standalone path.
+# A diagnostic launch records separate payload/scale snapshots in a caller dict.
+# It is None in production, so no copies occur.
+quant_output_capture = None
 
 # fused_moe_ rebuilds Stage2ScatterContext without MegaMoE's dispatch fields
 # (custom-op schema). MegaMoE stashes the live context here for the grouped helper.
@@ -56,12 +321,6 @@ def _grouped_weight_uint8(w: torch.Tensor) -> torch.Tensor:
     return out
 
 
-def _as_bool(value, default: bool) -> bool:
-    if value is None or str(value).strip() == "":
-        return default
-    return str(value).strip() in _TRUTHY_ENV
-
-
 def _as_int(value, default: int | None) -> int | None:
     # The tuner rewrites its frame through pandas' ``astype(str)``, so a blank
     # cell can come back as the literal "nan"; read those as unset like _cell.
@@ -69,6 +328,12 @@ def _as_int(value, default: int | None) -> int | None:
     if text == "" or text.lower() in ("nan", "none"):
         return default
     return int(text)
+
+
+def _as_bool(value, default: bool) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip() in _TRUTHY_ENV
 
 
 def _dtype_name(dtype) -> str:
@@ -584,6 +849,11 @@ def _grouped_a8w4_tdm_moe(
     tdm_as_in_prologue=0,
     tdm_b_th=0,
     lds_soa_load_interleave=0,
+    fused_gemm1_n_warp=None,
+    balanced_m192=-1,
+    partial_m_direct_scale=0,
+    partial_m_drain_output=0,
+    allow_partial_m_exact=0,
     data_format="a8w4",
     expert_mask=None,
     num_local_tokens=None,
@@ -596,7 +866,10 @@ def _grouped_a8w4_tdm_moe(
 
     import torch
 
-    from aiter.ops.flydsl.grouped_gemm_mxfp4 import flydsl_grouped_gemm_a8w4_masked
+    from aiter.ops.flydsl.grouped_gemm_mxfp4 import (
+        flydsl_grouped_gemm_a8w4_masked,
+        supports_gfx1250_a_preshuffle,
+    )
     from aiter.ops.flydsl.moe_kernels import (
         flydsl_moe_fused_ep_route_quant_compact,
         flydsl_moe_fused_quant_preshuffle,
@@ -604,6 +877,8 @@ def _grouped_a8w4_tdm_moe(
     )
 
     device = hidden_states.device
+    _stage_output_capture = stage_output_capture
+    _quant_output_capture = quant_output_capture
     token_num, topk = topk_ids.shape
     enable_ep_scatter = stage2_scatter is not None
     _compact_ctx = _flydsl_dispatch_context()
@@ -686,6 +961,27 @@ def _grouped_a8w4_tdm_moe(
     # surplus tiles fall past ``psum`` and exit early. The TDM batched GEMMs
     # themselves are EP-agnostic: they operate on the routed contiguous layout.
     _is_ep = expert_mask is not None
+    _ep_apreshuffle_input = all(
+        (
+            _is_ep,
+            not _compact,
+            data_format == "fp4",
+            a1_scale is not None,
+            hidden_states.dtype in (torch.uint8, dtypes.fp4x2),
+            dtype == torch.bfloat16,
+            E == 64,
+            model_dim == 7168,
+            inter_dim == 2048,
+            (tile_m, tile_n, tile_k, m_warp, n_warp, num_buffers)
+            == (192, 256, 256, 2, 2, 4),
+            cluster_n == 4,
+            cluster_m == 1,
+            next_stage_prefetch == 1,
+            not bool(tdm_as_in_prologue),
+            bias1 is None,
+            bias2 is None,
+        )
+    )
     _g2l_lut = None
     _g2l_counter = None
     _gather_w_buf = None
@@ -718,6 +1014,7 @@ def _grouped_a8w4_tdm_moe(
         )
         _fuse_ep_route_quant = (
             _direct_ep_mask
+            and not _ep_apreshuffle_input
             and enable_ep_scatter
             and int(E) <= 256
             and a1_scale is not None
@@ -797,6 +1094,7 @@ def _grouped_a8w4_tdm_moe(
             }
     _fuse_psum_quant = (
         _is_ep
+        and not _ep_apreshuffle_input
         and enable_ep_scatter
         and not _compact
         and not _fuse_ep_route_quant
@@ -922,6 +1220,84 @@ def _grouped_a8w4_tdm_moe(
     # per dest row: nothing local re-lays it out, so gemm1 takes the 16-row
     # interleave on its LDS->register read instead.
     _row_major_ascale = _compact and _prequantized
+    _a_preshuffle_common = not any(
+        (
+            enable_ep_scatter and not _ep_apreshuffle_input,
+            bool(tdm_as_in_prologue),
+            bool(_row_major_ascale),
+            _prequantized and not _ep_apreshuffle_input,
+        )
+    )
+    # Serving captures decode and prefill shapes in the same process. Enable the
+    # optimized layout only for shapes accepted by the retained kernel; all
+    # other shapes continue through the ordinary row-major producer/GEMM.
+    _gemm1_a_preshuffle = (
+        _is_fp4
+        and _a_preshuffle_common
+        and supports_gfx1250_a_preshuffle(
+            N=two_inter,
+            K=model_dim,
+            tile_m=tile_m,
+            tile_n=tile_n,
+            tile_k=tile_k,
+            m_warp=m_warp,
+            n_warp=n_warp,
+            num_buffers=num_buffers,
+            out_is_f16=out_is_f16,
+            a_is_fp4=_a_is_fp4,
+            stage1_act=stage1_act,
+            stage1_quant_out=0,
+            has_bias=int(_b1 is not None),
+            cluster_n=cluster_n,
+            next_stage_prefetch=next_stage_prefetch,
+            n_experts=E,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
+        )
+    )
+    # GEMM2 consumes expert-local grouped rows, so its producer switches layout
+    # independently from the token-once GEMM1 producer.
+    _gemm2_cluster_n = cluster_n2
+    if (
+        _is_fp4
+        and _is_ep
+        and E == 64
+        and model_dim == 7168
+        and inter_dim == 2048
+        and cluster_n2 < 1
+    ):
+        _gemm2_cluster_n = 4
+    _gemm2_a_preshuffle = (
+        _is_fp4
+        # GEMM2's input is produced locally, independently of the dispatch wire
+        # and GEMM1's A layout. BF16 EP scatter is supported by its tuned epilogue.
+        and not bool(tdm_as_in_prologue)
+        and (not enable_ep_scatter or stage2_scatter.combine_quant_bits == 0)
+        and supports_gfx1250_a_preshuffle(
+            N=model_dim,
+            K=inter_dim,
+            tile_m=tile_m2,
+            tile_n=tile_n2,
+            tile_k=tile_k2,
+            m_warp=m_warp2,
+            n_warp=n_warp2,
+            num_buffers=num_buffers2,
+            out_is_f16=out_is_f16,
+            a_is_fp4=_a_is_fp4,
+            stage1_act=0,
+            stage1_quant_out=0,
+            has_bias=int(_b2 is not None),
+            cluster_n=_gemm2_cluster_n,
+            next_stage_prefetch=next_stage_prefetch,
+            n_experts=E,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
+        )
+    )
+    if _gemm2_a_preshuffle:
+        cluster_n2 = _gemm2_cluster_n
     # Local quant instead writes one compact row-major row per token and rebuilds
     # the interleaved layout gemm1 reads in a second pass, so neither write lands
     # 4 B per cache line. A compact plan drives the GEMM off recv rows and passes
@@ -929,6 +1305,7 @@ def _grouped_a8w4_tdm_moe(
     _compact_ascale = (
         not _compact
         and not _prequantized
+        and not _gemm1_a_preshuffle
         and _ep_nvr is None
         and _use_fused_quant_preshuffle(
             model_dim, wmma_rep, _quant_mode, token_num, topk
@@ -991,6 +1368,7 @@ def _grouped_a8w4_tdm_moe(
             out_scale=_compact_ascale_buf,
             row_to_token=_row_to_token,
             ep_psum_params=ep_psum_params,
+            a_preshuffle=_gemm1_a_preshuffle,
         )
         if _compact_ascale:
             a1_scale = flydsl_moe_scatter_preshuffle_scale(
@@ -1002,13 +1380,39 @@ def _grouped_a8w4_tdm_moe(
                 scale_k_per_tile=tile_k // 32,
             )
 
-    # Fuse gemm1 activation + MX quantization + scale preshuffle into the
-    # kernel epilogue, eliminating the standalone
-    # flydsl_moe_fused_quant_preshuffle call between gemm1 and gemm2.
+    # Fuse activation and MX quantization when GEMM1/GEMM2 use the same A layout.
+    # Generic output is row-major and tuned output is A-preshuffled; mixed layouts
+    # or diagnostic BF16 capture retain the standalone conversion kernel.
     disable_gemm1_requant = _as_bool(
         os.environ.get("AITER_FLYDSL_DISABLE_GEMM1_REQUANT"), False
     )
-    _fuse_quant = _b1 is None and not disable_gemm1_requant
+    _fuse_quant = (
+        not disable_gemm1_requant
+        and (_b1 is None)
+        and (_gemm1_a_preshuffle == _gemm2_a_preshuffle)
+        and _stage_output_capture is None
+    )
+    _fused_gemm1_n_warp = (
+        4
+        if (
+            _fuse_quant
+            and E == 64
+            and (token_num in (1536, 2048) or _ep_apreshuffle_input)
+            and topk == 8
+            and model_dim == 7168
+            and inter_dim == 2048
+            and tile_m in (192, 256)
+            and tile_n == 256
+            and tile_k == 256
+            and m_warp == 2
+            and n_warp == 2
+            and num_buffers == 4
+            and cluster_n == 4
+        )
+        else n_warp
+    )
+    if fused_gemm1_n_warp is not None and _fuse_quant:
+        _fused_gemm1_n_warp = int(fused_gemm1_n_warp)
     w1_u8 = _grouped_weight_uint8(w1)
     w1s_i32 = w1_scale.reshape(-1).view(torch.int32)
 
@@ -1025,7 +1429,7 @@ def _grouped_a8w4_tdm_moe(
             dtype=torch.uint8,
             device=device,
         )
-        # The gemm1 kernel writes fp8 payload to `a2_payload` (passed as
+        # The gemm1 kernel writes the MX payload to `a2_payload` (passed as
         # `out` / arg_c) and preshuffled e8m0 scale to `a2_scale` (passed via
         # quant_scale / arg_quant_scale).
         flydsl_grouped_gemm_a8w4_masked(
@@ -1043,7 +1447,7 @@ def _grouped_a8w4_tdm_moe(
             tile_n=tile_n,
             tile_k=tile_k,
             m_warp=m_warp,
-            n_warp=n_warp,
+            n_warp=_fused_gemm1_n_warp,
             out_is_f16=out_is_f16,
             a_is_fp4=_a_is_fp4,
             stage1_act=stage1_act,
@@ -1060,9 +1464,14 @@ def _grouped_a8w4_tdm_moe(
             tdm_as_in_prologue=tdm_as_in_prologue,
             tdm_b_th=tdm_b_th,
             lds_soa_load_interleave=lds_soa_load_interleave,
+            balanced_m192=balanced_m192,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
+            a_preshuffle=_gemm1_a_preshuffle,
             **_situ_kw,
         )
     else:
@@ -1097,11 +1506,18 @@ def _grouped_a8w4_tdm_moe(
             tdm_as_in_prologue=tdm_as_in_prologue,
             tdm_b_th=tdm_b_th,
             lds_soa_load_interleave=lds_soa_load_interleave,
+            balanced_m192=balanced_m192,
+            partial_m_direct_scale=partial_m_direct_scale,
+            partial_m_drain_output=partial_m_drain_output,
+            allow_partial_m_exact=allow_partial_m_exact,
             row_major_ascale=int(_row_major_ascale),
             a_row_stride_bytes=_a1_wire_stride,
             a_scale_row_stride_bytes=_a1_wire_stride,
+            a_preshuffle=_gemm1_a_preshuffle,
             **_situ_kw,
         )
+        # Quantize only routed rows. Per-expert padding and the sentinel tail
+        # remain unwritten and are excluded by GEMM2's mn_oob bound.
         a2_payload, a2_scale = flydsl_moe_fused_quant_preshuffle(
             y,
             1,
@@ -1109,10 +1525,53 @@ def _grouped_a8w4_tdm_moe(
             wmma_rep=wmma_rep2,
             quant_mode=_quant_mode,
             masked_m=None,
-            topids_to_rows=None,
+            topids_to_rows=topids_to_rows,
+            source_topk=0,
+            num_valid_routes=_ep_nvr,
+            a_preshuffle=_gemm2_a_preshuffle,
+            m_tile_map=psum,
+            n_experts=E,
+            expert_tile_m=_align_m,
+        )
+
+    if _quant_output_capture is not None:
+        torch.cuda.synchronize()
+        capture_prefix = "fused" if _fuse_quant else "reference"
+        _quant_output_capture.update(
+            {
+                f"{capture_prefix}_payload": a2_payload.detach().clone(),
+                f"{capture_prefix}_scale": a2_scale.detach().clone(),
+                f"{capture_prefix}_topids_to_rows": (
+                    None
+                    if topids_to_rows is None
+                    else topids_to_rows.detach().clone()
+                ),
+                "contiguous_m": contiguous_m,
+                "inter_dim": inter_dim,
+                "wmma_rep": wmma_rep2,
+                "gemm1_a_preshuffle": _gemm1_a_preshuffle,
+                "gemm2_a_preshuffle": _gemm2_a_preshuffle,
+            }
+        )
+
+    if _stage_output_capture is not None:
+        if topids_to_rows is None:
+            raise RuntimeError(
+                "GEMM stage-output capture requires the non-EP routed-row layout"
+            )
+        _stage_output_capture.update(
+            {
+                "gemm1_grouped_out": y,
+                "topids_to_rows": topids_to_rows,
+            }
         )
 
     grouped_out = torch.empty((1, contiguous_m, model_dim), dtype=dtype, device=device)
+    if _stage_output_capture is not None:
+        # This diagnostic launch happens after torch.profiler has finished.
+        # Stabilize undefined padding bytes for a direct whole-buffer hash;
+        # every profiled/production launch retains the torch.empty fast path.
+        grouped_out.zero_()
     w2_u8 = _grouped_weight_uint8(w2)
     w2s_i32 = w2_scale.reshape(-1).view(torch.int32)
     flydsl_grouped_gemm_a8w4_masked(
@@ -1141,10 +1600,25 @@ def _grouped_a8w4_tdm_moe(
         waves_per_tensor_tdm=waves_per_tensor_tdm2,
         next_stage_prefetch=next_stage_prefetch,
         tdm_as_in_prologue=tdm_as_in_prologue,
-        tdm_b_th=tdm_b_th,
+        tdm_b_th=0,
+        a_preshuffle=_gemm2_a_preshuffle,
         lds_soa_load_interleave=lds_soa_load_interleave,
+        balanced_m192=balanced_m192,
+        partial_m_direct_scale=partial_m_direct_scale,
+        partial_m_drain_output=partial_m_drain_output,
+        allow_partial_m_exact=allow_partial_m_exact,
         **_ep_gemm2_kwargs,
     )
+
+    if _quant_output_capture is not None:
+        torch.cuda.synchronize()
+        capture_prefix = "fused" if _fuse_quant else "reference"
+        _quant_output_capture[
+            f"{capture_prefix}_gemm2_grouped_out"
+        ] = grouped_out.detach().clone()
+
+    if _stage_output_capture is not None:
+        _stage_output_capture["gemm2_grouped_out"] = grouped_out
 
     if kernel_bench_callable is not None:
         kernel_bench_callable.append(
@@ -1164,6 +1638,7 @@ def _grouped_a8w4_tdm_moe(
                     prequantized_scale=src_a1_scale if _prequantized else None,
                     out_payload=a1_payload,
                     out_scale=a1_scale,
+                    a_preshuffle=_gemm1_a_preshuffle,
                 ),
             )
         )
@@ -1179,7 +1654,13 @@ def _grouped_a8w4_tdm_moe(
                         wmma_rep=wmma_rep2,
                         quant_mode=_quant_mode,
                         masked_m=None,
-                        topids_to_rows=None,
+                        topids_to_rows=topids_to_rows,
+                        source_topk=0,
+                        num_valid_routes=_ep_nvr,
+                        a_preshuffle=_gemm2_a_preshuffle,
+                        m_tile_map=psum,
+                        n_experts=E,
+                        expert_tile_m=_align_m,
                         out_payload=a2_payload,
                         out_scale=a2_scale,
                     ),
@@ -1205,7 +1686,7 @@ def _grouped_a8w4_tdm_moe(
                         tile_n=tile_n,
                         tile_k=tile_k,
                         m_warp=m_warp,
-                        n_warp=n_warp,
+                        n_warp=_fused_gemm1_n_warp,
                         out_is_f16=out_is_f16,
                         a_is_fp4=_a_is_fp4,
                         stage1_act=stage1_act,
@@ -1221,7 +1702,12 @@ def _grouped_a8w4_tdm_moe(
                         next_stage_prefetch=next_stage_prefetch,
                         tdm_as_in_prologue=tdm_as_in_prologue,
                         tdm_b_th=tdm_b_th,
+                        a_preshuffle=_gemm1_a_preshuffle,
                         lds_soa_load_interleave=lds_soa_load_interleave,
+                        balanced_m192=balanced_m192,
+                        partial_m_direct_scale=partial_m_direct_scale,
+                        partial_m_drain_output=partial_m_drain_output,
+                        allow_partial_m_exact=allow_partial_m_exact,
                         **_situ_kw,
                     ),
                 )
@@ -1259,7 +1745,12 @@ def _grouped_a8w4_tdm_moe(
                         next_stage_prefetch=next_stage_prefetch,
                         tdm_as_in_prologue=tdm_as_in_prologue,
                         tdm_b_th=tdm_b_th,
+                        a_preshuffle=_gemm1_a_preshuffle,
                         lds_soa_load_interleave=lds_soa_load_interleave,
+                        balanced_m192=balanced_m192,
+                        partial_m_direct_scale=partial_m_direct_scale,
+                        partial_m_drain_output=partial_m_drain_output,
+                        allow_partial_m_exact=allow_partial_m_exact,
                         **_situ_kw,
                     ),
                 )
@@ -1294,8 +1785,13 @@ def _grouped_a8w4_tdm_moe(
                     waves_per_tensor_tdm=waves_per_tensor_tdm2,
                     next_stage_prefetch=next_stage_prefetch,
                     tdm_as_in_prologue=tdm_as_in_prologue,
-                    tdm_b_th=tdm_b_th,
+                    tdm_b_th=0,
+                    a_preshuffle=_gemm2_a_preshuffle,
                     lds_soa_load_interleave=lds_soa_load_interleave,
+                    balanced_m192=balanced_m192,
+                    partial_m_direct_scale=partial_m_direct_scale,
+                    partial_m_drain_output=partial_m_drain_output,
+                    allow_partial_m_exact=allow_partial_m_exact,
                 ),
             )
         )
@@ -1326,6 +1822,10 @@ def _grouped_a8w4_tdm_moe(
         out=moe_out,
         num_valid_tokens=(_ep_nvt if _is_ep else None),
     )
+    if _quant_output_capture is not None:
+        torch.cuda.synchronize()
+        capture_prefix = "fused" if _fuse_quant else "reference"
+        _quant_output_capture[f"{capture_prefix}_moe_out"] = moe_out.detach().clone()
     return moe_out
 
 
@@ -1576,6 +2076,28 @@ def grouped_gemm_gfx1250_a8w4(
                 cfg_row.get("lds_soa_load_interleave"), 0
             )
 
+        token_profile = _find_routed_e64_topk8_token_profile(
+            tokens=token_num,
+            experts=E,
+            topk=topk,
+            model_dim=model_dim,
+            inter_dim=inter_dim,
+            activation=activation,
+            is_grouped_a4w4=is_grouped_a4w4,
+            use_bias=bias1 is not None or bias2 is not None,
+            is_ep=_is_ep,
+            enable_ep_scatter=stage2_scatter is not None,
+        )
+        if token_profile is not None:
+            _tdm_kw.update(token_profile)
+            _, _, shared_experts = _routed_geometry_from_metadata(E, topk)
+            _grouped_dbg(
+                "using routed E64/topk8 token-range config for "
+                f"physical E={E}/topk={topk}/shared={shared_experts}, "
+                f"tokens={token_num}: "
+                f"{token_profile}"
+            )
+
         # Env overrides for tuning (present-check so any set value wins over CSV /
         # defaults). Stage2 (*2) falls back to the stage1 value when unset. Set
         # AITER_TDM_TILE_M / _TILE_N / _TILE_K / _NUM_BUFFERS (+ *_M2/_N2/_K2/
@@ -1624,6 +2146,7 @@ def grouped_gemm_gfx1250_a8w4(
         _ov_nw = _tdm_env("AITER_TDM_N_WARP")
         _ov_mw2 = _tdm_env("AITER_TDM_M_WARP2")
         _ov_nw2 = _tdm_env("AITER_TDM_N_WARP2")
+        _ov_wpt = _tdm_env("AITER_FLYDSL_NUM_WAVES_PER_TENSOR_TDM")
         if any(v is not None for v in (_ov_mw, _ov_nw, _ov_mw2, _ov_nw2)):
             _base_mw = _ov_mw if _ov_mw is not None else _tdm_kw.get("m_warp", 1)
             _base_nw = _ov_nw if _ov_nw is not None else _tdm_kw.get("n_warp", n_warp)
@@ -1631,6 +2154,19 @@ def grouped_gemm_gfx1250_a8w4(
             _tdm_kw["n_warp"] = _base_nw
             _tdm_kw["m_warp2"] = _ov_mw2 if _ov_mw2 is not None else _base_mw
             _tdm_kw["n_warp2"] = _ov_nw2 if _ov_nw2 is not None else _base_nw
+        if _ov_wpt is not None:
+            _tdm_kw["waves_per_tensor_tdm"] = _ov_wpt
+        nonbalanced_profile = _apply_nonbalanced_partial_safe_profile(
+            _tdm_kw,
+            fallback_tile_m=tile_m,
+            balanced_routing=_balanced_expert_routing_enabled(),
+            enable_ep_scatter=stage2_scatter is not None,
+        )
+        if nonbalanced_profile is not None:
+            _grouped_dbg(
+                "non-balanced routing: partial-M specialization: "
+                f"{nonbalanced_profile}"
+            )
         return _grouped_a8w4_tdm_moe(
             hidden_states,
             w1,
