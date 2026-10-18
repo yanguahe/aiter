@@ -82,31 +82,25 @@ def _decode_scale_rows(
     feature_dim: int,
     wmma_rep: int,
 ) -> torch.Tensor:
-    """Undo ``shuffle_scale_f4(..., wmma_rep)`` for selected rows."""
+    """Decode the canonical M32 ScaleA layout used by A-preshuffled GEMMs.
+
+    ``wmma_rep`` controls the producer's work assignment, not its external
+    layout. The consumer addresses [row32, scale-dword, row-in-32, byte].
+    """
     scale_bytes_per_row = feature_dim // 32
     scale_dwords_per_row = scale_bytes_per_row // 4
-    rows_per_tile = wmma_rep * 16
     flat = scale.detach().view(torch.uint8).reshape(-1).cpu()
     rows = rows.to(torch.long).cpu()
     decoded = torch.empty(
         (rows.numel(), scale_bytes_per_row), dtype=torch.uint8, device="cpu"
     )
-    row_tile = torch.div(rows, rows_per_tile, rounding_mode="floor")
-    row_in_tile = rows - row_tile * rows_per_tile
-    wmma_row = torch.div(row_in_tile, 16, rounding_mode="floor")
-    scale_lane = row_in_tile - wmma_row * 16
+    row_tile = torch.div(rows, 32, rounding_mode="floor")
+    row_in_tile = rows - row_tile * 32
     for mx_block in range(scale_bytes_per_row):
         scale_dword = mx_block // 4
         byte_in_dword = mx_block & 3
         offsets = (
-            (
-                (
-                    (row_tile * scale_dwords_per_row + scale_dword) * wmma_rep
-                    + wmma_row
-                )
-                * 16
-                + scale_lane
-            )
+            ((row_tile * scale_dwords_per_row + scale_dword) * 32 + row_in_tile)
             * 4
             + byte_in_dword
         )
@@ -142,22 +136,12 @@ def _layout_self_test() -> None:
     logical_scale = ((logical_scale * 17 + 3) & 0xFF).to(torch.uint8).view(rows, -1)
     shuffled_scale = torch.empty_like(logical_scale).reshape(-1)
     scale_dwords = scale_bytes // 4
-    rows_per_tile = wmma_rep * 16
     for row in range(rows):
-        row_tile = row // rows_per_tile
-        row_in_tile = row % rows_per_tile
-        wmma_row = row_in_tile // 16
-        lane = row_in_tile % 16
+        row_tile = row // 32
+        lane = row % 32
         for mx_block in range(scale_bytes):
             dst = (
-                (
-                    (
-                        (row_tile * scale_dwords + mx_block // 4) * wmma_rep
-                        + wmma_row
-                    )
-                    * 16
-                    + lane
-                )
+                ((row_tile * scale_dwords + mx_block // 4) * 32 + lane)
                 * 4
                 + (mx_block & 3)
             )

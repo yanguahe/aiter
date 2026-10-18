@@ -476,6 +476,35 @@ def flydsl_grouped_gemm_a8w4_masked(
             persistent_kwargs["partial_m_drain_output"] = int(
                 bool(partial_m_drain_output)
             )
+        optx_requested = _select_bool_env("AITER_GFX1250_GEMM1_OPTX", 0)
+        if optx_requested and all(
+            (
+                use_fused_persistent,
+                tile_m == 256,
+                n_experts == 64,
+                quant_wmma_rep == 8,
+                out_is_f16 == 0,
+                a_is_fp4 == 1,
+                has_bias == 0,
+                bool(next_stage_prefetch),
+                bool(allow_partial_m_exact),
+                not persistent_kwargs.get("balanced_m192", 0),
+                not partial_m_direct_scale,
+                not partial_m_drain_output,
+                not enable_ep_scatter,
+            )
+        ):
+            from .kernels.mxfp4_preshuffle_gfx1250_tdm_prefill_persistent_optx import (
+                launch_gemm_a8w4_tdm_fused_persistent_optx,
+            )
+
+            optimized_launcher = launch_gemm_a8w4_tdm_fused_persistent_optx
+            persistent_kwargs.update(
+                optx_kgroup=int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_KGROUP", "4")),
+                optx_skip=_select_bool_env("AITER_GFX1250_GEMM1_OPTX_SKIP", 0),
+                optx_stagger=_select_bool_env("AITER_GFX1250_GEMM1_OPTX_STAGGER", 0),
+                optx_snake=int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_SNAKE", "1")),
+            )
         if enable_ep_scatter:
             persistent_kwargs.update(
                 enable_ep_scatter=1,

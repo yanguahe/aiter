@@ -261,15 +261,33 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     ACT_NDW = 8
 
     A_LDS_OUTER = compute_tile_m // 16
+    # Keep the established schedules for other geometries and partial-M
+    # options. This branch changes internal LDS placement and scheduling;
+    # the routed input/output layouts and all K contributions are retained.
+    M256_FUSED_LAYOUT = bool(
+        fp4_prefill_schedule
+        and gemm2_eight_wave_geometry
+        and tile_m == 256
+        and compute_tile_m == 256
+        and stage1_quant_out == 1
+        and quant_wmma_rep == 8
+        and cluster_m == 1
+        and n_experts == 64
+        and not partial_m_direct_scale
+        and not partial_m_drain_output
+    )
     SEGMENT_SPLIT_A = bool(
         fp4_prefill_schedule
         and gemm2_eight_wave_geometry
-        and compute_tile_m == 192
+        and (compute_tile_m == 192 or M256_FUSED_LAYOUT)
         and stage1_quant_out == 1
     )
     LDS_SEGMENT_BYTES = 64 * 1024
+    SPLIT_SCALE_ARENA = M256_FUSED_LAYOUT
     INPUT_LDS_PAD_INTERVAL = (
-        1024 if fp4_prefill_schedule and gemm2_eight_wave_geometry else 0
+        1024
+        if fp4_prefill_schedule and gemm2_eight_wave_geometry and not SPLIT_SCALE_ARENA
+        else 0
     )
     INPUT_LDS_PAD_AMOUNT = 16 if INPUT_LDS_PAD_INTERVAL else 0
     INPUT_LDS_SUBTILE_STRIDE = 1024 + INPUT_LDS_PAD_AMOUNT
@@ -295,9 +313,9 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     STAGE_SB = ((SB_SUPERS * SC_INNER * 4 + 15) // 16) * 16
     SA_OWNER_SUPERS = AS_SUPERS // m_warp
     SA_OWNER_BYTES = SA_OWNER_SUPERS * AS_INNER * 4
-    # Each 64 KiB segment holds a stage's wave_m=0 A/ScaleA at its front and
-    # the previous stage's wave_m=1 half at its tail, with B/ScaleB in between.
-    # This separates resident waves without allocating a fifth segment.
+    # Cyclic ownership places A0 at the stage front and A1 at the following
+    # stage tail. M192 keeps scales beside the data; M256 uses four exact
+    # 64 KiB data segments and a separate scale arena below.
     B_OFF = A_OWNER_BYTES + SA_OWNER_BYTES if SEGMENT_SPLIT_A else STAGE_A
     SA_OFF = A_OWNER_BYTES if SEGMENT_SPLIT_A else B_OFF + STAGE_B
     SB_OFF = B_OFF + STAGE_B if SEGMENT_SPLIT_A else SA_OFF + STAGE_SA
@@ -308,6 +326,15 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         if SEGMENT_SPLIT_A
         else STAGE_A + STAGE_B + STAGE_SA + STAGE_SB
     )
+    if SPLIT_SCALE_ARENA:
+        # A0[16 KiB], B[32 KiB], prior-stage A1[16 KiB]. ScaleA/ScaleB
+        # retain their canonical contents in a separate four-stage ring.
+        B_OFF = A_OWNER_BYTES
+        A_TAIL_OFF = B_OFF + STAGE_B
+        SA_OFF = 0
+        SA_TAIL_OFF = SA_OWNER_BYTES
+        SB_OFF = STAGE_SA
+        SEGMENT_USED = A_TAIL_OFF + A_OWNER_BYTES
     assert not SEGMENT_SPLIT_A or SEGMENT_USED <= LDS_SEGMENT_BYTES
     # The cyclic layout uses exactly four physical segments.  Other schedules
     # retain their compact 512-byte-aligned linear stage pitch.
@@ -317,6 +344,8 @@ def launch_gemm_a8w4_tdm_fused_persistent(
         else ((SEGMENT_USED + 511) // 512) * 512
     )
 
+    SCALE_ARENA_OFF = num_buffers * PITCH
+    SCALE_STAGE_PITCH = STAGE_SA + STAGE_SB
     out_elem = T.f16 if out_is_f16 else T.bf16
     # +16 cols: the bf16 passthrough epilogue stages C with a padded row pitch
     # to break the ds_store bank conflict; reserve it so the padded tile fits.
@@ -361,6 +390,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
     A_CACHE_PITCH = ((STAGE_A + 511) // 512) * 512
     A_CACHE_OFF = num_buffers * PITCH
     ARENA_B = max(
+        SCALE_ARENA_OFF + num_buffers * SCALE_STAGE_PITCH if SPLIT_SCALE_ARENA else 0,
         num_buffers * PITCH,
         OUTPUT_LDS_OFF + C_STORE_B,
         A_CACHE_OFF + A_CACHE_STAGES * A_CACHE_PITCH,
@@ -498,8 +528,8 @@ def launch_gemm_a8w4_tdm_fused_persistent(
             lane = tid % WAVE
             lane16 = lane % 16
             kgrp = lane // 16
-            wave_m = wave // n_warp
-            wave_n = wave % n_warp
+            wave_m = wave % m_warp if M256_FUSED_LAYOUT else wave // n_warp
+            wave_n = wave // m_warp if M256_FUSED_LAYOUT else wave % n_warp
 
             total_n_tiles = (i32_n + (tile_n - 1)) // tile_n
             total_m_tiles = (i32_m + (tile_m - 1)) // tile_m
@@ -831,15 +861,26 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                 AS_INNER,
                 AS_SUPERS,
                 on_i32=True,
-                lds_off=SA_OFF // 4,
+                lds_off=(
+                    (SCALE_ARENA_OFF + SA_OFF) // 4
+                    if SPLIT_SCALE_ARENA else SA_OFF // 4
+                ),
                 lds_row=AS_INNER,
                 k_adv=AS_INNER * 4,
                 wv=waves[2],
                 split_inner=AS_SUPERS < len(waves[2]),
                 wg_mask=a_mcast_mask if cluster_m > 1 else None,
-                owner_lds_offsets=(SA_OFF // 4, SA_TAIL_OFF // 4)
-                if SEGMENT_SPLIT_A
-                else None,
+                owner_lds_offsets=(
+                    (
+                        (SCALE_ARENA_OFF + SA_OFF) // 4,
+                        (SCALE_ARENA_OFF + SA_TAIL_OFF) // 4,
+                    )
+                    if SPLIT_SCALE_ARENA
+                    else (
+                        (SA_OFF // 4, SA_TAIL_OFF // 4)
+                        if SEGMENT_SPLIT_A else None
+                    )
+                ),
             )
             add_tdm_loads(
                 gSB_base,
@@ -849,7 +890,10 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                 SC_INNER,
                 SB_SUPERS,
                 on_i32=True,
-                lds_off=SB_OFF // 4,
+                lds_off=(
+                    (SCALE_ARENA_OFF + SB_OFF) // 4
+                    if SPLIT_SCALE_ARENA else SB_OFF // 4
+                ),
                 lds_row=SC_INNER,
                 k_adv=SC_INNER * 4,
                 wv=waves[3],
@@ -905,7 +949,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
 
             def issue(s, kt, my_jobs=None, cache_a=False, reuse_cached_a=False):
                 pa = fx.recast_iter(p8_shared, buf_ptr(s))
-                so4 = s * (PITCH // 4)
+                so4 = s * (SCALE_STAGE_PITCH // 4 if SPLIT_SCALE_ARENA else PITCH // 4)
                 if const_expr(cache_a):
                     cache_ptr = base_ptr + A_CACHE_OFF + kt * A_CACHE_PITCH
                     cache_pa = fx.recast_iter(p8_shared, cache_ptr)
@@ -962,7 +1006,11 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     if const_expr(cyclic_owner):
                         owner = wave - j.waves[0]
                         dst_stage = (fx.Int32(s) + owner) & fx.Int32(num_buffers - 1)
-                        elem_pitch = PITCH // 4 if j.on_i32 else PITCH
+                        elem_pitch = (
+                            SCALE_STAGE_PITCH // 4
+                            if SPLIT_SCALE_ARENA and j.on_i32
+                            else (PITCH // 4 if j.on_i32 else PITCH)
+                        )
                         owner_off = j.owner_lds_offsets[0] + owner * (
                             j.owner_lds_offsets[1] - j.owner_lds_offsets[0]
                         )
@@ -1080,7 +1128,15 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                         + lane * 4
                     )
                     regular_a = owner_base + fx.index_cast(T.index, a_owner_off)
-                    regular_sa = owner_base + fx.index_cast(T.index, sa_owner_off)
+                    if const_expr(SPLIT_SCALE_ARENA):
+                        regular_sa = base_lds_idx + fx.index_cast(
+                            T.index,
+                            fx.Int32(SCALE_ARENA_OFF)
+                            + owner_stage * fx.Int32(SCALE_STAGE_PITCH)
+                            + sa_owner_off,
+                        )
+                    else:
+                        regular_sa = owner_base + fx.index_cast(T.index, sa_owner_off)
                 else:
                     regular_a = lds_a_base(buf)
                     regular_sa = lds_sa_base(buf)
@@ -1103,7 +1159,16 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                     a=regular_a,
                     b=lds_b_base(buf),
                     sa=regular_sa,
-                    sb=lds_sb_base(buf),
+                    sb=(
+                        base_lds_idx + fx.index_cast(
+                            T.index,
+                            fx.Int32(SCALE_ARENA_OFF)
+                            + (fx.Int32(kt) & fx.Int32(num_buffers - 1))
+                            * fx.Int32(SCALE_STAGE_PITCH)
+                            + lds_sb_lane_off,
+                        )
+                        if SPLIT_SCALE_ARENA else lds_sb_base(buf)
+                    ),
                 )
 
             def load_a(base, wm, ksl):
@@ -1175,9 +1240,10 @@ def launch_gemm_a8w4_tdm_fused_persistent(
             FRONT = list(range(front_wm))
             BACK = list(range(front_wm, wmma_m_rep))
 
-            # Hint shape for compute_ktile. Re-swept on t256x256x256 with random
-            # activations: 4 is safe for both, 16 costs 2.5%; 2..8 is within noise.
-            MMA_GROUP = 2
+            # M256's compact ring uses groups of eight complete WMMA ops.
+            # Other schedules keep their existing group size. Grouping only
+            # schedules independent work; each accumulator retains K order.
+            MMA_GROUP = 8 if M256_FUSED_LAYOUT else 2
             # WMMA held back as a closing pure-MFMA group, covering the next k128's
             # REUSE fence; the prefetch reads interleave evenly over the rest.
             FENCE_COVER_MMA = fence_cover_mma
@@ -1614,12 +1680,12 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                                 outstanding=TDM_PER * max(0, num_buffers - 2 - j)
                             )
                         # Only the carry target is opaque; ``buf`` must stay foldable
-                        # for correct LDS addressing. t192 uses the ordinary target
-                        # because its opaque form misaddresses random-input drains.
+                        # for correct LDS addressing. Cyclic layouts use the ordinary
+                        # target so the owner-stage rotation remains visible to lowering.
                         next_stage_buf = (
                             (
                                 ptr_to_idx(buf_ptr((kt + 1) % num_buffers))
-                                if compute_tile_m == 192
+                                if compute_tile_m == 192 or M256_FUSED_LAYOUT
                                 else buf_ptr_opaque((kt + 1) % num_buffers)
                             )
                             if const_expr(has_next)
@@ -1861,7 +1927,7 @@ def launch_gemm_a8w4_tdm_fused_persistent(
                             all_vals_bf16 = Vec.from_elements(
                                 row_vals, fx.Float32
                             ).to(fx.BFloat16)
-                            if const_expr(T192_TASK_OVERLAP):
+                            if const_expr(T192_TASK_OVERLAP or SPLIT_SCALE_ARENA):
                                 scale_inputs = _amax_inputs_from_bf16x16(all_vals_bf16)
                             else:
                                 scale_vals = all_vals_bf16.to(fx.Float32)

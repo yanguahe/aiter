@@ -220,7 +220,7 @@ run_logged() {
     shift 2
     echo "Running ${name}: $*" | tee "$log_file"
     set +e
-    timeout --signal=TERM --kill-after=30s "$ATT_TIMEOUT_SECONDS" "$@" 2>&1 | tee -a "$log_file"
+    timeout --signal=TERM --kill-after=5s "$ATT_TIMEOUT_SECONDS" "$@" 2>&1 | tee -a "$log_file"
     status=${PIPESTATUS[0]}
     set -e
     echo "${name} exit status: ${status}" | tee -a "$log_file"
@@ -390,11 +390,8 @@ if ((ANA_ATT)); then
     elif [[ "${SE_MASK,,}" != 0xf ]]; then
         echo "Skipping --ana-att: analyze_att_capture.py needs all four SEs (--se-mask 0xf)." | tee "$LOG_DIR/analyze_att_capture.log"
     else
-        set +e
-        python3 -u "$SCRIPT_DIR/analyze_att_capture.py" --dir "$OUTPUT_DIR" --no-plot 2>&1 |
-            tee "$LOG_DIR/analyze_att_capture.log"
-        ana_status=${PIPESTATUS[0]}
-        set -e
+        run_logged analyze-att "$LOG_DIR/analyze_att_capture.log" \
+            python3 -u "$SCRIPT_DIR/analyze_att_capture.py" --dir "$OUTPUT_DIR" --no-plot || ana_status=$?
     fi
 fi
 

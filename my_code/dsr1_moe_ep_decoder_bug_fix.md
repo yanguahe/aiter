@@ -751,3 +751,23 @@ history_base.end_byte_offset = 98397462
 ```
 
 完整恢复本会话时，先读取10月11日基础文件到上述继承边界，再读取10月14日活动文件。基础文件在fork之后新增的内容不属于当前会话继承的历史。基础文件自身没有记录更上游的 `forked_from_id` 或 `history_base`；此前用户指定阅读的9月会话是外部引用的历史文件，不是当前元数据中的直接fork链。本次只读取session文件及更新本问答记录，没有修改JSONL或运行GPU程序。
+
+## 13. optX 方案实现的 GEMM1 使用多少 VGPR、SGPR、LDS？
+
+2026-10-18，按实际编译的 ELF AMDGPU metadata 回答。连续 ring 的 v8、逐 tile READY 的 v14均为VGPR512、SGPR96、LDS295936 B（289 KiB）；最新逐 row LDS schedule 的 v16为VGPR506、SGPR96、LDS295936 B（289 KiB）。private segment及VGPR/SGPR spill均为0。早期每批输入drain的v6/v7对照为VGPR400、SGPR93、同样289 KiB LDS，不能将其较低寄存器数量当作连续ring版本的资源结果。
+
+VGPR count表示每lane的向量寄存器数量，SGPR count表示每wave的标量寄存器数量，LDS为每workgroup固定分配；这里报告编译器metadata，不由count直接推断硬件按粒度分配后的占用率。LDS拆分为256 KiB data ring、16 KiB scale arena、17 KiB双窗口output arena。v8完整正确性通过但原命令单次125.716μs，v14 random/replay通过但单次123.207μs，均未采纳；v16先取得无spill资源和random数值通过，再进行性能筛选。详细资源表、源码hash、复现与证据见 [optX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+## 14. A/ScaleA 的 LDS 使用是否减少，是否只驻留一份 A128/ScaleA128？
+
+截至2026-10-18的G4/S4和G2/S4候选，尚未减少，也不是每stage只驻留一份。每个逻辑stage分别保留A_F和A_S各16 KiB、ScaleA_F和ScaleA_S各1 KiB；S4合计A=128 KiB、ScaleA=8 KiB。A_S在下一物理stage的tail，仍是独立存储，不是覆盖A_F。G2仅缩小K-group，LDS总量仍为295936 B（289 KiB）。
+
+接下来实施S5槽位复用：F读完并退休DS后，同一A128/ScaleA128区域装入S；B/ScaleB保持到S读完。推导为5×48 KiB data、5×3 KiB scale、17 KiB output，共272 KiB；A合计80 KiB、ScaleA5 KiB。此处是待编译确认的布局设计，不是已取得的性能结果。A/ScaleA在F、S各发一次TDM，B/ScaleB仅发一次，必须逐owner重推tensorcnt并使用模5的跨taskstage编号。
+
+最新G2/S4 v21实编译为VGPR406、SGPR91、LDS295936 B，无private/spill；random17有效payload、ScaleA、GEMM2、MoE bitwise一致，但原命令单次116.443 μs仍慢于原路径。v22/v23的错峰epilogue候选出现spill，均没有运行GPU。详细记录和证据见 [optX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+同日后续进展：S5槽位复用首版已经完成并实际编译，ELF确认LDS278528 B（272 KiB）。每stage确实只保留一份A128/ScaleA128供F、S依次覆盖，A总80 KiB、ScaleA总5 KiB。v26为VGPR445/SGPR107，SGPR spill46；v27/v28/v29将其降为34/23/21，仍未通过无spill门禁，尚无该布局的GPU正确性或性能数据，不能把LDS下降直接当作耗时改善。READY/RELEASE事件模型G4/G2及八项负对照已通过。
+
+同日进一步完成：S5 v33实际编译为VGPR435、SGPR106、LDS278528 B，private及VGPR/SGPR spill均为0；T1536/random17有效FP4 payload、ScaleA、GEMM2、最终MoE bitwise一致，dynamic/poison/eager/graph replay也通过。单份A128/ScaleA128驻留已经落实，但原benchmark单次138.662 μs，仍慢于原persistent路径，尚未采纳。后续rolled F epilogue stagger v39为VGPR472、SGPR95、同样272 KiB LDS、无private/spill，random/replay通过，单次165.346 μs；S5 padding skip v38为479/100、同样272 KiB，单次140.753 μs。详见 [optX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+同日继续从LDS读量调优：G2 B/ScaleB寄存器复用v40为VGPR493/SGPR99、289 KiB LDS、无private/spill，原命令单次108.140 μs；G1较小cache v41为424/96、同样289 KiB、无private/spill，单次108.888 μs。两者random及dynamic/poison/eager/graph replay通过，仍慢于原路径当日中值94.279 μs。此优化减少B/ScaleB的LDS读取，不减少A/ScaleA的S4驻留，也不能把VGPR下降直接当作性能收益。v35 ATT确认padding skip实际少21.09375%的WMMA，但LDS和barrier等待仍显著。下一步继续验证G1跨task epilogue stagger；未启用默认optX。
