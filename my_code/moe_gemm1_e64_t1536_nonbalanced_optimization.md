@@ -1,8 +1,28 @@
 # gfx1250 MoE GEMM1：E64/T1536/topk8 non-balanced 优化记录
 
-## 最新状态（2026-10-17）
+## 最新状态（2026-10-20）
 
-最新正式成绩为整理版原命令三轮交替测量的中值 **94.888 μs**，同批 baseline 为 **99.152 μs**，减少 **4.264 μs（4.30%）**；距 80 μs 为 **14.888 μs**。整理版样本为 94.888、94.332、94.893 μs，原第 4 批中值 95.065 μs 仍保留，不能用最低单次替代中值。
+按用户“异常实验重测，手头实验做完后暂停”的最新要求，2026-10-20 已完成 v265 的完整数值验收和性能筛选，并完成此前异常 E65/v190 的三次原完整 benchmark 重测。GEMM1/GEMM2/MoE e2e 重测中值为 **136.931 /89.441 /281.17 μs**，旧 161.590 /315.866 /982.26 μs 异常未复现；保留旧记录，不将其作为稳定对照。**本轮优化已暂停**，v266 只完成 CPU，未启动其 GPU 验证、性能或新 counters。正式最优仍是基于 OPTX 方案的 v190，E64/E65 原正式三轮中值 **91.688 /137.596 μs**，E64 距80 μs差 **11.688 μs**。
+
+当前生产版为 **v190 runtime-E**，E64/T1536/topk8与E65/shared1/T1536/topk9通过正常入口使用**同一个真实GEMM1编译对象**。用户指定 baseline 为 commit **`339589f900b3a880ec447f605886fe803cbf9649`**；最新独立干净worktree/工作区三轮交替原完整benchmark，E64 baseline/v190中值 **99.896 / 91.688 μs**、改善 **8.22%**；E65中值 **155.189 / 137.596 μs**、改善 **11.34%**。E64距80 μs差 **11.688 μs**，尚未达标。历史v153的98.553 / 91.915 μs与约94 μs冻结对照分批保留，不混算。
+
+v190保持v153第三A/ScaleA register bank、最多8条S0 WMMA覆盖WG signal/wait和双份physical A LDS；expert数改为runtime参数，TH6统一，cache/ELF不依赖E64/E65。最新两种规模seed0/17/43完整MoE八项tensor SHA256与指定commit一致、原FP32 reference精度正常。E64→E65→E64动态输入、poison、eager和CUDAGraph replay有效payload/ScaleA全部bitwise一致，始终一个artifact，实际完整ELF为`24bb623573932faadb22ca2d89d3e84a903adc64c9e116cac4138dd5b686f93c`。最新四SIMD ATT已绑定该实际ELF，32条完整sampled waves中compute占81.1495%、三次N-task handoff占9.1246%；见 [v190 thread trace分析](moe_gemm1_e64_t1536_optx_v190_thread_trace_analysis.md)。v153数据保留历史对象。共享A槽方向保持放弃。
+
+正式persistent SHA256仍为 `b36f7ec94524a1cb0bf20c5152f2a82d630fed71c0db2c1b2559d68f9a43e790`，历史验收中值94.888 μs与当天复测94.279 μs保留，不将跨批差异计为收益。v152的96.643 μs、v128的98.525 μs及v62的101.422 μs对应此前阶段；共享A槽方向已放弃。最新方法、复现命令、actual对象、三轮完整数据及负载限制详见 [OPTX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+此前v144–v214的已完成供数、同步、WMMA/LLVM调度、epilogue交错、TDM hint、读取顺序、loop展开、descriptor准备及固定stride实验没有新的稳定采纳收益；负结果保留。v193进一步同HIP context三轮两轮较慢，停止；v213/v214双规模e2e/replay通过，但E64/E65为94.243/138.431、92.892/139.075 μs，未优于同批v190。runtime-E空capacity候选v215双规模同artifact完整e2e/replay通过，但92.048/138.183 μs无收益，停止；v216 actual`.text`与v190相同，不重复计时。SiLU CHUNK2/8/16均零spill、同artifact CPU/CFG通过；2/8双规模完整e2e/replay通过，但原完整E64/E65为92.898/138.794和92.521/137.409 μs，未改善E64，均停止。8/16同`.text`，16仅CPU。生产仍为v190。全部方法、复现、actual object与负载限制见 [OPTX记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+K256完全无效M32 skip的v94通过完整equivalence/replay，三轮交替review/candidate中值95.861/94.897 μs，但一轮候选回退，未确认稳定收益，未采纳。v95 stripe单次约97.1 μs；v96六组steady复制、v97 poison及v98 undef在CPU检出spill，未GPU。v98 pure predicate通过完整精度，单次97.545 μs；该次可能与CPU编译重叠，只作受限筛选。v99整个task外分派的prepared/review都存在2个VGPR spill，未GPU；v100 LLVM if/else生存期选项未改变prepared `.text`，未重复GPU。当前继续消除专用task候选的spill，详细结果、限制及复现见文末。
+
+用户后续明确允许跳过完全无效padding；有效route的功能、结果精度、K accumulation顺序及通用fallback仍必须保持。以下2026-10-17各段为当时记录，期间暂停已由后续“继续优化”解除。
+
+2026-10-19用户已明确通知a07-3重启，远端恢复，kernel/bench临时诊断已完成。共用同一v190 ELF/JIT key/launch参数，正常原隔离85.9759/87.0495 μs、完整92.2233 μs保留；新诊断86.037263/90.783632 μs单列，不替换正式成绩。按token/topk顺序解码的有效A/ScaleA完全一致，物理行hash不同来自expert内route排列；固定字节/地址/代码的前序对照88.384368–90.374105 μs、末G1-only85.978211 μs，首尾状态漂移保留，cache/时钟成本没有细分。hang前旧context日志只有idle等待、未进入测试，不能归因于该实验。详见[kernel/bench差异分析](moe_gemm1_kernel_vs_bench_timing_analysis.md)。
+
+机器暂停期间准备的v220完整M256/N128四wave候选，已完成seed0/17/43双规模完整MoE和dynamic/poison/eager/两graph replay，八项hash与指定baseline一致，E64/E65使用同artifact及完整ELF。实际资源452 VGPR/107 SGPR/LDS218112 B、private0/VGPR spill0/SGPR spill6；这些scalar lane spills经过ISA审核。原完整benchmark筛选E64/E65为 **133.557 / 176.670 μs**，同批v190首尾为91.717/138.200和93.094/138.248 μs；v220明显回退，停止四级ring、不合入、不扩三轮。LDS降至213 KiB仍不能容纳两个WG，源码input请求与WG数翻倍；没有新ATT/counters，不将这些账目认定为唯一回退原因或实际HBM流量。
+
+独立v225把N128 input ring改为两级，保留两份physical A128/ScaleA128、全部有效K0..K55、runtime-E ABI及quant/output。实际资源451 VGPR/107 SGPR/LDS113664 B（111 KiB）、private0/VGPR spill0/SGPR spill6；actual CPU/model/ISA/CFG final门禁均通过。2026-10-20 seed0/17/43完整E64/E65八项hash与baseline一致，dynamic/poison/eager/两graph各五次replay mismatch0，正反向expert切换始终复用一个artifact和完整ELF `4a902ab5e2b2b670f6b3bf1f509487cbb64499ca2a30faa276749c5402967994`。原完整benchmark E64/E65 GEMM1为 **127.767 / 208.077 μs**，同批v190首尾为90.838/138.121和92.597/138.117 μs；两种规模明显回退，停止该配置和本轮N128 ring方向，不合入、不扩三轮。111 KiB只说明两个四-wave WG在LDS/VGPR上可容纳，没有实际occupancy/counter证据。每项120秒timeout，性能保持原完整bench；完整方法、复现和状态见[OPTX记录](moe_gemm1_e64_t1536_optx_optimization.md)。生产v190及正式91.688/137.596 μs保持。
+
+以下为2026-10-17收尾时的历史成绩：整理版原命令三轮交替测量中值 **94.888 μs**，同批baseline **99.152 μs**，减少 **4.264 μs（4.30%）**，距80 μs为 **14.888 μs**。整理版样本94.888、94.332、94.893 μs，原第4批中值95.065 μs保留，不能用最低单次替代中值；当前最优和指定commit复测结果以上文v190为准。
 
 已将有实测收益的 mg8 整理版写入本地与远端 persistent GEMM1，source SHA256 为 `b36f7ec94524a1cb0bf20c5152f2a82d630fed71c0db2c1b2559d68f9a43e790`。目标及十组 fallback ELF 静态核对、完整 routing/tail、buffer/replay 和上述三轮复测均已通过。下文早期“尚未合入”的标题保留各批实验当时的状态；当前本地源码状态以“本地正式源码的当前改动”和“整理版完整验收”为准。
 
@@ -18,7 +38,7 @@ v89 保留正式 K256 ring，首 task 与 successor 共用 steady kt0。shared/d
 
 优化 `E64/T1536/topk8/model_dim=7168/inter_dim=2048` 的 A4W4、SiLU、无 bias GEMM1。输入与权重使用原测试的 random 初始化，routing 使用 `AITER_MOE_EXPERT_BALANCE=false`。模型推理的 shared expert 假设单独计算，本 workload 只计算 routed experts。
 
-目标是在用户指定的 eager profiler 测试口径下，将 GEMM1 稳定优化到 **80 μs 以下**。保留当前 kernel 的通用性、完整计算、BF16 rounding、per32 MXFP4 scale、native FP4 转换及原有精度标准。
+目标是在用户指定的 eager profiler 测试口径下，将 GEMM1 稳定优化到 **80 μs 以下**。保留当前 kernel 的通用性、全部有效计算、BF16 rounding、per32 MXFP4 scale、native FP4 转换及原有精度标准。用户修正了早先“不得减少实际计算”的描述：完全无效padding可以跳过，不能省略任何有效route的计算。
 
 本文只将通过精度验证、且同机空闲交替对比确认有收益的优化方法列入“取得性能提升的优化”。每项记录方法、适用条件、源码版本、复现命令、全部正式样本、统计数据及精度结果。ATT 中的耗时仅用于诊断，不作为正式性能结果。失败和未验证实验的原始日志另存，不将它们写成已取得的性能提升。
 
@@ -1724,3 +1744,148 @@ bash .codex_tmp/gemm1_t1536_20261017/compile_v89_scope_host.sh
 重新执行时给配对使用新的 `PAIR_BATCH`，避免覆盖已完成证据。15:05:41 UTC 及 15:13:05 UTC 再次确认正式源码仍为 `b36f7ec...`，用户 verification script 仍为 `fecea66...`，没有本任务编译/验证/benchmark/controller 残留；15:05:41 的全机空闲门禁通过。GEMM1 正式成绩保留 94.888 μs、相比冻结 baseline 提升4.30%、距80 μs仍差14.888 μs。
 
 证据：[复测 controller](../.codex_tmp/gemm1_t1536_20261017/logs/postcleanup_k256_common_v89_recheck_20261017_controller.log)、[六次测量摘要](../.codex_tmp/gemm1_t1536_20261017/logs/v89_closeout_pair_summary.json)、[fallback controller](../.codex_tmp/gemm1_t1536_20261017/logs/postcleanup_k256_common_v89_scope_20261017_controller.log)、[十组 ELF 和 target audit](../.codex_tmp/gemm1_t1536_20261017/logs/cpu_bounded_scope_cyclic64_k256_common_shared_v89.json)、[收尾环境](../.codex_tmp/gemm1_t1536_20261017/logs/v89_closeout_environment_20261017.log)。shared/disjoint 两项完整 equivalence/replay 日志、六份新 benchmark 和六份后置日志已下载本地。
+
+## 恢复 K256：无效 M32 skip、编译生存期和 task 外分派（2026-10-18）
+
+用户允许跳过无效计算后，v92仅对 `M256_FUSED_LAYOUT` 增加完全无效M16/M32的WMMA skip，保留原producer、A/ScaleA读取、ring/arena、quant和output。有效accumulator仍按kt0..27、每kt两个K128正向累加。SPG §4.6.12（p144）明确WMMA忽略EXEC，所以skip用SGPR scalar compare/branch，不能仅依赖lane mask。
+
+v93把scalar predicate限制在使用点；v94进一步关闭machine/postRA LICM，取得无spill候选。v95套用已验证的M32 pair stripe映射：`row_start = wave_m*32 + (wm//2)*64 + (wm%2)*16`，TDM producer与canonical外部布局不变。以下为实际ELF metadata；private=0仍可能有SGPR spill，必须三项同时检查。
+
+| 候选 | VGPR / SGPR | LDS B | private B | VGPR / SGPR spill | GEMM1单次筛选 μs |
+|---|---:|---:|---:|---|---:|
+| v92 review M32 | 502 / 106 | 278528 | 0 | 0 / 2 | CPU拒绝 |
+| v92 prepared M32 | 512 / 91 | 278528 | 16 | 3 / 0 | CPU拒绝 |
+| v93 review M32/M64 | 502 / 106 | 278528 | 0 | 0 / 2 | CPU拒绝 |
+| v93 prepared M32/M64 | 512 / 87或86 | 278528 | 16 | 3 / 0 | CPU拒绝 |
+| v94 review licmoff | 493 / 86 | 278528 | 0 | 0 / 0 | 93.800 |
+| v94 prepared licmoff | 493 / 75 | 278528 | 0 | 0 / 0 | 94.163 |
+| v95 review stripe | 494 / 86 | 278528 | 0 | 0 / 0 | 97.104 |
+| v95 prepared stripe | 494 / 76 | 278528 | 0 | 0 / 0 | 97.100 |
+
+v94/v95四项均完成11 cases equivalence及dynamic/poison/eager/graph replay；包括random seed0/17/43、skew/sparse/hot8/tiny/balanced及T1537/1792/2048。各自按route map解码有效行后，FP4 payload、ScaleA、GEMM2和最终MoE bitwise mismatch=0。v95 review replay已补做完成，不能继续写成pending。实际GPUobject与对应CPU `.text`和资源一致，见 `logs/k256_v94_v95_gpu_objects_inspection_20261018.log`。
+
+v94 review随后执行原完整benchmark三轮交替，第二轮逆序，全部count19、sanity与原标准一致、workload exit0：
+
+| 轮次 | 顺序 | 正式review μs | v94 skip μs | skip−review μs |
+|---:|---|---:|---:|---:|
+| 1 | review→skip | 96.476 | 94.897 | -1.579 |
+| 2 | skip→review | 93.271 | 95.350 | +2.079 |
+| 3 | review→skip | 95.861 | 94.642 | -1.219 |
+| **中值** | | **95.861** | **94.897** | **-0.964（约-1.01%）** |
+
+两轮快、一轮慢，收益尚不稳定，**未采纳**。93.800 μs是筛选单次，不能取代配对中值或与另一批94.279 μs直接计算收益。六次前置全机idle；立即post有busy2/3、无活跃KFD、VRAM176582656 B，按六秒轮询恢复idle，独立post6也idle。原始sample如实保留，没有把短暂busy改写为全程busy0。证据为 `logs/k256_v94_paired_20261018_{review,skip}_r{1,2,3}.log` 及对应 `_post6.log`。
+
+v94/v95的compile_hints目前作用于整个fused launcher；source fallback body不变不代表fallback ELF不变。早期“sched2”CPU对照漏设 `AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1`，实际 `.text`与licmoff相同，不能据此断言mode2无收益。采纳前仍必须限制编译政策的适用范围并完成fallback审核。
+
+### v96–v100 的 CPU 排除和 v98 受限筛选
+
+| 候选 | 方法 | VGPR / SGPR | private B | VGPR / SGPR spill | 状态 |
+|---|---|---:|---:|---|---|
+| v96 prepared | 仅三个有效striped M32 pairs的steady body | 511 / 77 | 836 | 544 / 0 | CPU拒绝，未GPU |
+| v97 review/prepared | 无效accumulator置PoisonOp | 481/86、478/75 | 8、20 | 1/0、7/0 | CPU拒绝，未GPU |
+| v98 review pure | scalar compare允许CSE，LICM仍关闭 | 493 / 90 | 0 | 0 / 0 | 11case/replay通过，单次97.545 μs |
+| v98 prepared pure | 同上 | 493 / 79 | 0 | 0 / 0 | 仅CPU，尚未GPU |
+| v98 review undef | PoisonOp改UndefOp | 481 / 86 | 8 | 1 / 0 | `.text`与v97完全相同，未GPU |
+| v99 prepared | WG-uniform tail161..192，整个task仅六组M16 | 494 / 88 | 12 | 2 / 0 | CPU拒绝，未GPU |
+| v99 review | 同上 | 494 / 102 | 12 | 2 / 0 | CPU拒绝，未GPU |
+| v100 prepared | v99关闭LLVM if/else VGPR live-range优化 | 494 / 88 | 12 | 2 / 0 | `.text`与v99完全相同，未GPU |
+
+这些K256候选LDS均为278528 B。v98 review的97.545 μs可能与CPU v99编译重叠，虽然GPU前置/post6 idle，也不作为严格无并发编译的性能验收，未采纳。v97/undef只改变无效行值，但仍必须以无spill及GPU精度为门禁，不能只凭“无效行”接受未验证代码。
+
+v99初次两条task分支分别创建SharedAllocator，触发 `Only one SharedAllocator allowed`，尚未运行GPU。修正将target allocator移到run_task外，两分支共用同一raw pointer，generic fallback保留原位置。最终source SHA：prepared `f9077d15405f070690623003261153235f646a54c8601c44ec9543959c5a522f`；review `f266936260f96137590dfff792ead51aa458611c34ce60a7dfca7504497f4b68`。prepared `.text`为 `6547d9f9…7978f`，review为 `15edc8d8…467aa9`。static7911/8987包含互斥专用/通用分支，不能当作每wave动态指令量。
+
+v100依据本地LLVM `AMDGPUTargetMachine.cpp` 中 `amdgpu-opt-vgpr-liverange` 的实际定义进行对照；prepared `.text`和资源完全没变，未重复GPU或扩写为已取得收益。v99 prepared的两条scratch stores/loads出现在generic M32 conditional分支的ScaleA临时值使用段；这是静态ISA位置观察，尚没有该候选ATT动态瓶颈证据。下一版v101保留tail161..192六组专用task，其余tail恢复全padded WMMA，避免generic conditional accumulator更新。
+
+CPU、数值和性能复现均只在进程内导入快照，正式persistent源和用户benchmark只读：
+
+```bash
+# CPU-only; run in the specified container from the repository root.
+docker exec -w /data/yanguahe/code/wk_sp1/aiter dsr1_ep4 \
+  env PYTHONPATH=/data/yanguahe/code/wk_sp1/aiter ENABLE_CK=0 \
+  timeout --signal=TERM --kill-after=5s 120s \
+  python3 -u .codex_tmp/gemm1_t1536_20261017/compile_candidate_cpu.py \
+    cyclic64_prepared_stripe_three_pairs_full_generic_v101 --tdm-b-th 6
+
+# Untimed full numerical check; change --check to replay for buffer/graph tests.
+docker exec -w /data/yanguahe/code/wk_sp1/aiter dsr1_ep4 \
+  env PYTHONPATH=/data/yanguahe/code/wk_sp1/aiter ENABLE_CK=0 AITER_GFX1250_GEMM1_OPTX=0 \
+  timeout --signal=TERM --kill-after=5s 120s \
+  python3 -u .codex_tmp/gemm1_t1536_20261017/validate_imported_candidate.py \
+    cyclic64_prepared_stripe_three_pairs_full_generic_v101 --check equivalence
+
+# After numerical gates, on host; use a fresh label to preserve old evidence.
+bash .codex_tmp/gemm1_t1536_20261017/run_imported_perf_host.sh \
+  cyclic64_review_scalar_skip_m32_licmoff_v94 <new_label>
+```
+
+性能controller先检查所有GPU/KFD空闲，占用时每六秒等候；计时期间不并发编译、数值测试或idle检查。全部自有单项编译、检查及GPU命令使用120秒timeout。新v97–v101的证据按需归档，不下载 `.out`；正式最优仍为冻结review，不能将未验收候选默认为生产路径。
+
+### v101 消除 generic spill，v102 恢复 LICM 与六条 WMMA 分组
+
+v101不再在generic task逐pair条件更新accumulator：tail161..192走六组M16的专用task，其余tail计算全部八组M16。全部257种tail的静态有效行bijection通过；输入TDM、ring/fence、外部output descriptor和有效K顺序保留。prepared取得VGPR484/SGPR88/LDS278528 B、private和两类spill均0；review为476/102，但有private8 B/1个VGPR spill，未GPU。
+
+prepared完成11case及dynamic/poison/eager/graph replay，原完整benchmark单次104.669 μs/count19、sanity正确，未显示优势，未采纳。立即post busy2、无KFD、VRAM176582656 B；六秒轮询后idle。独立post6首sample看到他人E65验证PID2880231运行五秒，约05:57:33启动，晚于本workload的05:57:26退出，之后再次恢复idle。不能写成post6首sample全机idle，也没有根据该后启动任务断言候选计时被干扰。
+
+v102恢复machine/postRA LICM，并对六组M16 task对照 `MMA_GROUP=4/FENCE_COVER=8` 和 `MMA_GROUP=6/FENCE_COVER=6`。完整有效MMA、memory和同步functions的AST不变，只改constexpr调度与LLVM policy。两者CPU均VGPR484/SGPR107/LDS278528 B、无private/spill；six-group完成11case/replay，原命令单次100.488 μs/count19，前置/独立post6全机idle，但仍未优于冻结最优，未采纳。mg4已完成11case与replay，尚未测性能；按用户四级共享A指令暂停旧v102/v103的性能实验。
+
+实际v101 GPU `.text`为 `d25d785940c5426579499820dd99bf86d2e4e14b55212303a3608485eb40d256`，资源与CPU逐项相同；v102 mg6 CPU `.text`为 `42aa236d8f397732b49de7161349cc896335062b107289337da0e0a82dff855e`，mg4为 `8517ca38d3655975bc11ca4b12eadb703ebc5069029dcad018ee79a5812dc3cf`。静态指令数不代表动态wave执行量。
+
+证据：`logs/v101_prepared_full_generic_{equivalence,replay}_20261018.log`、`logs/k256_v101_prepared_full_generic_screen_20261018_r1{,_post6}.log`、`logs/v101_actual_gpu_inspection_20261018.log`；v102为 `logs/v102_licmon_mg{4,6}_{compile,inspection,equivalence,replay}_20261018.log` 及 `logs/k256_v102_licmon_mg6_screen_20261018_r1{,_post6}.log`。对应builder为 `build_candidates_v101.py`、`build_candidates_v102.py`，测试入口和原benchmark参数与前节相同。
+
+后续v103只在已经恢复完整row traversal的v102里恢复正式review已有的reuse设置，核对六组body是原八组stream的完整前缀；不引入新的forward/跨row reuse模式。资料中next/previous语义冲突仍保留，不能仅凭有限数值测试声称解决硬件语义问题。当前是单变量对照，不是已采纳收益。
+
+### N256 A/ScaleA TDM策略隔离实验（2026-10-20）
+
+v220 N128/b4及v225 N128/b2精度通过但性能回退后，回到v190 N256。v226只取消A multicast、保留TH0/RT；v227只让ScaleA使用四N-peer multicast/early timeout。归一化唯一policy和symbol后完整AST与v190一致，LDS地址、request数、wait/sync、有效正向K0..K55和quant输出保持。两候选CPU实际VGPR463、SGPR106/107、LDS295936 B，private/spills0，E64→E65→E64同artifact及完整ELF，ISA/CFG门禁通过。两版seed0/17反向/43双规模八hash和dynamic/poison/eager/两graph五次replay全部通过。原完整空闲screen v226 E64/E65为92.957/139.077 μs，v227为92.582/137.873 μs；v190首尾E64为90.766/90.735 μs、E65为138.035/137.919 μs。E64无收益，两版停止、不合入、不扩三轮。
+
+硬件依据是Shader Guide #65 §4.9.8 p191的multicast绕过WGP$，以及§4.10.3/Table80 pp201–203的TDM mask/early timeout语义。没有候选ATT/counters，不定量归因cache或流量。候选只在进程内导入，生产保持v190及正式91.688/137.596 μs，距E64目标差11.688 μs；详细资源、SHA、fresh-label复现和post边界见[OPTX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)。N128249项/44779452 B与策略129项/18698762 B证据均已分shard下载逐SHA验证，不含`.out`，两批receipt均保存task logs。
+
+v228仅跳无效A M16/ScaleA M32 DS reads，CPU461/107、LDS295936 B、private/spills0、12 CFG通过。seed17完整双规模八hash/原门限、1536 shared routes、同artifact/ELF和dynamic/poison/eager/两graph五次replay全部通过，但原完整screen E64/E65为107.627/171.426 μs，e2e221.68/319.40 μs；同批v190首尾GEMM1分别91.441/92.734与136.829/137.242 μs。两规模明显回退，停止、不合入、不扩三轮。所有pre idle、立即post无KFD/busy2–3、六秒后及post6均idle；69项/10191253 B完成证据下载逐SHA验收通过。
+
+TDM surface缩减版v229只完成CPU，因SGPR spill8及CFG审计拒绝未运行GPU。v230仅缩A，保留ScaleA和全部原DS/WMMA，同有效组/地址及正向K，最小两行避免已有单行descriptor经验问题；CPU465/106、LDS295936 B、private/spills0、12 CFG通过。actual-AST descriptor115136项与四负对照通过，双规模seed17八hash及dynamic/replay通过，同artifact/ELF。21个短tail/空expert/hot8完整MoE边界case均八项mismatch0；首轮工具CPU/CUDA arange错误已仅在解码工具修正，失败日志保留。原完整bench v230 E64/E65 GEMM1为93.858/141.196 μs，同批v190首尾为91.517/91.781与138.061/136.922 μs，两种规模回退，停止、不合入、不扩三轮。所有pre idle；立即post无KFD/busy2–3，六秒后及独立post6均idle，无本任务残留。123项/19321773 B证据已下载逐member/archive SHA验收，不含`.out`；[完整结果与复现](moe_gemm1_e64_t1536_optx_optimization.md)。生产v190和正式三轮91.688/137.596 μs保持，E64距80 μs差11.688 μs。
+
+N256 input ring v231/S2完整验收及原完整bench已结束：实际463 VGPR/104 SGPR/LDS156672 B，private及两类spill0，比v190少139264 B LDS，仍保留两份physical A128/ScaleA128。seed17双规模八hash、同artifact/完整ELF、dynamic/poison/eager/两graph各五次replay、21个空expert/短tail/hot8完整MoE边界均通过；原0.01门限与E65的1536 shared routes保持。E64/E65 GEMM1为129.015/220.959 μs，同批v190首尾91.361/91.334与138.822/137.481 μs，两种规模明显回退，停止、不合入、不扩三轮。v232/S3实际489/107、LDS226304 B，SGPR spill18及原CFG审计拒绝，未运行GPU；不能称为数值bug或性能回退。模型工具首版120秒超时保留，修正只缓存compiled AST，coverage/assert和候选不变。127项/18926348 B完整证据下载逐SHA核验，不含`.out`；精确对象、复现、pre/post外部进程边界和限制见[OPTX记录](moe_gemm1_e64_t1536_optx_optimization.md)。后续只在隔离候选做S3 LLVM policy CPU筛选，生产正式v190三轮91.688/137.596 μs不变。
+
+### 三级 ring 的 stage identity 修复与 LICM 后续（2026-10-20）
+
+v233/v234/v235 的 S3 编译 policy 对照均因 SGPR spill10/18/10 拒绝，未 GPU。v236/v237 将 stage scalar 化后资源降为448 VGPR、102/98 SGPR、LDS226304 B、private/spills0，模型及原CFG通过，却在首项完整E64的原logits检查失败。问题在空inline asm `=s,s`不要求input/output同SGPR；隔离v238/v239改为局部tied helper `=s,0`，不修改共享helper或生产v190。
+
+v236→v238 的30080 B `.text`只有两字节不同，section VMA `0x1b00`下对应PC `0x57d4`的目标s12→s14及`0x5f58`的目标s86→s87，后续consumer分别使用s14/s87；完整字节和ISA绑定证据已保存。另一个模型scope globals复制问题只修工具，62误匹配→124判定通过，候选和assert不变。不能由模型通过替代GPU验证。
+
+v238/v239各自完成actual-AST全地址/协议及八负对照、原12CFG区间、seed17 E64→E65→E64八hash与指定baseline一致、同artifact/完整ELF、原0.01门限及1536 shared routes。dynamic/poison/eager/两graph各五次replay mismatch0；每版21个空expert/短tail/257/E65 hot8完整MoE case八项mismatch0。原完整单次screen v238 E64/E65 GEMM1为94.779/148.168 μs，v239为96.272/149.593 μs；同批v190首尾为91.798/91.013与137.323/136.899 μs。两种规模都回退，停止、不合入、不扩三轮。LDS减少69632 B不等于性能改善，没有候选ATT/counters，原因不作定量推断。
+
+295项/58300254 B证据已分五shard下载并逐member/archive SHA验收，无`.out`。所有pre idle；立即post无KFD、busy2–3，六秒复查及post6恢复idle，无本任务残留，计时期间无本任务编译/传输/验证或idle polling。汇总regex仅在独立v2修正并重算原raw，冻结v1与GPU数据保留。[完整方法、资源、对象、性能和复现](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+恢复tied-S3默认两项LICM的对照已结束：v240为450/107/LDS226304 B但SGPR spill2，CPU拒绝；v241为461/107、private/spills0、原CFG通过，actual-AST、seed17双规模完整八hash、dynamic/poison/eager/两graph五次replay及21个完整MoE边界case全部通过，同CPU/GPU完整ELF `fe149f0d3a292450e8f4b1ea7ef74517f113a35b7a451b095814c6a494c33cff`。原完整单轮screen E64/E65 GEMM1为96.590/148.227 μs，慢于首尾v190的91.559/91.793与137.455/137.542 μs，停止本轮S3、不扩三轮、不合入。126项/19306862 B证据已下载逐archive/member SHA和原逐轮pre/post/post6核验，后置的`<已退出>`及独立任务记录保留，不把最终idle替代逐轮边界，无`.out`。
+
+继续隔离ScaleA/ScaleB LDS base tied identity：v242两侧、v243仅A、v244仅B在CPU分别4719/4726/4711条指令，超过事前4710门槛，均未GPU。Scale DS issue为48/52/48（v19054）、dwords仍96，`s_wait_dscnt`为121/137/100（v190109）；原CFG、零private/spills、LDS295936 B和CPU双规模同artifact通过。v245将仅B与v215完全无效capacity guard组合，actual-AST 144fixture/323328判定通过，CPU为464/106、4709条指令、private/spills0；seed17双规模完整八hash、原0.01门限、1536 shared routes、同artifact/完整ELF、dynamic/poison/eager/两graph五次replay以及21个完整MoE边界case全部通过。
+
+v245原完整首尾screen E64/E65 GEMM1为90.697/137.186 μs，首尾v190为91.338/91.983和136.878/137.517 μs。扩三轮独立进程交替后v190/v245的E64中值为92.006/91.888 μs、E65为137.932/137.715 μs；E64第三轮候选反而慢1.322 μs。同HIP context三轮E64中值92.131/91.034 μs，但E65为137.491/137.759 μs且反向轮候选慢1.621 μs。两批保留原warmup5/iters20/count19及sanity、不混算，没有稳定收益，暂不采纳。275项/37181076 B已下载逐archive/member SHA、CPU gate、actual完整ELF、八hash/21case及逐轮计时边界在本地独立核验，无`.out`；部分post6的外部任务/`<已退出>`原样保留，不以最终idle替代首post。
+
+v246/v247编译metric bias0/100、v248 ScaleB raw LLVM load及v250/v251合并DS issue hint两种分组均与v245同`.text`，CPU停止、未GPU；v249两侧raw load为4715条指令超过原4710门槛，也未GPU。v252/v253的Scale/payload B-first与A-first次序已完成native筛选，实际4741/4773条指令超过原4710门槛，CPU停止、未GPU；模型请求multiset/bank相同不等于性能收益。生产v190及正式三轮 **91.688/137.596 μs** 保持，E64距目标差 **11.688 μs**。完整对象、源码、复现和限制见[OPTX记录](moe_gemm1_e64_t1536_optx_optimization.md)。
+
+### v254–v266 与异常复测收尾、暂停（2026-10-20）
+
+v254/v255组合prepared input body、ScaleB tied base和完全无效capacity guard，完整MoE八hash、dynamic/replay及每版21边界通过，同E64/E65 actual artifact/完整ELF。v254三轮E64 v190/候选中值92.371/91.462 μs，但第二轮候选慢1.058 μs，E65中值137.620/137.704 μs，收益不一致、不采纳。v255原screen E64/E65为91.058/140.595 μs，E64与control持平、E65回退、不采纳。v246–v255共403项/75484354 B完成证据已下载核验。
+
+v256–v263只改原wave-uniform row predicate的生成方式，v264/v265只分别给v255的A/B data LDS base加`=v,0` tied identity；所有有效routes、正向K、同步和quant/output保持。十版seed17完整双规模八hash、原0.01门限、12288/13824有效routes、1536 shared routes、同actual artifact/完整ELF、三variant/eager/两graph五次replay及共210个完整MoE边界均通过，没有稳定性能收益。最后v265 E64/E65 GEMM1为92.154/138.957 μs，同批v190首尾90.632/90.804和137.858/136.968 μs，不采纳、不扩三轮。v266为463/96/LDS295936 B、private/spills0，CPU/model/CFG通过，按用户要求未运行GPU。
+
+| E65/v190 | GEMM1 μs | GEMM2 μs | MoE e2e μs |
+|---|---:|---:|---:|
+| 旧异常记录（不作稳定对照） | 161.590 | 315.866 | 982.26 |
+| 重测 1 | 138.887 | 89.750 | 284.02 |
+| 重测 2 | 136.918 | 89.441 | 281.17 |
+| 重测 3 | 136.931 | 89.287 | 281.12 |
+| 三次重测中值 | **136.931** | **89.441** | **281.17** |
+
+异常在三次原完整bench重测中未复现，同v190完整ELF和原精度门限保持。这是同代码复测，不计代码收益、不替代正式E65中值137.596 μs；旧异常保留、排除稳定对照，post中的其他任务及身份不完整记录无法唯一确定原因。所有pre最后sample idle，立即post busy3，后续独立任务按六秒等待，不以最后idle替代首post。本轮GPU性能窗口没有并发编译/验证/传输/归档/idle polling。
+
+1048项/95480350 B新完成证据已下载逐archive/member SHA及actual完整ELF核验，所有control actual MLIR均纳入、不含`.out`，见[本地独立汇总](../.codex_tmp/gemm1_t1536_20261017/logs/runtime256_v266_completed_pause_downloaded_summary_20261020.json)。v263 signed DWORD branch-offset审计工具修正及六负对照、v261成功args2边界labels、详细方法/资源/性能/复现和限制见[OPTX记录](moe_gemm1_e64_t1536_optx_optimization.md)。按用户要求本轮完成后**已暂停优化**，生产仍基于OPTX的v190，正式E64/E65为91.688/137.596 μs，E64距80 μs差11.688 μs。
+
+### 四级共享 A128/ScaleA128 的优先实验（2026-10-18）
+
+按用户最新方案，暂停旧K256候选，优先让上下两半复用每stage的同一份A128/ScaleA128。输入ring实为204 KiB，两个output windows为17 KiB，ELF总LDS221 KiB；四槽的跨task READY计数已单独修正并通过依赖负对照。v104 G4/G2、v105 skip、v106 B-cache、v107/v108 S0 carry的数值门禁及原完整benchmark已完成，最快单次是v107 G4的122.235 μs，未优于正式同源码空闲中值94.279 μs，不采纳。v107已补齐11case，M_e边界继续按小批次验证；v109扩展组内carry，仍在CPU/GPU门禁，暂无新性能结论。
+
+四SIMD ATT的32条完整compute waves显示：compute85.9818%、handoff7.6060%，stall归属`dscnt`20.3768%、WG barrier18.6755%。这支持继续处理steady LDS供数与rendezvous调度；不能只因LDS减少或handoff百分比下降宣称加速。数据、复现命令及负载限制见 [optX优化记录](moe_gemm1_e64_t1536_optx_optimization.md)，trace详见 [四级共享A分析](moe_gemm1_e64_t1536_s4_shared_a_thread_trace_analysis.md)。正式源码和默认selector保持冻结。
+
+后续补齐v109–v118，最低单次为v110 G4的114.303 μs，仍慢于正式当日中值94.279 μs。v119 G2已通过random/replay，但性能一直处于全机idle轮询；按用户新指令取消，未启动workload、无性能结果。v120仅CPU，后续不测。共享槽方向现已放弃，保留负结果；继续v62双份A/ScaleA布局下的carry与split WG rendezvous等其他optX方向。完整表格和证据限制已写入optX记录。

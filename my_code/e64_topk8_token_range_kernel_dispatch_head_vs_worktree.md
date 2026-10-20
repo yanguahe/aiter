@@ -1298,3 +1298,350 @@ per-expert route count。该 profile 选择优先于 `[4609,+∞)` 的 non-align
 | `[4609, +∞)`, non-aligned | all | optimized `t256/w2x2/b4_pmds` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
 | `>=4609`, aligned override | balanced | optimized `t256/w2x2/b4` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
 | `>=4609`, aligned override | non-balanced | optimized `t256/w2x2/b4_pmds` | `(1,4)` | optimized `t256/w2x2/b4` | `(1,4)` |
+
+## 2026-10-18 强制统一 kernel 候选 sweep
+
+### 目标与隔离方式
+
+本轮不修改本地生产源码；从当时的 `grouped_moe_gfx1250.py` 创建两个独立 overlay，
+并只将 overlay 覆盖到 a07-3 的隔离 worktree：
+
+```text
+host:      a07-3
+container: hyg_fyd1
+worktree:  /data/yanguahe/code/wk_sp1/aiter_refactor_t192_baseline
+```
+
+候选配置：
+
+1. `[1024,1536)`：GEMM1/GEMM2 均强制无 suffix persistent
+   `t192/w2x4/b4`；
+2. `[2049,3840)`：GEMM1/GEMM2 均强制无 suffix persistent
+   `t256/w2x4/b4`；
+3. `[3840,+∞)`：GEMM1/GEMM2 均强制无 suffix optimized
+   `t256/w2x2/b4`。
+
+每个 token 分别执行 balanced 与 non-balanced routing；输入均为 random。每个
+`routing × token` 启动3个独立进程，每个进程使用5次默认 warmup、20次 profiler
+iteration。每次运行前均检查整机 KFD 进程、GPU busy 和 VRAM，只有空闲时才运行。
+性能表记录3次独立进程的中值。正确性 gate 为 `logits_diff < 0.01`，同时记录
+GEMM2 diagnostic reference/output hash。
+
+本地隔离代码：
+
+```text
+.codex_tmp/e64_t192_exact_sweep_20261018/
+.codex_tmp/e64_t256_route_sweep_20261018/
+```
+
+远端 raw、逐进程日志和机器可读结果：
+
+```text
+/data/yanguahe/code/wk_sp1/.codex_tmp/e64_t192_exact_sweep_20261018/
+/data/yanguahe/code/wk_sp1/.codex_tmp/e64_t256_route_sweep_20261018/
+```
+
+### `[1024,1536)`：persistent t192/w2x4/b4
+
+实际 GEMM symbol 均无 `_pmds` / `_pmdrain`：
+
+```text
+GEMM1: a8w4_tdm_fp4_t192x256x256_w2x4_b4_K7168_e64_act1_q1r6_cn4_cm1_prefetch_apre_persist
+GEMM2: a8w4_tdm_fp4_t192x256x256_w2x4_b4_K2048_e64_cn4_cm1_prefetch_apre_persist
+```
+
+| routing | tokens | pass | GEMM1 median us | GEMM2 median us | MoE e2e median us | logits_diff max |
+|---|---:|:---:|---:|---:|---:|---:|
+| balanced | 1024 | True | 83.739 | 48.410 | 177.476 | 3.38630e-06 |
+| non-balanced | 1024 | True | 83.689 | 48.621 | 177.500 | 3.48374e-06 |
+| balanced | 1025 | True | 82.582 | 48.826 | 184.614 | 3.38636e-06 |
+| non-balanced | 1025 | True | 82.396 | 48.819 | 184.795 | 3.48384e-06 |
+| balanced | 1152 | True | 82.862 | 49.383 | 179.168 | 3.38529e-06 |
+| non-balanced | 1152 | True | 83.876 | 50.093 | 179.847 | 3.48636e-06 |
+| balanced | 1280 | True | 84.036 | 50.428 | 183.146 | 3.38426e-06 |
+| non-balanced | 1280 | True | 85.282 | 50.036 | 183.796 | 3.47858e-06 |
+| balanced | 1504 | True | 87.596 | 52.612 | 191.882 | 3.38438e-06 |
+| non-balanced | 1504 | True | 134.246 | 76.676 | 260.860 | 3.47299e-06 |
+| balanced | 1535 | True | 87.334 | 52.067 | 199.175 | 3.38483e-06 |
+| non-balanced | 1535 | True | 136.311 | 77.635 | 273.905 | 3.47325e-06 |
+
+36/36 个进程均退出0、`pass=True`，GEMM2 diagnostic hash 也全部 exact。
+non-balanced 在1504/1535明显变慢，原因是随机 routing 产生更多对齐后的 active
+M tiles；这不是精度失败。
+
+### `[2049,3840)`：persistent t256/w2x4/b4
+
+实际 GEMM symbol 均无 `_pmds` / `_pmdrain`：
+
+```text
+GEMM1: a8w4_tdm_fp4_t256x256x256_w2x4_b4_K7168_e64_act1_q1r8_cn4_cm1_prefetch_apre_persist
+GEMM2: a8w4_tdm_fp4_t256x256x256_w2x4_b4_K2048_e64_cn4_cm1_prefetch_apre_persist
+```
+
+| routing | tokens | pass | GEMM1 median us | GEMM2 median us | MoE e2e median us | logits_diff max |
+|---|---:|:---:|---:|---:|---:|---:|
+| balanced | 2049 | True | 158.839 | 93.990 | 317.230 | 3.38344e-06 |
+| non-balanced | 2049 | True | 165.742 | 96.048 | 326.821 | 3.47876e-06 |
+| balanced | 2560 | True | 182.181 | 104.962 | 348.972 | 3.38283e-06 |
+| non-balanced | 2560 | True | 181.878 | 104.712 | 348.925 | 3.47237e-06 |
+| balanced | 3072 | True | 184.878 | 109.047 | 359.029 | 3.38117e-06 |
+| non-balanced | 3072 | True | 183.626 | 108.148 | 361.347 | 3.47734e-06 |
+| balanced | 3073 | True | 183.478 | 108.783 | 368.698 | 3.38118e-06 |
+| non-balanced | 3073 | True | 185.042 | 107.687 | 368.582 | 3.47732e-06 |
+| balanced | 3584 | True | 187.876 | 111.497 | 370.998 | 3.38157e-06 |
+| non-balanced | 3584 | True | 188.201 | 111.389 | 372.415 | 3.47487e-06 |
+| balanced | 3839 | True | 189.668 | 112.344 | 386.293 | 3.38192e-06 |
+| non-balanced | 3839 | True | 232.073 | 140.051 | 458.761 | 3.47412e-06 |
+
+36/36 个进程均退出0、`pass=True`，GEMM2 diagnostic hash 全部 exact。该候选在
+两个目标区间的本轮采样点没有发现精度失败。
+
+### `[3840,+∞)`：optimized t256/w2x2/b4
+
+实际 GEMM symbol：
+
+```text
+GEMM1: a8w4_tdm_fp4_t256x256x256_w2x2_b4_K7168_e64_act1_q1r8_cn4_prefetch_apre
+GEMM2: a8w4_tdm_fp4_t256x256x256_w2x2_b4_K2048_e64_cn4_prefetch_apre
+```
+
+| routing | tokens | pass | GEMM1 median us | GEMM2 median us | MoE e2e median us | logits_diff max |
+|---|---:|:---:|---:|---:|---:|---:|
+| balanced | 3840 | **False** | 185.692 | 119.563 | 380.231 | NaN |
+| non-balanced | 3840 | **False** | 189.468 | 121.429 | 388.880 | NaN |
+| balanced | 4095 | **False** | 200.263 | 123.521 | 409.868 | 1.0 |
+| non-balanced | 4095 | **False** | 199.350 | 133.161 | 422.484 | NaN |
+| balanced | 4096 | True | 181.897 | 120.508 | 377.973 | 3.38292e-06 |
+| non-balanced | 4096 | **False** | 198.366 | 133.359 | 412.842 | NaN |
+| balanced | 4097 | True | 185.612 | 124.752 | 395.450 | 9.54286e-05 |
+| non-balanced | 4097 | **False** | 209.407 | 136.738 | 435.693 | NaN |
+| balanced | 4608 | **False** | 234.989 | 157.854 | 477.676 | 0.0286425 |
+| non-balanced | 4608 | **False** | 233.129 | 154.591 | 476.668 | 0.0247625 |
+| balanced | 4609 | **False** | 236.197 | 157.068 | 487.191 | 0.0285712 |
+| non-balanced | 4609 | **False** | 231.073 | 154.732 | 481.766 | 0.0252701 |
+| balanced | 6144 | True | 250.347 | 168.306 | 519.754 | 3.38487e-06 |
+| non-balanced | 6144 | **False** | 271.966 | 185.639 | 565.129 | NaN |
+
+该候选只在 balanced 4096、4097、6144 三组通过；其它11组均在3/3独立进程中
+重复失败。3840、4095及多组 non-balanced case 出现 NaN/Inf；4608、4609 虽为
+有限值，但 `logits_diff≈0.024–0.029`，超过0.01 gate。失败 case 的 GEMM2
+diagnostic hash 仍 exact，说明该 diagnostic 不能替代 timed fused path 的最终
+精度 gate。
+
+失败配置的耗时仅作为 raw 诊断数据记录，不作为可采用候选的有效性能结论。
+因此不能将整个 `[3840,+∞)` 统一改成无 suffix optimized
+`t256/w2x2/b4 + t256/w2x2/b4`。
+
+## 2026-10-18 optimized t256/w2x2 partial-M 精度修复
+
+### 隔离范围与最终文件
+
+本轮继续使用 a07-3 的同一隔离 worktree，但没有修改本地生产源码。远端覆盖前重新
+检查了 tracked 状态、当前内容和 SHA256；最终只从新 overlay 复制任务文件：
+
+```text
+local overlay:
+  .codex_tmp/e64_t256_w2x2_accuracy_fix_20261018/overlay/
+
+remote raw:
+  /data/yanguahe/code/wk_sp1/.codex_tmp/e64_t256_w2x2_accuracy_fix_20261018/
+
+remote worktree:
+  /data/yanguahe/code/wk_sp1/aiter_refactor_t192_baseline
+branch:
+  moe_a4w4_pr_refactor_wt
+HEAD:
+  339589f900b3a880ec447f605886fe803cbf9649
+```
+
+最终修改 optimized kernel 本体、launcher 透传和 selector：
+
+| 文件 | baseline SHA256 | final SHA256 | 最终状态 |
+|---|---|---|---|
+| `aiter/ops/flydsl/grouped_moe_gfx1250.py` | `75e013f3925c6ca41c4f50050d49b3a16306475b4b689a029cb294165bc1696f` | `8afef2a7c6cabe838c012e2b7ccaf156791091d0f4de3555315b1af71f71b3a2` | modified |
+| `aiter/ops/flydsl/grouped_gemm_mxfp4.py` | `5329bb55c22d9c76850dc3c09c539fd9674bce542ad8115d8a4a5821d377013b` | `14313728835984073e7923d2e3fb43520be5a925319e0a6f240bda3d684135d6` | modified |
+| `aiter/ops/flydsl/kernels/mxfp4_preshuffle_gfx1250_tdm_prefill.py` | `35540c3684a9b22b837092b2ccf5fba166010e0771819f9f1b656efef51ea0ee` | `06a4ef225297269ca377ab6c25691b5e584148d76ee27b0f251e4387f06e4a1d` | modified |
+
+直接回切现有 `_pmds` selector 能恢复数值，但不满足“修 optimized kernel 本身”
+且会让 aligned 快路径进入 specialization，因此未作为最终方案。B32 ScaleA store
+和 device-coherent store 候选也未改变有效 GEMM2 数值或 raw capture 差异，均保留在
+`candidates/` 而未进入最终 overlay。
+
+### GEMM1 与 GEMM2 根因分离
+
+标准 runner 的 `gemm2_output_hash128` 来自 profiler 之后另起的
+`stage_output_capture` launch；它禁用 fused GEMM1 quant，不能证明 timed/fused
+launch。新诊断工具在第一个真实 fused launch 上保存 payload、ScaleA 和 GEMM2
+grouped output，再与随后 standalone producer 比较。
+
+无 suffix baseline 的代表结果：
+
+| case | fused payload semantic mismatch | raw ScaleA mismatch | fused GEMM2 valid-byte mismatch | overall |
+|---|---:|---:|---:|---|
+| balanced T3840，repeat 1/2 | 0 / 0 | 98,261 / 98,261 | 86,842,702 / 86,231,245 | NaN |
+| non-balanced T3840，repeat 1/2 | 0 / 0 | 89,439 / 89,439 | 60,728,322 / 60,717,546 | NaN |
+| balanced T4095 | 0 | 382（详细 isolated capture） | 343,304 | `logits_diff≈1` |
+| balanced T4608 | 0 | 130,658（详细 isolated capture） | 47,922,168 | `logits_diff≈0.0286` |
+| non-balanced T4608 | 0 | 113,725（详细 isolated capture） | 46,329,242 | `logits_diff≈0.0243` |
+
+T4095/T4608 的较早简化 capture 偶尔显示 raw ScaleA exact，但 fused GEMM2 仍错；
+重复 isolated capture 能在相同 case 抓到 ScaleA 差异，说明只看一次 clone/hash
+不足以排除 fused producer 问题。
+
+T4608 地址交叉实验进一步排除了 GEMM2 kernel/output 地址：
+
+- fused input 在原 output、clone input/new output、reference output 上均错
+  `47,924,178` bytes；
+- standalone reference input 在原 output、新 output、fused output 上均为
+  `0` byte mismatch；
+- 两侧 `psum`、所有 scalar launch 参数相同，payload semantic mismatch 为0；
+- output/payload/ScaleA 指针均为4 KiB aligned，改变 output 地址不改变结论。
+
+因此确定根因是无 suffix optimized GEMM1 对 full/partial M 一律使用 collective
+ScaleA TDM store；`allow_partial_m_exact=1` 只是让该缺陷暴露到更多 routing，
+并不是 GEMM2 故障。GEMM2 无需源码修改；当它消费修复后的 fused input 时，其
+valid rows 与 PyTorch reference bitwise exact。
+
+### 硬件事实与代码推导
+
+文档事实：
+
+- CDNA5 ISA §10.11.1 p149、Shader Programming Guide §4.10.1 p197：
+  `TENSOR_LOAD_TO_LDS`/`TENSOR_STORE_FROM_LDS` 由 `TENSORcnt` 跟踪；同一 wave
+  的 Tensor instructions 按序完成，但跨 wave、以及相对其他 memory instructions
+  无序。
+- CDNA5 ISA §10.11.2 p150 和 §10.11.6 p156：D# 的 `tensor_dim` 用于 OOB；
+  load OOB 返回0，store OOB 被丢弃。
+- CDNA5 ISA §5.6.6 p60：cluster barrier 按 workgroup 计数；推荐先做
+  workgroup barrier、每个 workgroup 一条 wave signal，cluster 中所有 wave wait。
+
+代码/实验推导：
+
+- payload 始终 semantic exact，排除 fused FP4 conversion 和 payload output TDM；
+- reference input 在任意 output 地址上都 exact，排除 GEMM2 output descriptor、
+  partial output clamp 和 output pointer；
+- clone 后的 fused input 仍错，排除单一 allocator address；
+- 新 `_pmauto` 后 GEMM2 valid rows 和 PyTorch hash 均 exact，故无需改变 GEMM2
+  的 next-stage prefetch、input/output address 或无 suffix binary。
+
+### 最小 optimized kernel 修复
+
+最终不回退 t64、persistent w2x4 或现有 `_pmds/_pmdrain` profile：
+
+1. optimized GEMM1 增加 compile-time `partial_m_auto_scale` specialization；
+2. `_pmauto` 内的 `mn_oob < tile_m` 是 workgroup-uniform runtime 判断：
+   full tile 保持原 LDS + collective TDM ScaleA store，partial tile 才把有效行
+   direct-store 到 canonical row32 地址，并等待 `STOREcnt=0`；
+3. `grouped_gemm_mxfp4.py` 只在 optimized fused GEMM1 的
+   `allow_partial_m_exact=1` profile 上传递 `_pmauto`；GEMM2 仍运行原无 suffix
+   optimized kernel；
+4. balanced aligned override 从 T3840 起返回 plain exact profile，使
+   T4096/T6144 的 `partial_m_auto_scale=0`，不编译 runtime partial 分支。
+   non-balanced 即使平均值对齐，也不能证明每个 expert 都是完整 tile，因此使用
+   optimized `_pmauto`。
+
+最终高 token 路由为：
+
+| 条件 | GEMM1 | GEMM2 |
+|---|---|---|
+| `tokens>=3840`，balanced 且平均 routes/expert 为256整数倍 | optimized `t256/w2x2/b4` | optimized `t256/w2x2/b4` |
+| 其它 `tokens>=3840` | optimized `t256/w2x2/b4_pmauto` | optimized `t256/w2x2/b4` |
+
+### 最终双 seed fused-stage 正确性
+
+balanced/non-balanced × T3840/4095/4096/4097/4608/4609/6144 分别运行
+seed0和seed7，共28个独立进程：
+
+| routing | tokens | runs | payload semantic max | effective ScaleA mismatch max | GEMM2 valid-byte max | logits_diff max | pass |
+|---|---:|---:|---:|---:|---:|---:|:---:|
+| balanced | 3840 | 2 | 0 | 0 | 0 | `3.38377903e-06` | True |
+| non-balanced | 3840 | 2 | 0 | 0 | 0 | `3.47725575e-06` | True |
+| balanced | 4095 | 2 | 0 | 0 | 0 | `3.38394584e-06` | True |
+| non-balanced | 4095 | 2 | 0 | 0 | 0 | `3.47727530e-06` | True |
+| balanced | 4096 | 2 | 0 | 0 | 0 | `3.38389621e-06` | True |
+| non-balanced | 4096 | 2 | 0 | 0 | 0 | `3.47727587e-06` | True |
+| balanced | 4097 | 2 | 0 | 0 | 0 | `3.38391246e-06` | True |
+| non-balanced | 4097 | 2 | 0 | 0 | 0 | `3.47786906e-06` | True |
+| balanced | 4608 | 2 | 0 | 0 | 0 | `3.38401333e-06` | True |
+| non-balanced | 4608 | 2 | 0 | 0 | 0 | `3.48008822e-06` | True |
+| balanced | 4609 | 2 | 0 | 0 | 0 | `3.38401657e-06` | True |
+| non-balanced | 4609 | 2 | 0 | 0 | 0 | `3.48022471e-06` | True |
+| balanced | 6144 | 2 | 0 | 0 | 0 | `3.38486922e-06` | True |
+| non-balanced | 6144 | 2 | 0 | 0 | 0 | `3.47883350e-06` | True |
+
+28/28 均满足 payload semantic mismatch=0、GEMM2 valid-byte mismatch=0、
+GEMM2 PyTorch reference hash exact、overall pass。这里的 effective ScaleA
+mismatch 定义为 ScaleA 表示是否传播到 GEMM2；所有 case 均为0。
+
+需要单独保留一个诊断边界：partial `_pmauto` 与另起 standalone route-map launch
+之间的 raw ScaleA allocation bytes 不要求相等，最大 raw mismatch 为262,144；
+尝试 M32/M128 decoder、B32 store 和 device-coherent store 后该数仍不变，但
+同一批 GEMM2 valid rows 与 PyTorch reference 均 bitwise exact。balanced aligned
+T4096/T6144 的无 suffix 路径 raw ScaleA mismatch 为0。不要再把 raw allocation
+差异等同于有效 ScaleA/GEMM2 数值失败。
+
+### GPU 空闲下的相邻性能 A/B
+
+每个 case 保留3轮、每轮20 profiler iterations；轮次2反转 old/new 顺序。baseline
+为无 suffix unsafe sweep，candidate 为最终 selector。表中为三轮中值；百分比为
+candidate 相对 baseline，失败 baseline 仅用于 timing 对照。
+
+| routing | tokens | baseline/candidate pass | GEMM1 old/new us (delta) | GEMM2 old/new us (delta) | e2e old/new us (delta) |
+|---|---:|:---:|---:|---:|---:|
+| balanced | 3840 | False / True | 188.557 / 186.447 (−1.12%) | 120.833 / 119.677 (−0.96%) | 384.422 / 381.213 (−0.83%) |
+| balanced | 4095 | False / True | 184.313 / 192.038 (+4.19%) | 121.012 / 121.710 (+0.58%) | 390.485 / 400.116 (+2.47%) |
+| balanced | 4096 | True / True | 184.134 / 189.624 (+2.98%) | 120.470 / 121.695 (+1.02%) | 380.723 / 387.406 (+1.76%) |
+| balanced | 4608 | False / True | 230.941 / 234.780 (+1.66%) | 156.016 / 154.569 (−0.93%) | 471.207 / 474.055 (+0.60%) |
+| balanced | 6144 | True / True | 243.789 / 245.331 (+0.63%) | 165.360 / 165.367 (+0.00%) | 509.161 / 510.525 (+0.27%) |
+| non-balanced | 3840 | False / True | 188.964 / 195.671 (+3.55%) | 121.712 / 121.134 (−0.47%) | 391.015 / 395.312 (+1.10%) |
+| non-balanced | 4608 | False / True | 231.750 / 237.028 (+2.28%) | 155.333 / 155.465 (+0.08%) | 475.580 / 480.948 (+1.13%) |
+| non-balanced | 6144 | False / True | 273.423 / 279.968 (+2.39%) | 185.766 / 186.502 (+0.40%) | 568.125 / 575.979 (+1.38%) |
+
+paired-median 结论相同。两个 balanced aligned 快路径：
+
+- T4096：GEMM1/GEMM2/e2e paired median 为
+  `+0.91% / +1.02% / +0.40%`；
+- T6144：`+0.19% / −0.14% / −0.11%`。
+
+两点 selector 和 kernel symbol 均保持无 suffix，compile-time flag 为0，不包含
+runtime partial 分支；paired 结果未发现超过约1%的实质回退。partial 修复成本主要
+落在 GEMM1 `_pmauto`，本组最差为 balanced T4095：GEMM1中值 `+4.19%`、
+e2e `+2.47%`（paired median `+4.74% / +2.81%`）。
+
+### 证据、静态检查与残留风险
+
+```text
+local summaries:
+  .codex_tmp/e64_t256_w2x2_accuracy_fix_20261018/final_correctness_pmauto_summary.json
+  .codex_tmp/e64_t256_w2x2_accuracy_fix_20261018/adjacent_performance_ab_pmauto_summary.json
+
+remote raw:
+  /data/yanguahe/code/wk_sp1/.codex_tmp/e64_t256_w2x2_accuracy_fix_20261018/logs/
+```
+
+关键 SHA256：
+
+```text
+overlay grouped_moe_gfx1250.py:
+  8afef2a7c6cabe838c012e2b7ccaf156791091d0f4de3555315b1af71f71b3a2
+overlay grouped_gemm_mxfp4.py:
+  14313728835984073e7923d2e3fb43520be5a925319e0a6f240bda3d684135d6
+overlay mxfp4_preshuffle_gfx1250_tdm_prefill.py:
+  06a4ef225297269ca377ab6c25691b5e584148d76ee27b0f251e4387f06e4a1d
+verify_fused_stage_exact.py:
+  4447396c8235eaec8a389e914a074836e90301dd7442e1940c8b25d521a8b0dd
+final_correctness_pmauto_summary.json:
+  32717c4ea4b4e47932243ea28dea0ea48d8add6dc39a6182424cf601be3e0723
+adjacent_performance_ab_pmauto_summary.json:
+  9579d6e3187d40ced05506e4eb6446e742f0dd4446eb14d206573e75bc3a7802
+```
+
+本地检查通过 `py_compile`、Ruff、route AST fixture 和 `git diff --check`。
+没有执行 clean/checkout/reset/pull，没有 commit/push。最终远端 tracked 变更为
+上表三个任务文件；测试后 KFD PID 列表为空，GPU busy=0，
+VRAM=`176582656` bytes，没有测试进程残留。
+
+残留风险是 raw ScaleA capture 的表示差异不能作为跨独立 route-map launch 的
+bitwise contract；当前验收以 payload semantic、GEMM2 valid rows、PyTorch hash
+和 overall gate 为准。若未来存在绕过 optimized GEMM2、直接解释该中间 ScaleA
+allocation 的新消费者，需要为该消费者单独定义并验证 layout contract。

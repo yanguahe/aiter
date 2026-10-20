@@ -159,7 +159,7 @@ _TDM_KERNEL_RE = re.compile(
     r"a8w4_tdm_(?P<a_format>fp4|fp8)"
     r"_t(?P<tile_m>\d+)x(?P<tile_n>\d+)x(?P<tile_k>\d+)"
     r"_w(?P<m_warp>\d+)x(?P<n_warp>\d+)_b(?P<num_buffers>\d+)"
-    r"_K(?P<K>\d+)_e(?P<experts>\d+)"
+    r"_K(?P<K>\d+)_e(?P<experts>\d+|dyn)"
     r"(?:_act(?P<stage1_act>\d+))?"
     r"(?P<has_bias>_bias)?"
     r"(?:_q(?P<quant_out>\d+)r(?P<quant_wmma_rep>\d+))?"
@@ -387,11 +387,14 @@ def _parse_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
             "n_warp",
             "num_buffers",
             "K",
-            "experts",
         )
     }
     parsed.update(
         {
+            "experts": (
+                "dyn" if match.group("experts") == "dyn"
+                else int(match.group("experts"))
+            ),
             "name": match.group(0),
             "a_format": match.group("a_format"),
             "stage1_act": int(match.group("stage1_act") or 0),
@@ -437,7 +440,7 @@ def _extract_profiled_gemm_timings(
         if (
             parsed is None
             or parsed["a_format"] != expected_a_format
-            or parsed["experts"] != experts
+            or parsed["experts"] not in (experts, "dyn")
         ):
             continue
         try:
@@ -447,6 +450,11 @@ def _extract_profiled_gemm_timings(
         if not latency_us > 0:
             continue
         parsed["latency_us"] = latency_us
+        if parsed["experts"] == "dyn":
+            # The profiler row carries runtime-E code; the current workload
+            # supplies E. Preserve the original measured duration and count.
+            parsed["experts"] = experts
+            parsed["dynamic_experts"] = True
         try:
             parsed["count"] = int(rec.get("cnt"))
         except (TypeError, ValueError):
@@ -1228,6 +1236,43 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
     assert duplicate_timings == {"gemm1_us": None, "gemm2_us": 261.143}
     assert "gemm1" not in duplicate_kernels
     assert duplicate_debug == "gemm1 ambiguous (2 matches)"
+
+
+def test_profiled_runtime_expert_timing_extraction_fixture():
+    """Runtime-E symbols use measured rows and retain ambiguity guards."""
+    class TraceRecords:
+        def __init__(self, records):
+            self.records = records
+
+        def to_dict(self, orient):
+            assert orient == "records"
+            return self.records
+
+    dynamic_name = (
+        "a8w4_tdm_fp4_t256x256x256_w2x4_b4_K7168_edyn_act1_q1r8_cn4"
+        "_cm1_prefetch_apre_persist_optx_g1_s4"
+    )
+    for experts in (64, 65):
+        records = [
+            {"name": dynamic_name, "device_time_avg": 91.25, "cnt": 19},
+            {"name": f"a8w4_tdm_fp4_t256x256x256_w2x4_b4_K2048_e{experts}_cn4",
+             "device_time_avg": 60.5, "cnt": 19},
+        ]
+        kw = dict(data_format="a4w4", activation=ActivationType.Silu,
+                  experts=experts, model_dim=7168, inter_dim=2048)
+        timings, kernels, debug = _extract_profiled_gemm_timings(
+            trace_df=TraceRecords(records), **kw)
+        assert timings == {"gemm1_us": 91.25, "gemm2_us": 60.5}
+        assert kernels["gemm1"]["count"] == 19
+        assert kernels["gemm1"]["dynamic_experts"] is True
+        assert kernels["gemm1"]["experts"] == experts
+        assert debug is None
+        records.append({"name": f"a8w4_tdm_fp4_t256x256x256_w2x4_b4_K7168_e{experts}_act1",
+                        "device_time_avg": 99.0, "cnt": 19})
+        timings, kernels, debug = _extract_profiled_gemm_timings(
+            trace_df=TraceRecords(records), **kw)
+        assert timings["gemm1_us"] is None and "gemm1" not in kernels
+        assert debug == "gemm1 ambiguous (2 matches)"
 
 
 # ---------------------------------------------------------------------------

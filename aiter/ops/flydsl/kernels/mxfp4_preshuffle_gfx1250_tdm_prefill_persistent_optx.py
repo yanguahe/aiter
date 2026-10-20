@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2025 FlyDSL Project Contributors
 
-"""Opt-in M128 window scheduling for gfx1250 fused-quant MoE GEMM1."""
+"""M128 window scheduling for gfx1250 fused-quant MoE GEMM1."""
 
-import math
 from collections import namedtuple
 
 import flydsl.compiler as flyc
@@ -92,7 +91,7 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
     num_buffers: Constexpr[int],
     a_is_fp4: Constexpr[int],
     arg_m_tile_map: fx.Pointer,
-    n_experts: Constexpr[int],
+    n_experts: fx.Int32,
     stage1_act: Constexpr[int],
     has_bias: Constexpr[int],
     arg_bias: fx.Pointer,
@@ -108,27 +107,28 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
     balanced_m192: Constexpr[int] = 0,
     partial_m_direct_scale: Constexpr[int] = 0,
     partial_m_drain_output: Constexpr[int] = 0,
-    optx_kgroup: Constexpr[int] = 4,
-    optx_skip: Constexpr[int] = 0,
+    optx_kgroup: Constexpr[int] = 1,
+    optx_skip: Constexpr[int] = 1,
     optx_stagger: Constexpr[int] = 0,
-    optx_snake: Constexpr[int] = 1,
+    optx_snake: Constexpr[int] = 0,
 ):
     """Launch the protected M256 parent / M128 window GEMM1 path.
 
-    This entry retains the original dynamic tensor ABI and exact-partial-M
-    semantics. Selection is restricted to the original M256_FUSED_LAYOUT.
+    Expert count and tensor bounds are runtime arguments, so E64 and E65
+    share one compiled GEMM1 object. Exact-partial-M semantics and the
+    validated M256_FUSED_LAYOUT pipeline are retained.
     """
     assert (K, tile_m, tile_n, tile_k, m_warp, n_warp, num_buffers) == (
         7168, 256, 256, 256, 2, 4, 4
     )
-    assert (stage1_act, stage1_quant_out, quant_wmma_rep, n_experts) == (1, 1, 8, 64)
+    assert (stage1_act, stage1_quant_out, quant_wmma_rep) == (1, 1, 8)
     assert (cluster_n, cluster_m, num_waves_per_tensor_tdm) == (4, 1, 2)
     assert a_is_fp4 and not out_is_f16 and not has_bias
     assert next_stage_prefetch and not balanced_m192
     assert not partial_m_direct_scale and not partial_m_drain_output
-    assert optx_kgroup == 1, "cross-task candidate validates G1/S4"
+    assert optx_kgroup == 1, "merged READY requires G1/S4"
     assert optx_snake in (0, 1, 2)
-    assert optx_skip in (0, 1) and optx_stagger == 1
+    assert optx_skip in (0, 1) and not optx_stagger
 
     WMMA_M = WMMA_N = 16
     WMMA_K = 128
@@ -173,7 +173,6 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
             out_is_f16 == 0,
             has_bias == 0,
             cluster_n == 4,
-            n_experts > 0,
         )
     )
     fp4_prefill_schedule = common_schedule and K == 7168 and stage1_act == 1
@@ -238,7 +237,6 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
         out_is_f16,
         num_buffers,
         a_is_fp4,
-        n_experts,
         stage1_act,
         has_bias,
         TDM_DESCRIPTOR_VERSION,
@@ -289,7 +287,6 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
         and stage1_quant_out == 1
         and quant_wmma_rep == 8
         and cluster_m == 1
-        and n_experts == 64
         and not partial_m_direct_scale
         and not partial_m_drain_output
     )
@@ -371,18 +368,8 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
         if stage1_quant_out == 1
         else ((compute_tile_m * (tile_n + 16) * 2 + 127) // 128) * 128
     )
-    PERSISTENT_TASKS = (
-        4
-        if fp4_prefill_schedule
-        and K == 7168
-        and tile_m in (192, 256)
-        and cluster_m == 1
-        else (
-            7
-            if gemm2_schedule and K == 2048 and tile_m == 192 and n_experts == 64
-            else 1
-        )
-    )
+    # Both physical expert counts use the same validated four-task pipeline.
+    PERSISTENT_TASKS = 4
     T192_TASK_OVERLAP = bool(
         PERSISTENT_TASKS > 1
         and SEGMENT_SPLIT_A
@@ -428,13 +415,13 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
     _kname = (
         "a8w4_tdm_fp4"
         f"_t{tile_m}x{tile_n}x{tile_k}_w{m_warp}x{n_warp}"
-        f"_b{num_buffers}_K{K}_e{n_experts}"
+        f"_b{num_buffers}_K{K}_edyn"
         f"_act{stage1_act}_q{stage1_quant_out}r{quant_wmma_rep}"
         f"_cn{cluster_n}_cm{cluster_m}_prefetch_apre_persist"
         f"{'_vm192' if balanced_t256_m192 else ''}"
         f"{'_pmds' if partial_m_direct_scale else ''}"
         f"{'_pmdrain' if partial_m_drain_output else ''}"
-        f"_optx_g{optx_kgroup}_s4_sk{optx_skip}_st{optx_stagger}_sn{optx_snake}_bcache_cross"
+        f"_optx_g{optx_kgroup}_s4_sk{optx_skip}_st{optx_stagger}_sn{optx_snake}_bcache_merge_wavewindow_wavepub190_edyn_earlybanks_splitS0_S1rows0_carryF_carryS"
     )
 
     @flyc.kernel(name=_kname, known_block_size=[block, 1, 1])
@@ -449,6 +436,7 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
         arg_quant_scale: fx.Tensor,
         i32_m: fx.Int32,
         i32_n: fx.Int32,
+        n_experts: fx.Int32,
         f32_swiglu_limit: fx.Float32,
     ):
         xdl_arb_off = (
@@ -486,9 +474,8 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
             persistent_tile_map = fx.recast_iter(persistent_i32_ptr, arg_m_tile_map)
             persistent_lo = persistent_blk_m * 0
             persistent_hi = persistent_lo + n_experts
-            for _ in range_constexpr(
-                max(1, math.ceil(math.log2(max(2, n_experts))) + 1)
-            ):
+            # Upper-bound search is uniform within a WG and supports runtime E.
+            while persistent_lo < persistent_hi:
                 persistent_mid = (persistent_lo + persistent_hi) >> 1
                 persistent_mid_clamped = (persistent_mid < n_experts - 1).select(
                     persistent_mid, n_experts - 1
@@ -521,9 +508,6 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                 persistent_eb64,
                 persistent_mn_oob,
             )
-
-        # Keep C_second until the successor F prologue has staged it.
-        c_frags = [fx.make_rmem_tensor(16, fx.Float32) for _ in range_constexpr(16)]
 
         def run_task(tile_idx):
             K_TILES = K // tile_k
@@ -589,9 +573,7 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                 )
                 tile_map = fx.recast_iter(i32_ptr, arg_m_tile_map)
                 lo, hi = blk_m * 0, blk_m * 0 + n_experts
-                for _ in range_constexpr(
-                    max(1, math.ceil(math.log2(max(2, n_experts))) + 1)
-                ):
+                while lo < hi:
                     mid = (lo + hi) >> 1
                     mid_clamped = (mid < n_experts - 1).select(mid, n_experts - 1)
                     go_right = tile_map[mid_clamped] <= blk_m
@@ -957,34 +939,8 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                     pred = pred | (wave == w)
                 return pred
 
-            def producer_scalar(value):
-                from flydsl._mlir import ir
-                from flydsl._mlir.dialects import llvm as llvm_dialect
-                op = llvm_dialect.InlineAsmOp(
-                    res=ir.IntegerType.get_signless(32),
-                    operands_=[fx.Int32(value).ir_value()],
-                    asm_string="s_mov_b32 $0, $1",
-                    constraints="=s,0",
-                    has_side_effects=True,
-                    is_align_stack=False,
-                )
-                return fx.Int32(op.res)
-
-            def producer_wide(value):
-                from flydsl._mlir import ir
-                from flydsl._mlir.dialects import llvm as llvm_dialect
-                op = llvm_dialect.InlineAsmOp(
-                    res=ir.IntegerType.get_signless(64),
-                    operands_=[fx.Int64(value).ir_value()],
-                    asm_string="s_mov_b64 $0, $1",
-                    constraints="=s,0",
-                    has_side_effects=True,
-                    is_align_stack=False,
-                )
-                return fx.Int64(op.res)
-
             def issue(s, kt, my_jobs=None, cache_a=False, reuse_cached_a=False,
-                      producer_first_half=None, source_jobs=None, producer_source_col=None):
+                      producer_first_half=None, source_jobs=None):
                 producer_first_half = (first_half if producer_first_half is None
                                        else producer_first_half)
                 pa = fx.recast_iter(p8_shared, buf_ptr(s))
@@ -1015,37 +971,15 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                         # Physical owner 0 is F and owner 1 is S. Only the global
                         # source half swaps; LDS regions and multicast peers agree.
                         wave_outer_off = ((wave - j.waves[0]) ^ producer_first_half) * seg
-                    # Scope before division/multiplication, not only after
-                    # a precomputed offset. All intermediate offsets are i64.
-                    if const_expr(j.waves == jobs[0].waves):
-                        source_m = producer_scalar(blk_m)
-                        g_off = (fx.Int64(source_m) // 16) * Kp16
-                        source_oob = (producer_scalar(mn_oob) + 15) // 16
-                    elif const_expr(j.waves == jobs[2].waves):
-                        source_m = producer_scalar(blk_m)
-                        g_off = (fx.Int64(source_m) // 32) * AS_ROW
-                        source_oob = (producer_scalar(mn_oob) + 31) // 32
-                    else:
-                        source_n = producer_scalar(i32_n)
-                        source_e = producer_scalar(expert)
-                        source_col = producer_scalar(
-                            blk_n if producer_source_col is None else producer_source_col)
-                        if const_expr(j.waves == jobs[1].waves):
-                            g_off = (fx.Int64(source_e) * (fx.Int64(source_n) // 16)
-                                     + fx.Int64(source_col) // 16) * Kp16
-                        else:
-                            g_off = ((fx.Int64(source_col) // 32)
-                                     + fx.Int64(source_e) * ((fx.Int64(source_n) + 31) // 32)) * K4
-                        source_oob = None
                     gt = global_view(
                         j.g_base,
-                        producer_wide(g_off)
+                        j.g_off
                         + fx.Int64(wave_outer_off) * j.g_stride
                         + fx.Int64(wave_inner_off),
                         (seg, inner_seg),
                         (j.g_stride, 1),
                     )
-                    ext = None if source_oob is None else source_oob - wave_outer_off
+                    ext = None if j.oob is None else j.oob - wave_outer_off
                     if const_expr(ext is not None):
                         ext = (ext > 0).select(ext, 0)
                     pad_kw = (
@@ -1151,12 +1085,15 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
             LdsAddr = namedtuple("LdsAddr", "a b sa sb")
 
             def calc_window_addr(kt, window):
-                owner_stage = (fx.Int32(kt) + window) & 3
+                # Temporal windows alternate the physical half across SIMD peers.
+                # Producers still use the original wave-independent first_half.
+                physical_half = fx.Int32(window) ^ wave_m
+                owner_stage = (fx.Int32(kt) + physical_half) & 3
                 stage = fx.Int32(kt) & 3
-                a_off = (owner_stage * PITCH + window * A_TAIL_OFF
+                a_off = (owner_stage * PITCH + physical_half * A_TAIL_OFF
                          + wave_m * 2 * A_LDS_ROW + kgrp * 256 + lane16 * 16)
                 sa_off = (SCALE_ARENA_OFF + owner_stage * SCALE_STAGE_PITCH
-                          + window * SA_TAIL_OFF + wave_m * AS_INNER * 4 + lane * 4)
+                          + physical_half * SA_TAIL_OFF + wave_m * AS_INNER * 4 + lane * 4)
                 return LdsAddr(
                     a=base_lds_idx + fx.index_cast(T.index, a_off),
                     b=base_lds_idx + fx.index_cast(T.index, stage * PITCH + lds_b_lane_off),
@@ -1193,16 +1130,17 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                     b=b_group[0].b,
                     sa=fx.make_rmem_tensor(2, fx.Int32),
                     sb=b_group[0].sb,
-                ) for _ in range_constexpr(2)
+                ) for _ in range_constexpr(3)
             ]
 
             def cache_slot(slot, position):
                 return slot._replace(b=b_group[position].b, sb=b_group[position].sb)
 
             # Banks are execution order F/S, independent of the runtime row half.
+            c_frags = [fx.make_rmem_tensor(16, fx.Float32) for _ in range_constexpr(16)]
 
-            def zero_bank(window):
-                for cf in c_frags[window * 8:(window + 1) * 8]:
+            def zero_accumulators():
+                for cf in c_frags:
                     cf.store(fx.constant_vector(0.0, T.vec(16, T.f32)))
 
             def load_lds_data(slot, addr, ksl, read_weight=True):
@@ -1220,11 +1158,11 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                 for wm in range_constexpr(4):
                     slot.a[wm].store(load_a(addr.a, wm, ksl))
 
-            def mma_rows(window, slot):
+            def mma_rows(window, slot, row_begin=0, row_end=4):
                 sa, sb = slot.sa.load(), slot.sb.load()
-                for wm in range_constexpr(4):
+                for wm in range_constexpr(row_begin, row_end):
                     if const_expr(optx_skip):
-                        row_start = ((first_half ^ window) * 128 + wave_m * 32
+                        row_start = ((first_half ^ window ^ wave_m) * 128 + wave_m * 32
                                      + (wm // 2) * 64 + (wm % 2) * 16)
                         live_row = rocdl.readfirstlane(T.i32, fx.Int32(row_start < mn_oob))
                     else:
@@ -1261,41 +1199,21 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                 rocdl.sched_barrier(0)
 
             def compute_window_group(group, window):
-                group_kt = group * optx_kgroup
-                for step in range_constexpr(optx_kgroup):
-                    kt = group_kt + step
-                    if const_expr(window == 0):
-                        # Each group starts with four queued input tiles. Its F
-                        # window requires only this group's first two. The two
-                        # previous outputs follow successor I0-I3, so group0
-                        # first establishes their inputs using a separate wait2.
-                        if (tile_idx > 0) & (mn_oob > 128) & (group == 0):
-                            pipeline_fence(outstanding=4)
-                        elif (tile_idx > 0) & (mn_oob > 128) & (group < 4):
-                            pipeline_fence(outstanding=5)
-                        elif (tile_idx + 1 == PERSISTENT_TASKS) & (group + 1 == K_TILES):
-                            pipeline_fence(outstanding=0)
-                        elif (tile_idx + 1 == PERSISTENT_TASKS) & (group + 2 == K_TILES):
-                            pipeline_fence(outstanding=1)
-                        elif (tile_idx + 1 == PERSISTENT_TASKS) & (group + 3 == K_TILES):
-                            pipeline_fence(outstanding=2)
-                        else:
-                            pipeline_fence(outstanding=3)
-                    addr = calc_window_addr(kt, window)
-                    slot0 = cache_slot(rmem_slots[0], step * 2)
-                    slot1 = cache_slot(rmem_slots[1], step * 2 + 1)
-                    load_lds_data(slot0, addr, 0)
-                    rocdl.sched_dsrd(WINDOW_DS)
-                    rocdl.sched_barrier(0)
-                    window_k128(window, slot0,
-                        load_next=lambda: load_lds_data(slot1, addr, 1))
-                    if (tile_idx > 0) & (mn_oob > 128) & (group == 0):
-                        overlap_slice(1, 0, previous=True)
-                    window_k128(window, slot1)
-                    if (tile_idx > 0) & (mn_oob > 128) & (group == 0):
-                        overlap_slice(1, 1, previous=True)
-                        publish_window(1, previous=True)
-                        zero_bank(1)
+                assert window == 0 and optx_kgroup == 1
+                kt = group
+                addr = calc_window_addr(kt, 0)
+                second_addr = calc_window_addr(kt, 1)
+                first0 = cache_slot(rmem_slots[0], 0)
+                first1 = cache_slot(rmem_slots[1], 1)
+                second1 = cache_slot(rmem_slots[2], 1)
+                window_k128(0, first0,
+                    load_next=lambda: load_lds_data(first1, addr, 1))
+
+                def read_after_first1():
+                    load_lds_data(first0, second_addr, 0, read_weight=False)
+                    load_lds_data(second1, second_addr, 1, read_weight=False)
+
+                window_k128(0, first1, ds_next=20, load_next=read_after_first1)
 
             def issue_released(kt, my_jobs):
                 if (kt + num_buffers < K_TILES) | (tile_idx + 1 < PERSISTENT_TASKS):
@@ -1304,38 +1222,55 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                     next_first = (((tile_idx + 1) & 1) if optx_snake == 1
                                   else fx.Int32(1 if optx_snake == 2 else 0))
                     producer_first = cross_task.select(next_first, first_half)
-                    issue((kt + num_buffers) & 3, source_tile, my_jobs,
-                          producer_first_half=producer_first,
-                          producer_source_col=cross_task.select(blk_n + 1024, blk_n))
+                    effective_jobs = []
+                    for j in my_jobs:
+                        if const_expr(j.waves == jobs[1].waves):
+                            j = j._replace(g_off=cross_task.select(next_b_off0, b_off0))
+                        elif const_expr(j.waves == jobs[3].waves):
+                            j = j._replace(g_off=cross_task.select(next_sb_off0, sb_off0))
+                        effective_jobs.append(j)
+                    issue((kt + num_buffers) & 3, source_tile, effective_jobs,
+                          producer_first_half=producer_first)
 
-            def compute_second_group(group, my_jobs):
+            def compute_second_group(group, my_jobs, carry_next):
                 group_kt = group * optx_kgroup
                 for step in range_constexpr(optx_kgroup):
                     kt = group_kt + step
-                    addr = calc_window_addr(kt, 1)
-                    slot0 = cache_slot(rmem_slots[0], step * 2)
-                    slot1 = cache_slot(rmem_slots[1], step * 2 + 1)
-                    load_lds_data(slot0, addr, 0, read_weight=False)
-                    rocdl.sched_dsrd(10)
+                    second0 = cache_slot(rmem_slots[0], 0)
+                    second1 = cache_slot(rmem_slots[2], 1)
+                    next_first0 = cache_slot(rmem_slots[0], 0)
+                    if (tile_idx > 0) & (kt < 3):
+                        tdm_ops.tensor_wait(4)
+                    elif (tile_idx + 1 == PERSISTENT_TASKS) & (kt >= K_TILES - 2):
+                        tdm_ops.tensor_wait(0)
+                    elif (tile_idx + 1 == PERSISTENT_TASKS) & (kt + 3 == K_TILES):
+                        tdm_ops.tensor_wait(1)
+                    else:
+                        tdm_ops.tensor_wait(2)
+                    # S0/S1 LDS reads were issued during F1. Complete all
+                    # readers before publishing this input stage's RELEASE.
+                    rocdl.s_wait_dscnt(0)
+                    rocdl.s_barrier_signal(-1)
                     rocdl.sched_barrier(0)
-                    window_k128(1, slot0, ds_next=10,
-                        load_next=lambda: load_lds_data(slot1, addr, 1, read_weight=False))
-                    if (group == K_TILES - 1) & (mn_oob > 128):
-                        overlap_slice(0, 0)
-                    workgroup_barrier()
-                    window_k128(1, slot1, issue_next=lambda: issue_released(kt, my_jobs))
-                    if (group == K_TILES - 1) & (mn_oob > 128):
-                        overlap_slice(0, 1)
+                    mma_rows(1, second0)
+                    rocdl.sched_mfma(8)
+                    rocdl.sched_barrier(0)
+                    rocdl.s_barrier_wait(-1)
+                    issue_released(kt, my_jobs)
+                    if const_expr(carry_next):
+                        next_addr = calc_window_addr(kt + 1, 0)
+                        load_lds_data(next_first0, next_addr, 0)
+                    mma_rows(1, second1, 0, 4)
+                    rocdl.sched_vmem(1)
+                    rocdl.sched_mfma(8)
+                    if const_expr(carry_next):
+                        rocdl.sched_dsrd(WINDOW_DS)
+                    rocdl.sched_barrier(0)
 
-            def issue_window_output(window, actual_half, previous=False):
-                output_n = producer_scalar(i32_n)
-                output_m = producer_scalar(blk_m)
-                output_col = producer_scalar(blk_n - (1024 if previous else 0))
-                output_wave_n = producer_scalar(wave_n)
-                output_wave_m = producer_scalar(actual_half * 8 + wave_m * 2)
-                payload_row_stride = (fx.Int64(output_n) // 4) * 16
-                global_off = ((fx.Int64(output_m) // 16) + fx.Int64(output_wave_m)) * payload_row_stride
-                global_off = global_off + (fx.Int64(output_col) // 64 + fx.Int64(output_wave_n)) * 256
+            def issue_window_output(window, actual_half):
+                payload_row_stride = (fx.Int64(i32_n) // 4) * 16
+                global_off = ((blk_m64 // 16) + fx.Int64(actual_half * 8 + wave_m * 2)) * payload_row_stride
+                global_off = global_off + (blk_n64 // 64 + fx.Int64(wave_n)) * 256
                 c_iter = fx.recast_iter(fx.Int8, fx.get_iter(arg_c))
                 shape = (2, 2, 256)
                 gt = global_view(c_iter, global_off, shape,
@@ -1348,92 +1283,67 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
                     shape, (512, 256, 1))
                 fx.copy(atom, src, gt)
 
-            def epilogue_row(window, wm, previous=False):
-                previous_first = (((tile_idx - 1) & 1) if optx_snake == 1
-                                  else fx.Int32(1 if optx_snake == 2 else 0))
-                epi_first = producer_scalar(previous_first if previous else first_half)
-                epi_wave_m = producer_scalar(wave_m)
-                epi_oob = producer_scalar(mn_oob)
-                actual_half = epi_first ^ window
+            def window_epilogue(window):
+                actual_half = first_half ^ window ^ wave_m
                 scale_ptr_ty = fx.PointerType.get(elem_ty=fx.Int8.ir_type,
                     address_space=fx.AddressSpace.Global, alignment=1)
                 scale_ptr = fx.recast_iter(scale_ptr_ty, fx.get_iter(arg_quant_scale))
+                q_dst_scale_dwpr = i32_n // 256
                 neg_limit = fx.Float32(0.0) - f32_swiglu_limit
-                row_group = actual_half * 128 + epi_wave_m * 32 + (wm // 2) * 64 + (wm % 2) * 16
-                if row_group < epi_oob:
-                    epi_n = producer_scalar(i32_n)
-                    epi_m = producer_scalar(blk_m)
-                    epilogue_col = producer_scalar(blk_n - (1024 if previous else 0))
-                    epi_wave_n = producer_scalar(wave_n)
-                    q_dst_scale_dwpr = epi_n // 256
-                    row_rel = row_group + lane16
-                    pairs = []
-                    for wn in range_constexpr(2):
-                        acc = Vec(c_frags[window * 8 + wm * 2 + wn].load())
-                        for half in range_constexpr(2):
-                            for p in range_constexpr(4):
-                                pairs.append((acc[half * 8 + 2 * p], acc[half * 8 + 2 * p + 1]))
-                    vals = batched_silu_swiglu(pairs, swiglu=False,
-                        limit_f32=f32_swiglu_limit, neg_limit_f32=neg_limit,
-                        range_constexpr=range_constexpr)
-                    bf16 = Vec.from_elements(vals, fx.Float32).to(fx.BFloat16)
-                    scale_f32, e8m0 = emit_amax_e8m0_native_scale(
-                        _amax_inputs_from_bf16x16(bf16), wave_size=32,
-                        dtype=MxDtype.FP4_E2M1)
-                    payload_byte = window * OPTX_WINDOW_BYTES + (wave * 4 + wm) * 256 + lane16 * 16
-                    for half in range_constexpr(2):
-                        src_bf16 = Vec.from_elements(
-                            [bf16[half * 8 + i] for i in range_constexpr(8)], fx.BFloat16)
-                        packed = emit_cvt_scalef32_pk8_fp4_bf16(src_bf16.ir_value(), scale_f32, i32_ty=T.i32)
-                        lds_store_b16(stC_idx, payload_byte + half * 8 + kgrp * 2, packed)
-                        lds_store_b16(stC_idx, payload_byte + half * 8 + 4 + kgrp * 2, packed >> fx.Int32(16))
-                    if (row_rel < epi_oob) & (kgrp == 0):
-                        row_i32 = fx.Int32(epi_m + row_rel)
-                        mx = (fx.Int32(epilogue_col) + epi_wave_n * 64) >> 6
-                        dst_byte = (((row_i32 >> 5) * q_dst_scale_dwpr * 32
-                            + (mx >> 2) * 32 + (row_i32 & 31)) * 4 + (mx & 3))
-                        fx.ptr_store(e8m0, scale_ptr + dst_byte)
-
-            def publish_window(window, previous=False):
-                workgroup_barrier()
-                previous_first = (((tile_idx - 1) & 1) if optx_snake == 1
-                                  else fx.Int32(1 if optx_snake == 2 else 0))
-                actual_half = (previous_first if previous else first_half) ^ window
-                issue_window_output(window, actual_half, previous=previous)
-
-            def window_epilogue(window):
                 for wm in range_constexpr(4):
-                    epilogue_row(window, wm)
-                publish_window(window)
+                    row_group = actual_half * 128 + wave_m * 32 + (wm // 2) * 64 + (wm % 2) * 16
+                    if row_group < mn_oob:
+                        row_rel = row_group + lane16
+                        pairs = []
+                        for wn in range_constexpr(2):
+                            acc = Vec(c_frags[window * 8 + wm * 2 + wn].load())
+                            for half in range_constexpr(2):
+                                for p in range_constexpr(4):
+                                    pairs.append((acc[half * 8 + 2 * p], acc[half * 8 + 2 * p + 1]))
+                        vals = batched_silu_swiglu(pairs, swiglu=False,
+                            limit_f32=f32_swiglu_limit, neg_limit_f32=neg_limit,
+                            range_constexpr=range_constexpr)
+                        bf16 = Vec.from_elements(vals, fx.Float32).to(fx.BFloat16)
+                        scale_f32, e8m0 = emit_amax_e8m0_native_scale(
+                            _amax_inputs_from_bf16x16(bf16), wave_size=32,
+                            dtype=MxDtype.FP4_E2M1)
+                        payload_byte = window * OPTX_WINDOW_BYTES + (wave * 4 + wm) * 256 + lane16 * 16
+                        for half in range_constexpr(2):
+                            src_bf16 = Vec.from_elements(
+                                [bf16[half * 8 + i] for i in range_constexpr(8)], fx.BFloat16)
+                            packed = emit_cvt_scalef32_pk8_fp4_bf16(src_bf16.ir_value(), scale_f32, i32_ty=T.i32)
+                            lds_store_b16(stC_idx, payload_byte + half * 8 + kgrp * 2, packed)
+                            lds_store_b16(stC_idx, payload_byte + half * 8 + 4 + kgrp * 2, packed >> fx.Int32(16))
+                        if (row_rel < mn_oob) & (kgrp == 0):
+                            row_i32 = fx.Int32(blk_m + row_rel)
+                            mx = (fx.Int32(blk_n) + wave_n * 64) >> 6
+                            dst_byte = (((row_i32 >> 5) * q_dst_scale_dwpr * 32
+                                + (mx >> 2) * 32 + (row_i32 & 31)) * 4 + (mx & 3))
+                            fx.ptr_store(e8m0, scale_ptr + dst_byte)
+                # This TDM reads only this wave's private payload slice.
+                # Tensor operations do not order with LDS stores automatically.
+                rocdl.s_wait_dscnt(0)
+                issue_window_output(window, actual_half)
 
-            def overlap_slice(window, ksl, previous=False):
-                for row in range_constexpr(4):
-                    if const_expr(ksl == row // 2):
-                        epilogue_row(window, row, previous=previous)
-                rocdl.sched_barrier(0)
-
-            zero_bank(0)
-            if (tile_idx == 0) | (mn_oob <= 128):
-                zero_bank(1)
+            zero_accumulators()
             if expert < n_experts:
                 def run_groups(my_jobs):
                     if tile_idx == 0:
                         for q in range_constexpr(num_buffers):
                             issue(q, q, my_jobs)
-                    else:
-                        if mn_oob <= 128:
-                            pipeline_fence(outstanding=2)
-                    for optx_group in range(fx.Int32(0), fx.Int32(K_TILES // optx_kgroup), fx.Int32(1)):
+                        pipeline_fence(outstanding=3)
+                    initial_addr = calc_window_addr(fx.Int32(0), 0)
+                    load_lds_data(cache_slot(rmem_slots[0], 0), initial_addr, 0)
+                    rocdl.sched_dsrd(WINDOW_DS)
+                    rocdl.sched_barrier(0)
+                    for optx_group in range(fx.Int32(0), fx.Int32(K_TILES - 1), fx.Int32(1)):
                         compute_window_group(optx_group, 0)
-                        compute_second_group(optx_group, my_jobs)
+                        compute_second_group(optx_group, my_jobs, True)
+                    compute_window_group(fx.Int32(K_TILES - 1), 0)
+                    compute_second_group(fx.Int32(K_TILES - 1), my_jobs, False)
                 dispatch_wave_job(run_groups)
-                if mn_oob > 128:
-                    publish_window(0)
-                    if tile_idx + 1 == PERSISTENT_TASKS:
-                        window_epilogue(1)
-                else:
-                    window_epilogue(0)
-                    window_epilogue(1)
+                window_epilogue(0)
+                window_epilogue(1)
                 rocdl.s_wait_storecnt(0)
 
         if const_expr(PERSISTENT_TASKS == 1):
@@ -1458,6 +1368,7 @@ def launch_gemm_a8w4_tdm_fused_persistent_optx(
         arg_quant_scale,
         i32_m,
         N,
+        n_experts,
         f32_swiglu_limit,
     )
     grid = (
@@ -1486,8 +1397,6 @@ launch_gemm_a8w4_tdm_fused_persistent_optx.compile_hints["llvm_options"] = {
     "amdgpu-kernarg-preload": AITER_FLYDSL_KERNARG_PRELOAD,
     "amdgpu-kernarg-preload-count": AITER_FLYDSL_KERNARG_PRELOAD_COUNT,
     "enable-post-misched": True,
-    "disable-machine-licm": True,
-    "disable-postra-machine-licm": True,
     "lsr-drop-solution": False,
     "unroll-threshold": 0,
     "unroll-partial-threshold": 0,

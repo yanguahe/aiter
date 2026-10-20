@@ -476,12 +476,19 @@ def flydsl_grouped_gemm_a8w4_masked(
             persistent_kwargs["partial_m_drain_output"] = int(
                 bool(partial_m_drain_output)
             )
-        optx_requested = _select_bool_env("AITER_GFX1250_GEMM1_OPTX", 0)
+        # E64/topk8 and E65/topk9 with one shared expert use the same runtime-E
+        # kernel. Capacity bounds only select the measured non-balanced bucket;
+        # neither expert count nor capacity specializes the compiled GEMM1.
+        optx_default = int(
+            (n_experts, contiguous_m) in ((64, 28672), (65, 30464))
+            and not _balanced_expert_routing_enabled()
+        )
+        optx_requested = _select_bool_env("AITER_GFX1250_GEMM1_OPTX", optx_default)
         if optx_requested and all(
             (
                 use_fused_persistent,
                 tile_m == 256,
-                n_experts == 64,
+                n_experts in (64, 65),
                 quant_wmma_rep == 8,
                 out_is_f16 == 0,
                 a_is_fp4 == 1,
@@ -494,17 +501,30 @@ def flydsl_grouped_gemm_a8w4_masked(
                 not enable_ep_scatter,
             )
         ):
-            from .kernels.mxfp4_preshuffle_gfx1250_tdm_prefill_persistent_optx import (
-                launch_gemm_a8w4_tdm_fused_persistent_optx,
+            optx_options = (
+                int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_KGROUP", "1")),
+                _select_bool_env("AITER_GFX1250_GEMM1_OPTX_SKIP", 1),
+                _select_bool_env("AITER_GFX1250_GEMM1_OPTX_STAGGER", 0),
+                int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_SNAKE", "0")),
             )
+            # Only the fully validated configuration is retained here. Older
+            # experiment overrides keep the original persistent fallback.
+            if optx_options == (1, 1, 0, 0):
+                from .kernels.mxfp4_preshuffle_gfx1250_tdm_prefill_persistent_optx import (
+                    launch_gemm_a8w4_tdm_fused_persistent_optx,
+                )
 
-            optimized_launcher = launch_gemm_a8w4_tdm_fused_persistent_optx
-            persistent_kwargs.update(
-                optx_kgroup=int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_KGROUP", "4")),
-                optx_skip=_select_bool_env("AITER_GFX1250_GEMM1_OPTX_SKIP", 0),
-                optx_stagger=_select_bool_env("AITER_GFX1250_GEMM1_OPTX_STAGGER", 0),
-                optx_snake=int(os.environ.get("AITER_GFX1250_GEMM1_OPTX_SNAKE", "1")),
-            )
+                optimized_launcher = launch_gemm_a8w4_tdm_fused_persistent_optx
+                # The CSVs use different B hints for E64 and E65. Both share
+                # the validated OPTX default; the explicit environment override
+                # is still resolved below for either expert count.
+                tdm_b_th = 6
+                persistent_kwargs.update(
+                    optx_kgroup=1,
+                    optx_skip=1,
+                    optx_stagger=0,
+                    optx_snake=0,
+                )
         if enable_ep_scatter:
             persistent_kwargs.update(
                 enable_ep_scatter=1,
