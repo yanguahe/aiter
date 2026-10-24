@@ -281,6 +281,43 @@ def _find_routed_e64_topk8_token_profile(
     return None
 
 
+def _find_e65_topk9_nonbalanced_token_profile(
+    *,
+    tokens: int,
+    experts: int,
+    topk: int,
+    model_dim: int,
+    inter_dim: int,
+    activation: ActivationType,
+    is_grouped_a4w4: bool,
+    use_bias: bool,
+    is_ep: bool,
+    enable_ep_scatter: bool,
+) -> dict[str, int | None] | None:
+    """Reuse the exact t256 profile for T1536 with 65 routed experts.
+
+    This admission keeps all nine routes in the real top-k. The persistent
+    kernels consume the actual expert row ends, so no shared-expert metadata
+    or kernel specialization is needed for this non-balanced bucket.
+    """
+    if all(
+        (
+            tokens == 1536,
+            _routed_geometry_from_metadata(experts, topk) == (65, 9, 0),
+            model_dim == 7168,
+            inter_dim == 2048,
+            activation == ActivationType.Silu,
+            is_grouped_a4w4,
+            not use_bias,
+            not is_ep,
+            not enable_ep_scatter,
+            not _balanced_expert_routing_enabled(),
+        )
+    ):
+        return dict(_E64_TOPK8_TOKEN_PROFILES["t256_persistent_any_routing"])
+    return None
+
+
 # Opt-in kernel-bench hook: a caller sets a list here to collect
 # (name, callable) per-kernel launches; None in production.
 kernel_bench_callable = None
@@ -2088,11 +2125,26 @@ def grouped_gemm_gfx1250_a8w4(
             is_ep=_is_ep,
             enable_ep_scatter=stage2_scatter is not None,
         )
+        if token_profile is None:
+            token_profile = _find_e65_topk9_nonbalanced_token_profile(
+                tokens=token_num,
+                experts=E,
+                topk=topk,
+                model_dim=model_dim,
+                inter_dim=inter_dim,
+                activation=activation,
+                is_grouped_a4w4=is_grouped_a4w4,
+                use_bias=bias1 is not None or bias2 is not None,
+                is_ep=_is_ep,
+                enable_ep_scatter=stage2_scatter is not None,
+            )
         if token_profile is not None:
             _tdm_kw.update(token_profile)
-            _, _, shared_experts = _routed_geometry_from_metadata(E, topk)
+            routed_experts, routed_topk, shared_experts = _routed_geometry_from_metadata(
+                E, topk
+            )
             _grouped_dbg(
-                "using routed E64/topk8 token-range config for "
+                f"using routed E{routed_experts}/topk{routed_topk} token-range config for "
                 f"physical E={E}/topk={topk}/shared={shared_experts}, "
                 f"tokens={token_num}: "
                 f"{token_profile}"

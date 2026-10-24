@@ -462,6 +462,92 @@ def flydsl_grouped_gemm_a8w4_masked(
             and _balanced_expert_routing_enabled()
         )
         persistent_kwargs = {}
+        if use_fused_persistent:
+            # This tuning keeps the original t256 ABI and reads every expert's
+            # actual row end. It does not depend on balanced counts or values.
+            shared_nonbalanced = all((
+                tile_m == 256, (n_experts, contiguous_m) in ((64, 28672), (65, 30464)),
+                not _balanced_expert_routing_enabled(), not bool(partial_m_direct_scale),
+                not bool(auto_balanced_m192), int(balanced_m192) <= 0,
+            ))
+            # Share one compiled GEMM1 for both validated random-routing
+            # buckets. Explicit legacy controls retain their original path.
+            legacy_controls = {
+                "AITER_GFX1250_GEMM1_N_TASKS": "1",
+                "AITER_GFX1250_GEMM1_STAGED_QUANT_SCALE": "1",
+                "AITER_GFX1250_GEMM1_ROW_TAIL_PREDICATION": "3",
+                "AITER_GFX1250_GEMM1_HALF_A_PREFETCH": "1",
+                "AITER_GFX1250_GEMM1_ROW_TAIL_A_GROUPS": "2",
+                "AITER_GFX1250_GEMM1_HALF_SCALE_PREFETCH": "1",
+                "AITER_GFX1250_GEMM1_PAIR_A_PREFETCH": "1",
+                "AITER_GFX1250_GEMM1_TASK_M_ORDER": "1",
+                "AITER_GFX1250_GEMM1_TASK_M_GROUP": "8",
+            }
+            shared_controls = all(
+                name not in os.environ or int(os.environ[name]) == int(expected)
+                for name, expected in legacy_controls.items()
+            )
+            selected_tdm_b_th = _select_tdm_b_th(tdm_b_th)
+            shared_controls = shared_controls and (
+                "AITER_TDM_B_TH" not in os.environ or selected_tdm_b_th == 0
+            )
+            unified_gemm1 = bool(_select_bool_env(
+                "AITER_GFX1250_GEMM1_UNIFIED_EXPERTS", 1
+            )) and shared_nonbalanced and shared_controls
+            tuned_nonbalanced = all(
+                (
+                    tile_m == 256,
+                    n_experts == 65,
+                    contiguous_m == 30464,
+                    not _balanced_expert_routing_enabled(),
+                    not bool(partial_m_direct_scale),
+                    not bool(auto_balanced_m192),
+                    int(balanced_m192) <= 0,
+                )
+            )
+            tuned_nonbalanced = tuned_nonbalanced or (unified_gemm1 and shared_nonbalanced)
+            n_tasks = int(os.environ.get(
+                "AITER_GFX1250_GEMM1_N_TASKS", "1" if tuned_nonbalanced else "4"
+            ))
+            tuned_rows = tuned_nonbalanced and n_tasks == 1
+            rowtail = int(os.environ.get(
+                "AITER_GFX1250_GEMM1_ROW_TAIL_PREDICATION", "3" if tuned_rows else "0"
+            ))
+            half_a = int(os.environ.get(
+                "AITER_GFX1250_GEMM1_HALF_A_PREFETCH", "1" if tuned_rows else "0"
+            ))
+            tuned_prefetch = tuned_rows and rowtail == 3 and bool(half_a)
+            half_scale = int(os.environ.get(
+                "AITER_GFX1250_GEMM1_HALF_SCALE_PREFETCH",
+                "1" if tuned_prefetch else "0",
+            ))
+            m_order = int(os.environ.get(
+                "AITER_GFX1250_GEMM1_TASK_M_ORDER",
+                "1" if tuned_rows and rowtail == 3 else "0",
+            ))
+            persistent_kwargs.update(
+                runtime_n_experts=n_experts if unified_gemm1 else 0,
+                persistent_n_tasks=n_tasks,
+                staged_quant_scale=int(os.environ.get(
+                    "AITER_GFX1250_GEMM1_STAGED_QUANT_SCALE", "1" if tuned_rows else "0"
+                )),
+                row_tail_predication=rowtail,
+                half_a_prefetch=half_a,
+                row_tail_a_groups=int(os.environ.get(
+                    "AITER_GFX1250_GEMM1_ROW_TAIL_A_GROUPS",
+                    "2" if tuned_prefetch and half_scale else "0",
+                )),
+                half_scale_prefetch=half_scale,
+                pair_a_prefetch=int(os.environ.get(
+                    "AITER_GFX1250_GEMM1_PAIR_A_PREFETCH",
+                    "1" if tuned_prefetch and half_scale else "0",
+                )),
+                task_m_order=m_order,
+                task_m_group=int(os.environ.get(
+                    "AITER_GFX1250_GEMM1_TASK_M_GROUP",
+                    "8" if tuned_rows and rowtail == 3 and m_order else "16",
+                )),
+            )
         if use_fused_persistent or use_gemm2_persistent:
             persistent_kwargs["balanced_m192"] = (
                 auto_balanced_m192
@@ -507,7 +593,7 @@ def flydsl_grouped_gemm_a8w4_masked(
             num_buffers,
             a_is_fp4,
             ptr_arg(m_tile_map),
-            n_experts,
+            0 if use_fused_persistent and unified_gemm1 else n_experts,
             stage1_act,
             has_bias,
             bias_ptr,
@@ -519,7 +605,9 @@ def flydsl_grouped_gemm_a8w4_masked(
             cluster_m,
             next_stage_prefetch,
             waves_per_tensor_tdm,
-            _select_tdm_b_th(tdm_b_th),
+            0 if use_fused_persistent and unified_gemm1 else (
+                selected_tdm_b_th if use_fused_persistent else _select_tdm_b_th(tdm_b_th)
+            ),
             **persistent_kwargs,
         )
         return out

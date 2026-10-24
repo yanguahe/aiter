@@ -159,7 +159,7 @@ _TDM_KERNEL_RE = re.compile(
     r"a8w4_tdm_(?P<a_format>fp4|fp8)"
     r"_t(?P<tile_m>\d+)x(?P<tile_n>\d+)x(?P<tile_k>\d+)"
     r"_w(?P<m_warp>\d+)x(?P<n_warp>\d+)_b(?P<num_buffers>\d+)"
-    r"_K(?P<K>\d+)_e(?P<experts>\d+)"
+    r"_K(?P<K>\d+)_e(?P<experts>\d+|runtime)(?![A-Za-z0-9])"
     r"(?:_act(?P<stage1_act>\d+))?"
     r"(?P<has_bias>_bias)?"
     r"(?:_q(?P<quant_out>\d+)r(?P<quant_wmma_rep>\d+))?"
@@ -387,9 +387,10 @@ def _parse_tdm_kernel_name(name: str) -> dict[str, int | str | bool] | None:
             "n_warp",
             "num_buffers",
             "K",
-            "experts",
         )
     }
+    expert_label = match.group("experts")
+    parsed["experts"] = int(expert_label) if expert_label.isdigit() else expert_label
     parsed.update(
         {
             "name": match.group(0),
@@ -421,7 +422,9 @@ def _extract_profiled_gemm_timings(
 
     Kernel symbols are generated as ``a8w4_tdm_fp{4,8}_t..._K..._e...``.
     Searching permits profiler namespace/mangling text around that exact symbol;
-    format, K, expert count, and stage activation must still all agree.
+    Format, K, expert count, and stage activation must still all agree. The
+    shared E64/E65 GEMM1 symbol carries ``eruntime``; validate its exact supported
+    geometry and use the benchmark's actual expert count for reporting only.
     """
     timings: dict[str, float | None] = {"gemm1_us": None, "gemm2_us": None}
     if trace_df is None:
@@ -434,11 +437,20 @@ def _extract_profiled_gemm_timings(
     candidates = []
     for rec in trace_df.to_dict("records"):
         parsed = _parse_tdm_kernel_name(str(rec.get("name", "")))
-        if (
-            parsed is None
-            or parsed["a_format"] != expected_a_format
-            or parsed["experts"] != experts
-        ):
+        if parsed is None or parsed["a_format"] != expected_a_format:
+            continue
+        if parsed["experts"] == "runtime":
+            if experts not in (64, 65) or (
+                parsed["a_format"], parsed["K"], parsed["stage1_act"],
+                parsed["tile_m"], parsed["tile_n"], parsed["tile_k"],
+                parsed["m_warp"], parsed["n_warp"], parsed["num_buffers"],
+                parsed["quant_out"], parsed["quant_wmma_rep"],
+                parsed["cluster_n"], parsed["has_bias"],
+            ) != ("fp4", 7168, 1, 256, 256, 256, 2, 4, 4, 1, 8, 4, False):
+                continue
+            parsed["experts"] = experts
+            parsed["runtime_experts"] = True
+        elif parsed["experts"] != experts:
             continue
         try:
             latency_us = float(rec.get("device_time_avg"))
@@ -1233,6 +1245,64 @@ def test_profiled_grouped_gemm_timing_extraction_fixture():
 # ---------------------------------------------------------------------------
 # Environment / arch guards
 # ---------------------------------------------------------------------------
+def test_profiled_shared_expert_gemm1_timing_extraction_fixture():
+    """Accept the real runtime symbol without weakening stage or ambiguity guards."""
+
+    class TraceRecords:
+        def __init__(self, records):
+            self.records = records
+
+        def to_dict(self, orient):
+            assert orient == "records"
+            return self.records
+
+    shared = (
+        "a8w4_tdm_fp4_t256x256x256_w2x4_b4_K7168_eruntime_act1_q1r8_cn4"
+        "_cm1_prefetch_apre_persist_nt1_qscale_tdm_rowtail_pairs_explicit"
+        "_halfapre_rowaload2_halfsapre_pairapre_morder1_mgroup8"
+    )
+    for experts in (64, 65):
+        gemm2 = f"a8w4_tdm_fp4_t256x256x256_w2x4_b4_K2048_e{experts}_cn4"
+        records = [dict(name=shared, device_time_avg=108.123456, cnt=19),
+                   dict(name=gemm2, device_time_avg=62.789012, cnt=19)]
+        timing, kernels, debug = _extract_profiled_gemm_timings(
+            trace_df=TraceRecords(records), data_format="a4w4",
+            activation=ActivationType.Silu, experts=experts, model_dim=7168, inter_dim=2048,
+        )
+        assert timing == {"gemm1_us": 108.123456, "gemm2_us": 62.789012}
+        assert kernels["gemm1"]["experts"] == experts
+        assert kernels["gemm1"]["runtime_experts"] is True
+        assert kernels["gemm1"]["count"] == 19 and debug is None
+        for invalid in (
+            shared.replace("_eruntime_", "_eruntimex_"),
+            shared.replace("_K7168_", "_K2048_"),
+            shared.replace("_act1_", "_act0_"),
+            shared.replace("_t256", "_t192"),
+            shared.replace("_w2x4_", "_w1x4_"),
+            shared.replace("_q1r8_", "_q0r8_"),
+            shared.replace("_cn4_", "_cn1_"),
+        ):
+            timing, _, _ = _extract_profiled_gemm_timings(
+                trace_df=TraceRecords([dict(name=invalid, device_time_avg=1.0)]),
+                data_format="a4w4", activation=ActivationType.Silu,
+                experts=experts, model_dim=7168, inter_dim=2048,
+            )
+            assert timing["gemm1_us"] is None
+        duplicate = records + [dict(name=shared.replace("_eruntime_", f"_e{experts}_"),
+                                    device_time_avg=1.0)]
+        timing, _, debug = _extract_profiled_gemm_timings(
+            trace_df=TraceRecords(duplicate), data_format="a4w4",
+            activation=ActivationType.Silu, experts=experts, model_dim=7168, inter_dim=2048,
+        )
+        assert timing["gemm1_us"] is None and debug == "gemm1 ambiguous (2 matches)"
+    timing, _, _ = _extract_profiled_gemm_timings(
+        trace_df=TraceRecords([dict(name=shared, device_time_avg=1.0)]),
+        data_format="a4w4", activation=ActivationType.Silu,
+        experts=96, model_dim=7168, inter_dim=2048,
+    )
+    assert timing["gemm1_us"] is None
+
+
 def _require_gfx1250() -> None:
     # AITER_FORCE_GFX1250=1 forces the grouped path on other archs (e.g. gfx942)
     # to exercise the tiny operators with the GEMM mocked (default; pass
