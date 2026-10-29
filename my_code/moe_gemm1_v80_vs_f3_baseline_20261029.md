@@ -1,6 +1,8 @@
 # v80 相对 F3 baseline 的 GEMM1 优化说明
 
-本文件说明本轮 `hyg_dsr1_conc6144` 优化中，正式保留的 v80 相对起点 F3 改了什么、为什么这样改，以及已有证据支持到什么程度。内容来自保存的源码、实际 ELF/ISA、完整 MoE 正确性记录和性能归档。整理日期为 2026-10-29；本次整理没有启动 GPU 性能测试。
+本文件说明本轮 `hyg_dsr1_conc6144` 优化中，正式保留的 v80 相对起点 F3 改了什么、为什么这样改，以及已有证据支持到什么程度。内容来自保存的源码、实际 ELF/ISA、完整 MoE 正确性记录和性能归档。整理日期为 2026-10-29；初稿完成后，按用户授权在 a07-3 重启并验证容器 SDK 的 `rocm-smi` 后完成了两版同期复测。
+
+最新 E64/T1536/topk8/shared0、pin0、LOG0/W2/I101 复测中，F3 baseline 的 GEMM1 三次中值为 **83.387657 μs**，v80 为 **81.120394 μs**，减少 **2.267263 μs（2.718943%）**。六轮原精度检查全部通过，完整数据、测量条件和独立复核见第 9.5 节。
 
 v80 的主要变化是：**将逻辑 M 方向的 16 行块交错分配给两组 M-wave，在整个 WG 进入 K loop 前选择 4/6/7/8 档有效行覆盖，并通过六/七档路径邻接和一次公共 epilogue 调整机器码布局。** 前两项减少 padding 的 WMMA 和 A/ScaleA LDS 读取，最后一项改善已观察到的加载地址快慢分档。有效行的计算、量化结果和原有输入/输出格式保持。
 
@@ -17,6 +19,8 @@ v80 的主要变化是：**将逻辑 M 方向的 16 行块交错分配给两组 
 | 对照 snapshot | Git 中的上述 blob | `.codex_tmp/hyg_f3_followup_20261024/snapshots/f3_v3_likely_pair_single_epilogue_layout_v80.py` |
 
 2026-10-29 初稿的只读核对确认：生产文件与 v80 snapshot 逐字节相同；F3 与 v80 的文件顶层函数参数签名相同。初稿核对时的工作区 HEAD 不是“v80 已经提交”的证明，v80 的身份由上述源码 hash 确定；后续提交及复测状态另行记录。
+
+随后发布并远端 pull 的源码 commit 为 `cecc19e93bf112cb1a1670431c80a7dec5a2dc46`，英文 commit message 为 `Optimize gfx1250 GEMM1 row coverage and restore fused A-preshuffle path`。第 9.5 节复测以该 HEAD 为工作区基准，轮流使用上述 F3 Git blob 和 v80 source hash；测试结束后恢复正式 v80。
 
 交接时记录的 GEMM1 baseline 如下：
 
@@ -335,9 +339,9 @@ seed0 中明显的地址慢档收窄；seed17 的四组中值仍约 89–90 μs�
 
 2026-10-28 按用户更新后的“只以 GEMM1 最低耗时选版，保留完整 MoE 正确性”要求，正式源码恢复并保留 v80。此前 MoE e2e 排名曾阻止采用；最新采用依据以 GEMM1 为准。已有 e2e 结果保留在原记录中，本文不把它作为 GEMM1 排名条件。
 
-### 9.4 最新 W2/I101 记录的正确使用
+### 9.4 此前中断的 W2/I101 记录
 
-最近一次已有批次中的 v80 三条有效 reference 记录为：
+初稿整理前的中断批次中，v80 三条有效 reference 记录为：
 
 | 次数 | GEMM1 μs |
 |---:|---:|
@@ -350,9 +354,58 @@ seed0 中明显的地址慢档收窄；seed17 的四组中值仍约 89–90 μs�
 
 2026-10-29 已下载该中断归档，并独立核验全部 246 个成员及五条原始记录。原 summary 和每条 valid 状态保持；整批 `performance_data=false`、`candidate_selected=false`，三条 v80 reference 观测不冒充一次完整候选采用验收或 pull 后最终成绩。
 
-归档 SHA256 为 `8052861f5fb366dc3d83c08b26b88462899ba3413d0238ea0a2cfffd76e1ccc9a`。用户现在要求先不测性能，因此没有补测 F3，也没有补跑 v101 或最终性能。
+归档 SHA256 为 `8052861f5fb366dc3d83c08b26b88462899ba3413d0238ea0a2cfffd76e1ccc9a`。初稿整理时按用户“先不测性能”的要求没有补测 F3，也没有补跑 v101。用户随后授权的 baseline/v80 复测另建了第 9.5 节批次，保留本批次的原始状态和数据。
 
-**目前没有用最新 LOG0/W2/I101 对原始 F3 和 v80 做完同期配对，不能给出这个新口径下严格的 F3→v80 总耗时降幅。** 原始 baseline 的 81.7383 μs和上述 81.2262 μs分别保留其参数与记录身份。
+初稿时尚未完成 LOG0/W2/I101 下原始 F3 与 v80 的同期配对。原始 baseline 的 81.7383 μs和本节的 81.2262 μs分别保留其参数与记录身份；当前同期对比使用第 9.5 节的六条新样本。
+
+### 9.5 2026-10-29 重启后、pull 后的最终同期复测
+
+用户要求“baseline 和 v80 的性能再测一下做个对比”。本次仅复测已有两版，优化工作已经结束。测试在 a07-3 的 `dsr1_ep4` 中执行，工作区为 `/data/yanguahe/code/wk_sp1/aiter_t256w2x4_e64_20261007`，分支 `hyg_dsr1_conc6144`，源码 HEAD 为 `cecc19e93bf112cb1a1670431c80a7dec5a2dc46`。
+
+固定条件为 E64/T1536/topk8/shared0、model_dim=7168/inter_dim=2048、A4W4/SiLU、无 bias、random non-balanced routing；`pin=0`、A-preshuffle=1、`AITER_LOG_MORE=0 --warmup 2 --iters 101`、`--seed 0 --data-init uniform --scale-init auto`。两版都调用原 `op_tests/flydsl_tests/test_flydsl_grouped_gemm.py` 的 `run_moe`，使用原 `aiter/test_common.py` kernel timer 和原 `logits_diff < 0.01` 门限。
+
+六轮执行顺序在运行前冻结为 F3 / v80 / F3 / v80 / F3 / v80。每版三次全部保留并取中值；没有选择加载地址、替换慢样本、改变 seed 或补挑快实例。下表显示到小数点后六位，完整精度数值保存在原 summary 和本地独立 review 中。
+
+| 版本 | 第一次 GEMM1 μs | 第二次 GEMM1 μs | 第三次 GEMM1 μs | 三次中值 μs |
+|---|---:|---:|---:|---:|
+| F3 baseline | 84.008918 | 83.387657 | 83.123265 | **83.387657** |
+| v80 | 80.904896 | 81.120394 | 81.942660 | **81.120394** |
+
+```text
+耗时减少 = 83.38765656565648 - 81.1203939393939
+         = 2.2672626262625784 μs
+耗时降幅 = 耗时减少 / baseline 中值 × 100
+         = 2.7189427304236764%
+```
+
+每轮性能前全机空闲检查连续通过 11 次，间隔 6 秒、跨度至少 60 秒；计时期间没有并发 GPU 状态查询、传输或编译。六个测试 child 均在约 7.98–8.34 秒内正常退出，受 `TERM 118s + KILL 2s` 的 120 秒硬上限保护。测后自有测试进程均已退出，最终 `settled.idle=true`，生产文件已逐字节恢复为正式 v80。
+
+六轮原 kernel 检查和完整 MoE eager 精度检查均通过，`logits_diff=3.6105513278025183e-06 < 0.01`，route ids/weights fingerprint 全部一致。本次记录 GEMM1 kernel 耗时；完整 MoE 使用 `bench=False, kernel_bench=False` 验证精度，没有测量 MoE e2e 时间。证据字段 `graph_metrics` 对应这次完整 MoE eager 检查，完整 MoE CUDA graph 验证不在本次复测范围内。
+
+两版 GEMM1 的实际 ELF SHA256 分别为：
+
+```text
+F3 : 62037bcfa621ff1c2d378e0e5face1479e6af47fbcb5beb8bacf8ee39d003897
+v80: 49a8d5bfb280150bcddce335cba65e398d67d8a1f53f4d0424e9d579474fdaf8
+```
+
+两版 GEMM2 ELF 相同，为 `4bd626e33a25c9297fb038cfb598d965796a306c449c11782a1da54ed6b716be`；本节仅比较 GEMM1 耗时。
+
+重启后的 boot_id 为 `7e035a22-f1ba-411b-be47-b404092abe68`。主机旧 `/usr/bin/rocm-smi` 在 `GetGPUMetricsFormat1` assertion，未修复；恢复 GPU 工作前，已确认容器 SDK 的 `/usr/local/lib/python3.12/dist-packages/_rocm_sdk_core/bin/rocm-smi --showuse --showmeminfo vram --json` 正常返回，一张 GPU、利用率 0%、VRAM used 176582656 B。两版参考 matmul 均设置 `TORCH_BLAS_PREFER_HIPBLASLT=0`，保留原参考数学和精度门限；性能测试没有设置 `AMD_SERIALIZE_KERNEL`。
+
+批次 label 为 `f3_E64_F3_vs_v80_LOG0_W2_I101_after_pull_20261029_v4_rocblas_boot7e035a22`，以下记为 `LABEL`。前一 boot 的等待批次保留为中断记录，没有产生性能样本。
+
+| 证据 | 路径或 SHA256 |
+|---|---|
+| frozen plan | `TASK/logs/LABEL.frozen_plan.json` |
+| plan SHA256 | `01df1baef6f0cb79feabcdf87d0c1bcbbf4bbbcc0173341bd5546f488245fe48` |
+| 原 controller 与六轮 summary | `TASK/logs/LABEL.controller.log`、`TASK/logs/LABEL.summary.json` |
+| 证据归档 | `TASK/logs/LABEL_evidence.tar.gz`，266 个成员、8784857 B |
+| archive SHA256 | `ffc10fc776399dd95722a77dcecf6d290ebb858d13f3c3c988e4a173452d5aec` |
+| 本地独立复核 | `TASK/logs/LABEL.independent_local_review.json`，`passed=true` |
+| 重启后 rocm-smi 验收 | `TASK/logs/f3_ROCM_SMI_ready_after_reboot_20261029_v3_sdk_boot7e035a22.json` |
+
+本地 reviewer 重新验证全部归档 SHA256、六轮原 valid 方程、caller/timer 与实际 ELF/loaded text 绑定、原 precision gate、相同 route fingerprint、成功 rocm-smi receipt，并独立重算上述中值和降幅。所有检查通过。正式 kernel 保留 v80，本次没有新增 E65/topk9 测试。
 
 ## 10. 功能、精度和支持范围
 
@@ -385,7 +438,7 @@ git diff 6f656cf5b02b2f1acf723949652f91b48e2933d7 -- aiter/ops/flydsl/kernels/mx
 
 ### 11.2 当前要求下的原测试入口
 
-以下命令仅供用户以后恢复测试时复现，**本次没有执行**。先在 a07-3 主机确认全机 GPU 空闲，再进入 `dsr1_ep4`；每次使用独立 cache 名称，并确认实际导入当前 v80 源码。
+以下是原入口的单独 CLI 示例。第 9.5 节实际通过冻结计划的 checker wrapper 调用相同原 caller/timer，完整调用记录保存在 controller/summary 中。以后复现时，先在 a07-3 主机确认全机 GPU 空闲，再进入 `dsr1_ep4`；每次使用独立 cache 名称，并确认实际导入当前 v80 源码。
 
 ```bash
 cd /data/yanguahe/code/wk_sp1/aiter_t256w2x4_e64_20261007
@@ -393,6 +446,7 @@ unset COMPILE_ONLY FLYDSL_RUNTIME_RUN_ONLY AITER_FLYDSL_MMA_GROUP AITER_FLYDSL_M
 export AITER_GROUPED_A4W4_A_PRESHUFFLE=1
 export AITER_FLYDSL_EXPLICIT_VGPR_PARTITION=0
 export FLYDSL_RUNTIME_CACHE_DIR="$PWD/.codex_tmp/v80_repro_YYYYmmdd_HHMMSS"
+export TORCH_BLAS_PREFER_HIPBLASLT=0
 
 PYTHONPATH=$PWD ENABLE_CK=0 AITER_USE_GROUPED_GEMM=1 AITER_GROUPED_DEBUG=0 \
 AITER_MOE_EXPERT_BALANCE=false AITER_FLYDSL_MOE_EXPERT_SCHEDULING_MODE=1 \
@@ -422,6 +476,8 @@ op_tests/flydsl_tests/test_flydsl_grouped_gemm.py \
 | 三次正常 process 和两次 counters 的有限地址验收 | `TASK/logs/f3_v80_complete_bounded_layout_decision_local_20261027_v1.json` |
 | GEMM1 目标下的正式源码采用 receipt | `TASK/logs/f3_v80_GEMM1_only_adoption_20261028_v1.local.json` |
 | 最新已有中断批次的独立 review | `TASK/logs/f3_E64_LOG0_W2_I101_v80_v101_screen_ABA_BAB_archive3_20261029_v3_boot47fbe50f_BOUNDED.CPU_window_independent_local_review.json` |
+| 重启后 F3/v80 六轮同期复测 | 第 9.5 节的 `TASK/logs/LABEL.summary.json` |
+| 六轮复测本地独立 review | 第 9.5 节的 `TASK/logs/LABEL.independent_local_review.json` |
 
 硬件资料位于本地 `C:/Users/yanguahe/Documents/code/wk_sp1/mi400_hw_wiki/raw/papers/mi400_hd_txt/`：
 

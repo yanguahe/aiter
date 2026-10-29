@@ -12761,3 +12761,38 @@ label=`f3_E64_LOG0_W2_I101_v80_v101_screen_ABA_BAB_archive3_20261029_v3_boot47fb
 远端旧表使用上述正确hash。本地三份文档的一处旧表误多写一个`7`，成为65位字符串`41029c182d41c10743364e45a213b1deb2a5469688feb478174d4de2117767e85`。本地此前一段中文被写成问号的更正记录已经保存正确hash，但说明不可读；本节重新用中文明确更正，原表及问号记录保留为历史，不改归档bytes、107个members、2503608 B、ELF/ISA绑定或性能数据，也没有重新采trace。
 
 本次新文档与以上问答以UTF-8/LF写入。所有工作均为CPU读取、归档核验、文档和Git收尾；全部E65/topk9仍禁测。
+
+## 2026-10-29：重启后完成 baseline F3 / v80 最终复测与独立核验
+
+问：baseline 和 v80 的性能再测一下做个对比；a07-3 hang 后应等重启、确认 rocm-smi 正常才使用 GPU，等待期间每隔两分钟尝试 SSH；继续。
+
+答：已完成重启后、授权源码 commit/push/远端 pull 后的六轮同期复测，全部有效样本已经在本地独立核验。仅复测已有 F3/v80，优化工作结束，正式源码保留 v80。
+
+| 版本 | 三次 GEMM1 μs，按各版执行顺序 | 三次中值 μs |
+|---|---|---:|
+| F3 baseline | 84.008918 / 83.387657 / 83.123265 | **83.387657** |
+| v80 | 80.904896 / 81.120394 / 81.942660 | **81.120394** |
+
+v80 比 F3 减少 **2.267263 μs**，耗时降低 **2.718943%**。表格显示六位小数，原始数值、中值和公式完整保存在原 summary 与独立 review。历史 F3 的 81.7383 μs 属于旧 LOG1/W5/I20；这次对比只使用本批次六条新样本。
+
+固定 workload：E64/T1536/topk8/shared0、model_dim=7168/inter_dim=2048、A4W4/SiLU、无 bias、random non-balanced，`--seed 0 --data-init uniform --scale-init auto`。固定 `pin=0`、A-preshuffle=1、`AITER_LOG_MORE=0 --warmup 2 --iters 101`。原 caller、kernel timer、有效计算及原 `logits_diff < 0.01` 门限保持。执行顺序在运行前冻结为 F3/v80/F3/v80/F3/v80，每版三次取中值；没有加载地址选择、替换慢样本、换 seed 或补挑快实例，全部 E65/topk9 仍未测。
+
+六轮 kernel 与完整 MoE eager 精度检查均通过，`logits_diff=3.6105513278025183e-06 < 0.01`，route ids/weights fingerprint 全部一致。本次只记录 GEMM1 耗时；完整 MoE 使用 `bench=False, kernel_bench=False` 验证精度，没有测 MoE e2e 时间。证据中的 `graph_metrics` 是该完整 MoE eager 检查，完整 MoE CUDA graph 验证不在本次范围内。
+
+每轮计时前全机空闲检查连续通过 11 次、间隔 6 秒、跨度至少 60 秒；计时期间没有并发 GPU 查询、传输或编译。六个 child 约 7.98–8.34 秒内正常结束，均有 TERM118s/KILL2s 的 120 秒硬上限。测后自有测试 child 均不存在，最终 `settled.idle=true`，生产源码已恢复为正式 v80。
+
+源码发布与性能身份：`hyg_dsr1_conc6144 / cecc19e93bf112cb1a1670431c80a7dec5a2dc46`，英文 commit 为 `Optimize gfx1250 GEMM1 row coverage and restore fused A-preshuffle path`，已 push origin 并在 a07-3 主机 pull。测试进入 `dsr1_ep4`，共享工作区为 `/data/yanguahe/code/wk_sp1/aiter_t256w2x4_e64_20261007`。F3 使用 commit `6f656cf5b02b2f1acf723949652f91b48e2933d7` 的原始 Git blob，source SHA256=`f3c77d2aaa4698c80eb82b5d377c4f7b529247fc24c5fffce401d9a6f1fb21ec`；v80 source SHA256=`93165bbb8acab32dfe0faa9759c76adc8c2408f8f84998dcf3b8879ce6b8d312`。后续文档收尾 commit 只更新记录，性能身份仍是上述源码 HEAD 和两版 hash。
+
+GEMM1 ELF SHA256：F3=`62037bcfa621ff1c2d378e0e5face1479e6af47fbcb5beb8bacf8ee39d003897`，v80=`49a8d5bfb280150bcddce335cba65e398d67d8a1f53f4d0424e9d579474fdaf8`。两版 GEMM2 ELF 相同，SHA256=`4bd626e33a25c9297fb038cfb598d965796a306c449c11782a1da54ed6b716be`。原 caller/timer 与实际 ELF、loaded text 的绑定均通过复核。
+
+重启等待按用户要求每隔两分钟尝试 SSH；重启后 boot_id=`7e035a22-f1ba-411b-be47-b404092abe68`。主机旧 `/usr/bin/rocm-smi` 在 `GetGPUMetricsFormat1` assertion，未修复。恢复 GPU 工作前，已验证 `dsr1_ep4` SDK 的 `/usr/local/lib/python3.12/dist-packages/_rocm_sdk_core/bin/rocm-smi --showuse --showmeminfo vram --json` 正常返回：一张 GPU，利用率 0%，VRAM used176582656 B。验收 receipt 同属本次 boot。两版参考 matmul 均采用 `TORCH_BLAS_PREFER_HIPBLASLT=0`，原参考数学和精度门限保持；性能测试未设置 `AMD_SERIALIZE_KERNEL`。旧 boot 的等待批次保留为中断记录，没有产生性能样本。
+
+证据批次为 `f3_E64_F3_vs_v80_LOG0_W2_I101_after_pull_20261029_v4_rocblas_boot7e035a22`，以下记作 `LABEL`，`TASK=.codex_tmp/hyg_f3_followup_20261024`：
+
+- frozen plan：`TASK/logs/LABEL.frozen_plan.json`，SHA256=`01df1baef6f0cb79feabcdf87d0c1bcbbf4bbbcc0173341bd5546f488245fe48`。
+- 原 controller 和最终 summary：`TASK/logs/LABEL.controller.log`、`TASK/logs/LABEL.summary.json`，`completed=true / all_performance_valid=true / original_source_restored=true`。
+- 证据归档：`TASK/logs/LABEL_evidence.tar.gz`，266 个成员、8784857 B，SHA256=`ffc10fc776399dd95722a77dcecf6d290ebb858d13f3c3c988e4a173452d5aec`。
+- 本地独立核验：`TASK/logs/LABEL.independent_local_review.json`，`passed=true`；重新核验全部归档 hash、原 valid 方程、精度、相同 routing、原 caller/timer/AST、实际 ELF/loaded text、rocm-smi receipt，并独立重算六条读数、中值和降幅。
+- 重启后 readiness：`TASK/logs/f3_ROCM_SMI_ready_after_reboot_20261029_v3_sdk_boot7e035a22.json`，`passed=true / returncode=0`。
+
+完整优化介绍和此次复测结果见 [v80 相对 F3 baseline 的详细说明](moe_gemm1_v80_vs_f3_baseline_20261029.md) 第 9.5 节。正式 v80、旧失败样本和既有问答历史均保留。
