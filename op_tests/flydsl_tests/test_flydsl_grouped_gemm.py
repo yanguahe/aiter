@@ -1367,13 +1367,7 @@ def _run_csv_file(args, csv_path: str) -> None:
         disable_requant = os.environ.get(
             "AITER_FLYDSL_DISABLE_GEMM1_REQUANT", "0"
         ).lower() in ("1", "true", "yes", "on")
-        disable_act = os.environ.get("AITER_FLYDSL_DISABLE_GEMM1_ACT", "0").lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-        if (disable_requant or disable_act) and inter_dim % 256:
+        if disable_requant and inter_dim % 256:
             print(
                 f"[csv] row {idx}: skipped inter_dim={inter_dim} without fused "
                 "requant (needs inter_dim % 256 == 0)",
@@ -1611,13 +1605,12 @@ def main() -> None:
         run_csv_scenario(args)
         return
 
-    # The >=512 floor is a FlyDSL grouped-kernel constraint (tile_k=256 needs two
-    # K tiles).
-    if args.model_dim < 512 or args.inter_dim < 512:
+    # The >=256 floor is a FlyDSL grouped-kernel constraint (two K tiles at
+    # tile_k=128; e.g. Kimi-K3 TP8 runs inter_dim=384).
+    if args.model_dim < 256 or args.inter_dim < 256:
         raise SystemExit(
             f"model_dim ({args.model_dim}) and inter_dim ({args.inter_dim}) must be "
-            "at least 512 for the grouped GEMM kernels (tile_k=256 requires at "
-            "least two K tiles)."
+            "at least 256 for the grouped GEMM kernels (two K tiles at tile_k=128)."
         )
 
     set_data_format(args.data_format)

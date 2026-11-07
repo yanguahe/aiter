@@ -146,9 +146,8 @@ def flydsl_grouped_gemm_a8w4_masked(
     a_scale_row_stride_bytes=0,
     persistent_workers=0,
     rolled_drain=0,
-    gemm_stage=None,
-    quant_payload_preshuffled=None,
     m_align=0,
+    k_waves=1,
 ):
     """Launch a contiguous-M grouped GEMM, optionally with persistent workers.
 
@@ -172,29 +171,12 @@ def flydsl_grouped_gemm_a8w4_masked(
             "preshuffled A requires M and tile_m divisible by 16, K and "
             "tile_k divisible by 128, and no padded A row stride"
         )
-    if quant_payload_preshuffled is None:
-        quant_payload_preshuffled = bool(
-            a_preshuffled and stage1_quant_out and stage1_act
-        )
-    if quant_payload_preshuffled and not (
-        a_is_fp4 and stage1_quant_out and stage1_act
-    ):
-        raise ValueError("preshuffled quant output requires fused MXFP4 activation")
-    if quant_payload_preshuffled and (
-        N % 256 or tile_n % 64 or contiguous_m % 16 or tile_m % 16
-    ):
+    if a_preshuffled and stage1_quant_out and (N % 256 or tile_n % 64):
         raise ValueError(
             "preshuffled MXFP4 quant output requires N divisible by 256 "
-            "and tile_n divisible by 64, with M and tile_m divisible by 16"
+            "and tile_n divisible by 64"
         )
-    from flydsl.expr import rocdl
-
-    from .kernels.mxfp4_preshuffle_gfx1250_tdm import (
-        SUPPORT_EXPLICIT_VGPR_PARTITION,
-        get_gemm_a8w4_tdm_register_launcher,
-        is_explicit_vgpr_partition_available,
-        launch_gemm_a8w4_tdm,
-    )
+    from .kernels.mxfp4_preshuffle_gfx1250_tdm import launch_gemm_a8w4_tdm
 
     if stream is None:
         stream = current_stream_arg()
@@ -204,7 +186,20 @@ def flydsl_grouped_gemm_a8w4_masked(
         if float(situ_linear_beta) <= 0.0:
             raise ValueError(f"situ_linear_beta must be > 0, got {situ_linear_beta!r}")
     k_tiles = (K + tile_k - 1) // tile_k
-    num_buffers = min(num_buffers, max(1, k_tiles))
+    k_waves = int(k_waves)
+    if k_waves < 1:
+        raise ValueError(f"k_waves (CSV split_k1/split_k2) must be >= 1, got {k_waves}")
+    if k_waves > 1:
+        # Each wave group runs the full pipeline on its own K slice, so the
+        # slices must be whole and equal; an EP scatter epilogue cannot be split.
+        if K % tile_k or k_tiles % k_waves:
+            raise ValueError(
+                f"k_waves={k_waves} must evenly split the K tiles "
+                f"(K={K}, tile_k={tile_k}, {k_tiles} tiles)"
+            )
+        if stage2_scatter is not None:
+            raise ValueError(f"k_waves={k_waves} does not support the EP scatter")
+    num_buffers = min(num_buffers, max(1, k_tiles // k_waves))
     if bias is None:
         has_bias = 0
     elif bias.dtype in _BIAS_MODE:
@@ -220,10 +215,8 @@ def flydsl_grouped_gemm_a8w4_masked(
         out_dtype = fx.Uint8
     n_tiles = (N + tile_n - 1) // tile_n
     cluster_n = _select_cluster_n(n_tiles, cluster_n)
-    stage = (1 if stage1_act else 2) if gemm_stage is None else gemm_stage
-    if stage not in (1, 2):
-        raise ValueError("gemm_stage must be 1 or 2")
-    cluster_m = _select_cluster_m(cluster_m, cluster_n, stage == 1)
+    cluster_m = _select_cluster_m(cluster_m, cluster_n, stage1_act)
+    stage = 1 if stage1_act else 2
     persistent_workers = int(
         os.environ.get(
             f"AITER_FLYDSL_PERSISTENT_WORKERS{stage}",
@@ -241,6 +234,16 @@ def flydsl_grouped_gemm_a8w4_masked(
             )
         persistent_workers = (
             (persistent_workers + cluster_n - 1) // cluster_n * cluster_n
+        )
+    # k_waves owns the grid: no clusters, no persistent workers, no As prologue.
+    # Reject a config that asks for them rather than dropping them.
+    if k_waves > 1 and (
+        cluster_n > 1 or cluster_m > 1 or persistent_workers or tdm_as_in_prologue
+    ):
+        raise ValueError(
+            f"k_waves={k_waves} needs a plain grid, got cluster_n={cluster_n} "
+            f"cluster_m={cluster_m} persistent_workers={persistent_workers} "
+            f"tdm_as_in_prologue={tdm_as_in_prologue}"
         )
     waves_per_tensor_tdm = _select_num_waves_per_tensor_tdm(waves_per_tensor_tdm)
     rolled_drain = int(rolled_drain)
@@ -304,32 +307,8 @@ def flydsl_grouped_gemm_a8w4_masked(
         rolled_drain,
         int(a_preshuffled),
         int(m_align),
+        k_waves,
     )
-    explicit_vgpr_partition = int(SUPPORT_EXPLICIT_VGPR_PARTITION)
-    if (a_is_fp4 and a_preshuffled and not persistent_workers
-            and tile_m == 64 and m_warp == 1 and n_warp == 4
-            and num_buffers == 3
-            and (tile_n, tile_k) in ((256, 256), (512, 128))):
-        # The narrow-N tile fits the automatic allocation without spilling;
-        # high fixed registers unnecessarily restrict its wave residency.
-        # The wide-N tile needs the larger register budget to avoid scratch
-        # spills. Tune the tile, independently of expert count or routing.
-        explicit_vgpr_partition = int(
-            tile_n == 512 and is_explicit_vgpr_partition_available()
-        )
-        launch_gemm_a8w4_tdm = get_gemm_a8w4_tdm_register_launcher(
-            explicit_vgpr_partition
-        )
-    elif (a_is_fp4 and a_preshuffled and not persistent_workers
-            and not enable_ep_scatter and not stage1_act and not stage1_quant_out
-            and (tile_m, tile_n, tile_k, m_warp, n_warp, num_buffers)
-                == (256, 256, 256, 2, 2, 4)
-            and cluster_m == 1
-            and callable(getattr(rocdl, "sched_vgpr", None))):
-        # The new allocator's automatic layout is slower for this output tile.
-        # Use its explicit SSA placement under either global register policy.
-        explicit_vgpr_partition = 1
-        launch_gemm_a8w4_tdm = get_gemm_a8w4_tdm_register_launcher(1)
     _run_compiled(
         launch_gemm_a8w4_tdm,
         ptr_arg(out, out_dtype),
@@ -353,8 +332,6 @@ def flydsl_grouped_gemm_a8w4_masked(
         float(situ_beta),
         float(situ_linear_beta),
         *layout_spec,
-        explicit_vgpr_partition,
-        int(quant_payload_preshuffled),
         specialization_key=(
             gemm_spec,
             route_spec,
@@ -362,8 +339,6 @@ def flydsl_grouped_gemm_a8w4_masked(
             tdm_spec,
             ep_spec,
             layout_spec,
-            explicit_vgpr_partition,
-            int(quant_payload_preshuffled),
         ),
     )
     return out
